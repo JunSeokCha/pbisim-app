@@ -267,7 +267,34 @@ Use `Vc=1.0` and express doses in µg/mL when only plasma concentration matters.
 
 ---
 
-## 10. Output requirements
+## 10. Resistance evolution — important seeding rule
+
+When a simulation includes phage-resistant mutants:
+
+**Always seed the resistant strain at a small non-zero initial count** — do NOT
+start it at exactly 0 even when a mutation_rate is given.
+
+Reason: the ODE mutation flux term = `mutation_rate × growth_rate × B_susceptible`.
+In nutrient-limited environments, nutrients deplete within hours and growth → 0,
+so the flux never accumulates enough to produce detectable resistant cells from
+zero initial count.  In reality, a culture of 1e8 CFU/mL already contains
+~10–1000 pre-existing rare mutants *before* phage is added.
+
+**Rule:** set `initial_B[resistant_strain] = max(mutation_rate × initial_B[0], 10.0)`
+
+```python
+# Example: 1e8 total bacteria, mutation rate 1e-7
+# Pre-existing resistant cells ≈ 1e8 × 1e-7 = 10
+initial_B = np.array([1e8, max(1e-7 * 1e8, 10.0)])   # [1e8, 10]
+```
+
+This represents the biological reality that phage-resistant variants are always
+present at low frequency before therapy begins, and allows the ODE to correctly
+track their selective outgrowth under phage pressure.
+
+---
+
+## 11. Output requirements
 
 ALWAYS produce:
 1. **Complete, runnable Python code** in a single ` ```python ` block.
