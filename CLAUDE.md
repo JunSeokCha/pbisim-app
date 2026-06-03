@@ -100,13 +100,16 @@ Streamlit UI (app.py)
 
 ## Test commands
 
+Activate the project env first (`conda activate pbisim202606` on Windows /
+`pbisim202602` on Linux), then:
+
 ```powershell
 # Full suite (fast — no network, Anthropic client is constructed but not called):
-C:\Users\pipte\anaconda3\python.exe -m pytest tests/ -q
+python -m pytest tests/ -q
 
 # By file:
-C:\Users\pipte\anaconda3\python.exe -m pytest tests/test_executor.py -q   # 10 tests
-C:\Users\pipte\anaconda3\python.exe -m pytest tests/test_agent.py -q      # 5 tests
+python -m pytest tests/test_executor.py -q   # 10 tests
+python -m pytest tests/test_agent.py -q      # 5 tests
 ```
 
 Tests cover response parsing and the executor (capture, ModelBuilder
@@ -117,7 +120,7 @@ history, `agent.reset()`, and any pbisim-fit integration.
 ## Running the app
 
 ```powershell
-C:\Users\pipte\anaconda3\python.exe -m streamlit run pbisim_app/app.py
+python -m streamlit run pbisim_app/app.py
 # or, once installed:  pbisim-app
 ```
 
