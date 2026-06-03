@@ -21,7 +21,8 @@ _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system_prompt.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
 # ── Claude model ──────────────────────────────────────────────────────────────
-_MODEL = "claude-sonnet-4-5"   # update when newer versions are available
+_MODEL = "claude-sonnet-4-6"   # update when newer versions are available
+# For highest code-generation quality, use "claude-opus-4-8" instead.
 
 
 class AgentResponse(NamedTuple):

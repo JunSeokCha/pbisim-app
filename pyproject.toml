@@ -19,7 +19,11 @@ dependencies = [
 
 [project.optional-dependencies]
 fit = [
-    "pbisim-fit>=0.1",     # parameter estimation integration
+    # PLANNED, not yet wired up. pbisim-app is a validated feasibility prototype;
+    # full development (incl. this fit integration) is deferred until pbisim-fit
+    # v1.0 ships. Intended hook: pbisim_fit.output.to_model_config. See
+    # ../ECOSYSTEM.md §3.5 / §5.3.
+    "pbisim-fit>=0.1",
 ]
 dev = [
     "pytest>=7.4",
