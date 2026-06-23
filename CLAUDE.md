@@ -178,3 +178,35 @@ python -m streamlit run pbisim_app/app.py
 - **`tests/test_presets.py`** fallback default updated: `2e-9` → `1e-8`. 48 tests pass.
 - **`USER_GUIDE.md`** written: task-oriented GUI guide (12 sections, 5 worked workflows,
   parameter reference tables, troubleshooting). See `USER_GUIDE.md` at repo root.
+- **`README.md`** written: repo front door with features, install, run/stop, pages table,
+  doc links, test command. See `README.md` at repo root.
+- **Immunity module full audit and fix** (commit `a397edd`):
+  - Preset Tutorial 04: removed `adaptive_stimulation_rate/decay_rate/max/delay`
+    (invented by scaffold, not in pbisim); added `immune_module`, `imm_stim_rate`,
+    `imm_stim50`, `innate_decay_rate`, `imm_initial` with correct pbisim names.
+  - `load_preset_to_state()`: backward-compat translation of `adaptive_decay_rate` →
+    `innate_decay_rate`, `"adaptive"` module → `"innate"`; new keys `int_imm_stim_rate`,
+    `int_imm_stim50`, `int_imm_initial`.
+  - Direct / BRG / StrainSet simulation paths: all now pass `imm_stim_rate`,
+    `imm_stim50`, correct `immune_module`, and `initial_Imm` (was inadvertently set
+    to `imm_max` value).
+  - Immunity UI (Tab 2): module selector fixed to `["innate", "hill"]` (removed invalid
+    `"adaptive"`); `imm_stim_rate`, `imm_stim50`, `initial_Imm` widgets added; `imm_max`
+    made conditional on hill module.
+  - Repro code (Direct): updated with all new immunity parameters.
+  - Repro code (BRG): was entirely missing immunity; now emits `brg.to_config(...)` with
+    all immunity kwargs when enabled.
+  - Repro code (StrainSet): was hardcoded `imm_stim_rate=0.0, imm_kill_rate=0.0`; now
+    reads session state; `ss.to_config()` now includes immunity params, actual phage
+    decay rates, and correct `n_depth`.
+- **Clinical trial Combo arm guard** (same commit): `st.warning` emitted when Combo arm
+  contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
+  curves). Explains the "strange outputs" the user observed.
+
+**Known gaps / still open after this session:**
+- CS/CR (26 `cr_*` fields on `PhageStrain`/`BacterialStrain`) not exposed in BRG UI —
+  complex feature, deferred. Document in USER_GUIDE as "advanced scripting only".
+- `immune_module="custom"` has no UI support — deferred.
+- StrainSet repro code: `n_depth` calculation uses `dormancy_depth` key which may
+  differ from actual session state key; edge case, not a blocker.
+- Test count: 48.
