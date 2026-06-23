@@ -51,7 +51,12 @@ def _build_namespace() -> dict:
     from pbisim.pk.antibiotic import AntibioticDefinition, AntibioticSensitivity
     from pbisim.pk.phage_pk import PhagePKConfig
     from pbisim.strains.builder import StrainSet, StrainDefinition
-    from pbisim.strains.genotypes import BinaryResistanceGenotypes
+    from pbisim.strains.genotypes import (
+        BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic,
+    )
+    from pbisim.analysis.stationary import stationary_phase_ic
+    from pbisim.trial.metrics import time_to_clearance
+    from pbisim import time_to_log_reduction
 
     ns: dict = {
         "__builtins__": _SAFE_BUILTINS,
@@ -74,17 +79,35 @@ def _build_namespace() -> dict:
         "PhagePKConfig": PhagePKConfig,
         # Systematic resistance genotypes
         "BinaryResistanceGenotypes": BinaryResistanceGenotypes,
+        "BacterialStrain": BacterialStrain,
+        "PhageStrain": PhageStrain,
+        "Antibiotic": Antibiotic,
+        # Analysis helpers
+        "stationary_phase_ic": stationary_phase_ic,
+        "time_to_clearance": time_to_clearance,
+        "time_to_log_reduction": time_to_log_reduction,
     }
 
     # Optional: trial runner (may not be installed)
     try:
         from pbisim.trial.runner import TrialRunner
         from pbisim.trial.population import IIVSpec, VirtualPopulation
+        from pbisim.trial.distributions import LogNormal, Normal, Uniform, Fixed
         from pbisim.trial.metrics import default_metrics
-        ns.update({"TrialRunner": TrialRunner,
-                   "VirtualPopulation": VirtualPopulation,
-                   "IIVSpec": IIVSpec,
-                   "default_metrics": default_metrics})
+        from pbisim.trial.clinical import ClinicalTrial, TreatmentArm, PretreatmentPhase
+        ns.update({
+            "TrialRunner": TrialRunner,
+            "VirtualPopulation": VirtualPopulation,
+            "IIVSpec": IIVSpec,
+            "default_metrics": default_metrics,
+            "LogNormal": LogNormal,
+            "Normal": Normal,
+            "Uniform": Uniform,
+            "Fixed": Fixed,
+            "ClinicalTrial": ClinicalTrial,
+            "TreatmentArm": TreatmentArm,
+            "PretreatmentPhase": PretreatmentPhase,
+        })
     except ImportError:
         pass
 

@@ -292,14 +292,13 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
         setattr(config, meta["field"], arr)
 
     elif param_type == "pk_array1d":
-        pk_config = dataclasses.replace(config.phage_pk_config or config.pk_config)
+        # pk_array1d always targets the antibiotic PKConfig, not PhagePKConfig.
+        # Using phage_pk_config here when both are set would corrupt phage PK params.
+        pk_config = dataclasses.replace(config.pk_config)
         arr = np.copy(getattr(pk_config, meta["field"]))
         arr[meta["index"]] = val
         setattr(pk_config, meta["field"], arr)
-        if config.phage_pk_config is not None:
-            config = dataclasses.replace(config, phage_pk_config=pk_config)
-        else:
-            config = dataclasses.replace(config, pk_config=pk_config)
+        config = dataclasses.replace(config, pk_config=pk_config)
 
     elif param_type == "pd_array2d":
         pd_config = dataclasses.replace(config.pd_config)

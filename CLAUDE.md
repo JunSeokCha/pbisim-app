@@ -13,14 +13,12 @@ This file is read at the start of every Claude Code session in this repository.
 ## Project identity
 
 **pbisim-app v0.1.0** — AI-powered (Anthropic Claude) Streamlit interface for the
-`pbisim` phage-bacteria simulation engine. A user describes a simulation in
-natural language; Claude generates `pbisim` Python code; a sandboxed executor
-runs it and returns figures + narrative.
+`pbisim` phage-bacteria simulation engine. Users can explore the engine interactively,
+run parameter sweeps, design clinical trials, and ask an AI assistant to build and
+explain simulations in natural language.
 
-**Status:** validated feasibility prototype, **deliberately parked**. The
-concept (Claude turning NL requests into `pbisim`/`pbisim-fit` work) is proven;
-end-to-end flow works. **Full development resumes once `pbisim-fit` v1.0 ships.**
-27 tests. Position in the chain: top layer. Depends on `pbisim>=1.0` (and,
+**Status:** active development (antigravity agent owns this repo; orchestrator
+coordinates API compatibility). **48 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -30,34 +28,60 @@ optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md
 ```
 pbisim-app/
 ├── pbisim_app/
-│   ├── __init__.py        package docstring / launch instructions
-│   ├── app.py     (~178)  Streamlit UI: chat, history, sidebar API-key input,
-│   │                      renders narrative/code/figures/stdout. `main()` is a
-│   │                      no-op placeholder for the console-script entry point.
-│   ├── agent.py   (~121)  SimulationAgent (wraps anthropic.Anthropic),
-│   │                      AgentResponse, _parse_response() (regex extraction).
-│   └── executor.py(~141)  execute_code(): builds a sandboxed namespace, exec()s
-│                          generated code, captures stdout + matplotlib figures.
+│   ├── __init__.py          package docstring / launch instructions
+│   ├── app.py     (~3640)   Streamlit UI — 6 pages (see below), custom CSS,
+│   │                        self-healing AI loop, all simulation and trial logic.
+│   ├── agent.py   (~126)    SimulationAgent (wraps anthropic.Anthropic),
+│   │                        AgentResponse, _parse_response() (regex extraction).
+│   ├── executor.py(~155)    execute_code(): sandboxed namespace, exec()s
+│   │                        generated code, captures stdout + matplotlib figures.
+│   ├── presets.py (~1185)   All 13 pbisim tutorials as structured parameter dicts
+│   │                        + reference script_code strings.
+│   ├── sweep_helper.py      ModelConfig mutation helpers for 1D/2D parameter sweeps
+│   │                        and dose-response sweeps; vector padding for MOI sweeps.
+│   └── trial_helper.py      IIV distribution factory, ClinicalTrial orchestration,
+│                            Plotly KM + box plots, metric dataframe helpers.
 ├── prompts/
-│   └── system_prompt.md   312-line hand-maintained mirror of the pbisim API:
-│                          signatures, worked example, antibiotic PK table,
-│                          resistance-seeding rule, output requirements.
+│   └── system_prompt.md     ~400-line hand-maintained pbisim API reference for the
+│                            AI assistant. Sections 1–11 original; §12–17 added
+│                            2026-06-23 covering new pbisim features.
 ├── tests/
-│   ├── test_agent.py      5 tests — response parsing
-│   └── test_executor.py   10 tests — sandbox, capture, security, errors
-└── pyproject.toml         entry point: pbisim-app = "pbisim_app.app:main"
+│   ├── test_agent.py        5 tests — response parsing
+│   ├── test_executor.py     10 tests — sandbox, capture, security, errors
+│   ├── test_presets.py      18 tests — preset structure and parameter validity
+│   ├── test_builder_modes.py 14 tests — BRG, StrainSet, cohort trial
+│   ├── test_sweeps.py       9 tests — sweep_helper parameter application
+│   └── test_self_healing.py 6 tests — self-healing loop and history rollback
+│   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
+└── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
 
 ---
 
-## How it works (data flow)
+## App pages
+
+| Page | Description |
+|---|---|
+| Interactive Simulator | Three builder modes (Direct/ModelBuilder, Binary Genotypes/BRG, Custom Strains/StrainSet). Repeat-dosing regimen builder. Run button → plots + metrics. |
+| Dose-Response Sweeps | Log/Lin dose range per agent, MOI scaling, vector padding warnings, color-coded trajectories. |
+| Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
+| Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
+| AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
+| Presets & Tutorials | Browser for all 13 tutorials. type="single" → load into simulator; type="script" → execute via executor. |
+
+---
+
+## How the AI assistant works (data flow)
 
 ```
 Streamlit UI (app.py)
-   → SimulationAgent.ask(user_message)            agent.py
-   → Claude (model in agent.py:_MODEL), system = prompts/system_prompt.md
+   → SimulationAgent.ask(user_message)                     agent.py
+   → Claude (model dynamically selected), system = prompts/system_prompt.md
    → _parse_response() → AgentResponse(code, narrative, assumptions, raw_text)
    → executor.execute_code(code) → ExecutionResult(success, figures, stdout, error)
+     ↓ on failure (up to 3 times):
+     → agent.ask(traceback) → corrected code → execute_code()
+     → on final failure: history rolled back to pre-request state
    → UI renders narrative + figures (+ optional code/assumptions/stdout)
    → conversation history kept in agent.history (multi-turn)
 ```
@@ -65,8 +89,7 @@ Streamlit UI (app.py)
 - **No tool-use, no streaming.** Claude returns markdown; code is pulled from a
   ```` ```python ```` block by regex (`agent.py:_parse_response`).
 - **API key:** `ANTHROPIC_API_KEY` env var, else Streamlit sidebar password input.
-- **Model:** set in `agent.py` `_MODEL` (currently `claude-sonnet-4-5` — **stale,
-  bump to a current model**; see ECOSYSTEM.md §5.1).
+- **Model:** dynamically selected in sidebar; default pin is `claude-sonnet-4-6`.
 
 ---
 
@@ -76,13 +99,16 @@ Streamlit UI (app.py)
    hard-codes `pbisim` signatures — it is NOT generated. If the `pbisim` public
    API changes, update this prompt in lockstep (coordinate via the integration
    role). Never let the prompt invent method names.
-2. **Generated code may use only names the executor pre-loads.** The sandbox
-   namespace (`executor.py`) exposes `np/numpy`, `plt/matplotlib`, `ModelBuilder`,
-   `PBIModel`, `solve_ode`, `DoseSchedule`, `DoseEvent`, `StrainSet`,
-   `StrainDefinition`, `BinaryResistanceGenotypes`, `PhagePKConfig`,
-   `AntibioticDefinition`, `AntibioticSensitivity`, and (optionally)
-   `TrialRunner`, `IIVSpec`, `VirtualPopulation`, `default_metrics`. Add to the
-   namespace AND the prompt together if new surface is needed.
+2. **Generated code may use either pre-loaded sandbox names OR `import` statements.**
+   The executor sandbox (`executor.py`) pre-loads: `np/numpy`, `plt/matplotlib`,
+   `ModelBuilder`, `PBIModel`, `solve_ode`, `DoseSchedule`, `DoseEvent`, `StrainSet`,
+   `StrainDefinition`, `BinaryResistanceGenotypes`, `BacterialStrain`, `PhageStrain`,
+   `Antibiotic`, `PhagePKConfig`, `AntibioticDefinition`, `AntibioticSensitivity`,
+   `stationary_phase_ic`, `time_to_clearance`, `time_to_log_reduction`, and (if
+   pbisim.trial is installed) `TrialRunner`, `IIVSpec`, `VirtualPopulation`,
+   `default_metrics`, `LogNormal`, `Normal`, `Uniform`, `Fixed`, `ClinicalTrial`,
+   `TreatmentArm`, `PretreatmentPhase`. Add to the namespace AND the prompt
+   together when new surface is needed.
 3. **Honor the shared engine contracts** (see ECOSYSTEM.md §3.2): the prompt must
    keep instructing the model to use `result.sum_prefixes("B","D","I","H")` for
    CFU, `result.get('B0')` for individual series, `np.maximum(x, 1.0)` before
@@ -95,6 +121,8 @@ Streamlit UI (app.py)
    weaken it; do not deploy publicly without real isolation (Docker /
    RestrictedPython).
 6. **Never commit API keys.** Keys come from env or UI at runtime only.
+7. **`sweep_helper.py` pk_array1d** always targets the antibiotic `PKConfig` — never
+   `phage_pk_config`. Both are on `ModelConfig` and must not be confused.
 
 ---
 
@@ -103,30 +131,34 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim202606` on Windows /
 `pbisim202602` on Linux), then:
 
-```powershell
-# Full suite (fast — no network, Anthropic client is constructed but not called):
+```bash
+# Full suite — expected: 48 passed
 python -m pytest tests/ -q
 
 # By file:
-python -m pytest tests/test_executor.py -q   # 10 tests
-python -m pytest tests/test_agent.py -q      # 5 tests
+python -m pytest tests/test_executor.py -q        # 10 tests
+python -m pytest tests/test_agent.py -q           # 5 tests
+python -m pytest tests/test_presets.py -q         # 18 tests
+python -m pytest tests/test_builder_modes.py -q   # 14 tests (BRG, StrainSet, cohort)
+python -m pytest tests/test_sweeps.py -q          # 9 tests
+python -m pytest tests/test_self_healing.py -q    # 6 tests
 ```
 
-Tests cover response parsing and the executor (capture, ModelBuilder
-availability, a full pbisim run, figure capture, blocked `open()`, error
-handling). **Not covered:** Streamlit UI, real API calls / failures, multi-turn
-history, `agent.reset()`, and any pbisim-fit integration.
+After any pbisim API change, also run:
+```bash
+python -m pytest tests/test_system_prompt_sync.py -v
+```
 
 ## Running the app
 
-```powershell
+```bash
 python -m streamlit run pbisim_app/app.py
 # or, once installed:  pbisim-app
 ```
 
 ---
 
-## Known gaps / next steps (see ECOSYSTEM.md §4, §5)
+## Known gaps / next steps
 
 - **pbisim-fit integration is deferred by design** until pbisim-fit v1.0 ships;
   the `[fit]` extra is a documented placeholder. Intended hook:
@@ -134,3 +166,5 @@ python -m streamlit run pbisim_app/app.py
 - No streaming, no tool-use, brittle regex parsing, no rate limiting, no UI tests.
 - Model pin lives in `agent.py` `_MODEL` (currently `claude-sonnet-4-6`); keep it
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
+- Preset `script_code` strings for type="single" presets (01–10, 13) are reference
+  only — they are not executed. Any API mismatch there is cosmetic but should be fixed.

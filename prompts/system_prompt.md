@@ -126,9 +126,9 @@ result.get('P0')            # phage species 0 time series
 result.get('S')             # nutrient level time series
 
 # Convenience aggregators:
-result.sum_prefixes('B')    # sum of ALL bacteria strains  ← use this for total CFU
-result.sum_prefixes('P')    # sum of ALL phage species     ← use this for total PFU
-result.sum_prefixes('B', 'D')  # bacteria + dormant together
+result.sum_prefixes('B', 'D', 'I', 'H')   # TOTAL viable bacteria ← ALWAYS use this for CFU
+result.sum_prefixes('P')                   # sum of ALL phage species
+result.sum_prefixes('B')                   # active bacteria only (excludes dormant/latent)
 
 # See all state names:
 print(result.state_names)   # e.g. ['B0', 'B1', 'P0', 'I0_0_0', ..., 'S']
@@ -142,7 +142,7 @@ print(result.state_names)   # e.g. ['B0', 'B1', 'P0', 'I0_0_0', ..., 'S']
 
 **Always floor before log10:**
 ```python
-B_total = np.maximum(result.sum_prefixes('B'), 1.0)
+B_total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)
 log10_B = np.log10(B_total)
 ```
 
@@ -215,7 +215,7 @@ fig.suptitle('Monophage therapy — dose comparison', fontsize=13, fontweight='b
 
 for res, label, color in zip(results, labels, colors):
     t = res.time
-    B_total = np.maximum(res.sum_prefixes('B'), 1.0)
+    B_total = np.maximum(res.sum_prefixes('B', 'D', 'I', 'H'), 1.0)
     P_total = np.maximum(res.sum_prefixes('P'), 1.0)
 
     ax1.plot(t, np.log10(B_total), color=color, lw=2, label=label)
@@ -305,8 +305,123 @@ ALWAYS produce:
 **Important rules:**
 - Never use method names that are not listed in this prompt.
 - Always use `result.get('B0')`, `result.get('B1')`, etc. — NOT `result.get_state(...)`.
-- Use `result.sum_prefixes('B')` for total bacteria.
+- Use `result.sum_prefixes('B', 'D', 'I', 'H')` for total viable bacteria (CFU).  Never omit `'D'`, `'I'`, `'H'`.
 - Apply `np.maximum(..., 1.0)` before `np.log10(...)`.
 - Set `initial_S` in `PBIModel(...)`, not in `solve_ode(...)`.
 - If a parameter is not given, state your assumption in the narrative.
 - NEVER import from `pbisim_app` — only from `pbisim`.
+
+---
+
+## 12. Additional solver options
+
+```python
+result = solve_ode(
+    model,
+    t_end=72.0,
+    dt=0.5,
+    method="BDF",              # "BDF" (default, stiff) | "Radau" | "RK45"
+    extinction_threshold=1.0,  # populations below this are zeroed (CFU/mL)
+    phage_noise_floor=None,    # suppresses numerical ghost phage; auto from atol when None
+)
+```
+
+- `extinction_threshold` — absorbing barrier: any strain whose total drops below this
+  value is zeroed and stays zero.  Use `1.0` (1 CFU/mL) to avoid sub-CFU rebounds.
+- `phage_noise_floor` — suppresses numerical ghost phage seeded by implicit solvers
+  (Radau/BDF/LSODA) when dormancy is active but phage are not dosed.  Leave as `None`
+  (auto from `atol`) for most simulations.
+
+---
+
+## 13. Stationary-phase initial conditions
+
+```python
+from pbisim import stationary_phase_ic
+
+# Pre-grow bacteria to stationary phase before starting treatment
+stat_ic = stationary_phase_ic(cfg, t_prerun=24.0)
+
+model = PBIModel(
+    cfg,
+    initial_B   = stat_ic.B,
+    initial_P   = np.zeros(n_phages),   # no phage during pre-growth
+    initial_S   = stat_ic.S,
+    initial_Imm = stat_ic.Imm,          # preserve immune priming from pre-run
+)
+```
+
+Use this to model the common in vitro protocol of growing bacteria overnight before
+adding phage or antibiotic.
+
+---
+
+## 14. Nutrient inflow and washout (chemostat / in-vivo models)
+
+```python
+builder.with_nutrient(
+    monod_constant=0.3,
+    s_in=0.2,    # constant inflow rate (resource units h⁻¹); abiotic S* = s_in/s_out
+    s_out=0.1,   # first-order washout rate (h⁻¹)
+)
+```
+
+- `s_in=0, s_out=0` (default) — closed batch system
+- Set both to model a chemostat or continuous IV drug perfusion scenario
+
+---
+
+## 15. OD (optical density) tracking via debris ODE
+
+```python
+builder.with_od_debris(
+    u=1.0,     # scattering weight for intact dead cells (natural/antibiotic death)
+    v=0.5,     # scattering weight for phage-lysis fragments (typically v < u)
+    kdis=0.1,  # debris dissolution rate (h⁻¹)
+    od_to_cfu_conversion_factor=1e8,  # divide by this to get OD AU
+)
+
+# After solve_ode:
+od = result.get_od()  # shape (n_timepoints,) — OD in AU
+```
+
+Also set `f_lyse` per antibiotic to route antibiotic deaths to the right debris weight:
+```python
+builder.with_antibiotic("cipro", k_elim=0.18, emax=3.0, ec50=0.25, f_lyse=1.0)
+# f_lyse=0 (default): non-lytic; f_lyse=1: bacteriolytic (β-lactams, polymyxins)
+```
+
+---
+
+## 16. BinaryResistanceGenotypes — correct API
+
+```python
+from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic
+
+bacteria = BacterialStrain(base_growth_rate=1.2)   # field is base_growth_rate, not growth_rate
+phages   = [PhageStrain(name="Phi1", burst_size_s=50.0, latent_period_s=0.5, adsorption_s=2e-9)]
+abx      = [Antibiotic(name="Cipro", emax_s=3.0, ec50_s=0.2, emax_r=0.3, ec50_r=2.0,
+                       hill=1.5, k_elim=0.3, Vc=250.0)]
+
+brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=abx)
+cfg = brg.to_config(n_latent=5, n_depth=1, monod_constant=0.3)
+# n_strains = 2^(n_phages + n_antibiotics) = 4 for 1 phage + 1 antibiotic
+
+initial_B = np.array([1e7, 10.0, 10.0, 0.0])  # [S_S, R_S, S_R, R_R]
+```
+
+**Do NOT use** `BinaryResistanceGenotypes(bacterial_strain=..., phages=..., ...)` — always use
+`BinaryResistanceGenotypes.from_strains(phages, bacteria=..., antibiotics=...)`.
+
+---
+
+## 17. Outcome metrics
+
+```python
+from pbisim import time_to_clearance, time_to_log_reduction
+
+t_clear  = time_to_clearance(result, threshold=1.0)       # hours; None if never cleared
+t_2lr    = time_to_log_reduction(result, n_logs=2.0)       # time to 2-log CFU reduction
+```
+
+Both return `None` if the endpoint is never reached during the simulation.

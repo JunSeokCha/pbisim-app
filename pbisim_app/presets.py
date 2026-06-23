@@ -702,19 +702,24 @@ plt.tight_layout()
             "antibiotics": [],
             "doses": [],
         },
-        "script_code": """# Tutorial 08: Multi-strain using StrainSet API
+        "script_code": """# Tutorial 08: Multi-Strain with ModelBuilder
 import numpy as np
 import matplotlib.pyplot as plt
-from pbisim import StrainSet, BacterialStrain, PhageStrain, solve_ode, PBIModel
+from pbisim import ModelBuilder, PBIModel, solve_ode
 from pbisim.analysis.single import plot_simulation
 
-# Define strains
-strains = StrainSet([
-    BacterialStrain(name="WT", growth_rate=1.2, adsorption_rates=np.array([2e-9])),
-    BacterialStrain(name="Resistant", growth_rate=0.9, adsorption_rates=np.array([1e-12]))
-])
-
-cfg = strains.build_config(phages=[PhageStrain(name="Phage 0", burst_size_s=50.0, latent_period_s=0.5)])
+cfg = (
+    ModelBuilder(n_bacteria=2, n_phages=1, n_latent=5)
+    .with_growth_rates([1.2, 0.9], bacteria_to_resource_ratio=1e9)
+    .with_phage_params(
+        adsorption_rates=np.array([[2e-9], [1e-12]]),
+        burst_sizes=50.0,
+        latent_periods=0.5,
+        phage_decay_rates=0.1,
+    )
+    .with_nutrient(monod_constant=0.3)
+    .build()
+)
 
 model = PBIModel(cfg, initial_B=np.array([1e7, 1e3]), initial_P=np.array([1e6]), initial_S=1.0)
 result = solve_ode(model, t_end=48.0, dt=0.25)
@@ -824,21 +829,29 @@ plt.tight_layout()
         "script_code": """# Tutorial 09: Binary Resistance Genotypes
 import numpy as np
 import matplotlib.pyplot as plt
-from pbisim import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic, solve_ode, PBIModel
+from pbisim import PBIModel, solve_ode, DoseSchedule, DoseEvent
+from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic
 
-brg = BinaryResistanceGenotypes(
-    bacterial_strain=BacterialStrain(name="WT", growth_rate=1.2),
-    phages=[PhageStrain(name="Phage 0", burst_size_s=50.0, latent_period_s=0.5)],
-    antibiotics=[Antibiotic(name="Cipro", emax=3.0, ec50=0.2, hill=1.5)],
-    phage_resistance_rates=[1e-7],
-    abx_resistance_rates=[1e-7]
+phages = [PhageStrain(name="Phage 0", burst_size_s=50.0, latent_period_s=0.5)]
+bacteria = BacterialStrain(base_growth_rate=1.2)
+antibiotics = [Antibiotic(
+    name="Cipro",
+    emax_s=3.0, ec50_s=0.2,
+    emax_r=0.3, ec50_r=2.0,
+    hill=1.5, k_elim=0.3, Vc=250.0,
+)]
+
+brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=antibiotics)
+cfg = brg.to_config(
+    n_latent=5, n_depth=1,
+    monod_constant=0.3,
+    dose_schedule=DoseSchedule([DoseEvent(time=24.0, amount=1000.0, target="antibiotic")]),
 )
 
-cfg = brg.build_config()
-# Initial conditions (genotypes: 00=S_S, 10=R_S, 01=S_R, 11=R_R)
+# Genotypes: 00=S_S (WT), 10=R_S (phage-R), 01=S_R (abx-R), 11=R_R (double-R)
 initial_B = np.array([1e7, 10.0, 10.0, 0.0])
 
-model = PBIModel(cfg, initial_B=initial_B, initial_P=np.array([1e6]), initial_S=1.0)
+model = PBIModel(cfg, initial_B=initial_B, initial_P=np.array([1e7]), initial_S=1.0)
 result = solve_ode(model, t_end=72.0, dt=0.5)
 
 fig, ax = plt.subplots(figsize=(8, 4))
