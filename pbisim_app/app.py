@@ -404,6 +404,7 @@ def load_preset_to_state(params: dict):
                 "dormancy_diffusion_rate": s.get("dormancy_diffusion_rate", 0.05),
                 "dormancy_signal": s.get("dormancy_signal", "nutrient"),
                 "resuscitation_signal": s.get("resuscitation_signal", "nutrient"),
+                "initial_D": s.get("initial_D", 0.0),
             }
         )
     st.session_state["int_strains"] = strains_list
@@ -720,17 +721,12 @@ def build_nominal_config_from_gui():
         if immunity_enabled:
             model_kwargs["initial_Imm"] = st.session_state.get("int_innate_max", 1e7)
             
-        # Dormant initial conditions
+        # Dormant initial conditions — use per-strain initial_D (default 0).
+        # PBIModel accepts shape (n_bacteria,) and distributes evenly across Q layers.
         if any_dormancy:
-            # check if initial_D should be built
-            init_D = np.zeros((max_depth, n_bacteria))
-            for i, s in enumerate(strains):
-                if s.get("dormancy_enabled", False):
-                    # spread uniformly across depth layers
-                    init_D[:, i] = s["initial_B"] * 0.1 # nominal 10% dormant
-                    # adjust active
-                    initial_B[i] = s["initial_B"] * 0.9
-            model_kwargs["initial_D"] = init_D
+            ic_D = np.array([s.get("initial_D", 0.0) for s in strains])
+            if np.any(ic_D > 0):
+                model_kwargs["initial_D"] = ic_D
             
         return config, initial_B, initial_P, initial_S, model_kwargs
 
@@ -1231,12 +1227,14 @@ def generate_reproduction_code() -> str:
     _ic_S = st.session_state.get("int_initial_S", 1.0) if st.session_state.get("int_track_nutrients", True) else 1.0
     _imm_enabled = st.session_state.get("int_immunity_enabled", False)
     _imm_str = f", initial_Imm={st.session_state.get('int_innate_max', 1e7)}" if _imm_enabled else ""
+    _ic_D_vals = [s.get("initial_D", 0.0) for s in strains] if builder_mode == "Direct (ModelBuilder)" else []
+    _ic_D_str = f", initial_D=np.array({_ic_D_vals})" if any(v > 0 for v in _ic_D_vals) else ""
     if t_prerun > 0:
         code.append(f"# Run stationary phase equilibration prerun for {t_prerun} hours")
         code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun})")
-        code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=float(ic.S){_imm_str})")
+        code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=float(ic.S){_imm_str}{_ic_D_str})")
     else:
-        code.append(f"model = PBIModel(cfg, initial_B=np.array({_ic_B}), initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str})")
+        code.append(f"model = PBIModel(cfg, initial_B=np.array({_ic_B}), initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str}{_ic_D_str})")
 
     _method = st.session_state.get("int_solver_method", "BDF")
     _thresh = st.session_state.get("int_extinction_threshold", 1.0) or None
@@ -2512,6 +2510,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 ["nutrient", "density", "nutrient_and_density"],
                                 index=["nutrient", "density", "nutrient_and_density"].index(strains[i].get("resuscitation_signal", "nutrient")),
                                 key=f"str_rsig_{i}",
+                            )
+                            strains[i]["initial_D"] = st.number_input(
+                                "Initial dormant density (D0)",
+                                value=float(strains[i].get("initial_D", 0.0)),
+                                min_value=0.0,
+                                format="%.1e",
+                                key=f"str_init_d_{i}",
+                                help="Dormant cells/mL at t=0. Defaults to 0. Distributed evenly across Q depth layers.",
                             )
 
             with col2:
