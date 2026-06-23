@@ -168,3 +168,13 @@ python -m streamlit run pbisim_app/app.py
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
+
+## Done this session (2026-06-23 continued)
+
+- **Adsorption default 2e-9 → 1e-8** for WT phage in all preset parameter dicts and
+  script_code strings (`presets.py`); list first-elements updated per-strain; collateral-
+  sensitivity preset ([1e-9, 5e-9]) left intact; IIV distribution lines left intact.
+- **`system_prompt.md`** example updated: `adsorption_s=2e-9` → `adsorption_s=1e-8`.
+- **`tests/test_presets.py`** fallback default updated: `2e-9` → `1e-8`. 48 tests pass.
+- **`USER_GUIDE.md`** written: task-oriented GUI guide (12 sections, 5 worked workflows,
+  parameter reference tables, troubleshooting). See `USER_GUIDE.md` at repo root.

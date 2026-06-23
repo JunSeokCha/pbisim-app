@@ -84,7 +84,7 @@ def test_preset_builds_successfully(preset):
             s_ads_dorm = []
             for p_idx in range(n_phages):
                 p_orig = phages[p_idx]
-                ads = p_orig.get("adsorption_rates", 2e-9)
+                ads = p_orig.get("adsorption_rates", 1e-8)
                 ads_dorm = p_orig.get("adsorption_rates_dormant", 0.0)
 
                 # Resolve lists or arrays

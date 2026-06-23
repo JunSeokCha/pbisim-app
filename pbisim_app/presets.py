@@ -45,7 +45,7 @@ TUTORIALS = [
                 {
                     "name": "Phage 0",
                     "initial_P": 1e6,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -66,7 +66,7 @@ cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
     .with_phage_params(
-        adsorption_rates=2e-9,
+        adsorption_rates=1e-8,
         burst_sizes=50.0,
         latent_periods=0.5,
         phage_decay_rates=0.1
@@ -188,7 +188,7 @@ plt.tight_layout()
                 {
                     "name": "Phage 0",
                     "initial_P": 1e6,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 1e-11,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -209,7 +209,7 @@ cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5, n_depth=4)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
     .with_phage_params(
-        adsorption_rates=2e-9,
+        adsorption_rates=1e-8,
         burst_sizes=50.0,
         latent_periods=0.5,
         phage_decay_rates=0.1,
@@ -279,7 +279,7 @@ plt.tight_layout()
                 {
                     "name": "Phage 0",
                     "initial_P": 0.0,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -309,7 +309,7 @@ cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
     .with_phage_params(
-        adsorption_rates=2e-9,
+        adsorption_rates=1e-8,
         burst_sizes=50.0,
         latent_periods=0.5,
         phage_decay_rates=0.1
@@ -372,7 +372,7 @@ plt.tight_layout()
                 {
                     "name": "IV Phage",
                     "initial_P": 0.0,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -416,7 +416,7 @@ cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
     .with_phage_params(
-        adsorption_rates=2e-9,
+        adsorption_rates=1e-8,
         burst_sizes=50.0,
         latent_periods=0.5,
         phage_decay_rates=0.1,
@@ -578,7 +578,7 @@ plt.tight_layout()
                 {
                     "name": "Phage 0",
                     "initial_P": 0.0,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -624,7 +624,7 @@ from pbisim.analysis.single import plot_simulation
 cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
-    .with_phage_params(adsorption_rates=2e-9, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
+    .with_phage_params(adsorption_rates=1e-8, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
     .with_antibiotic(name="Drug A", Vc=200.0, k_elim=0.4, emax=2.5, ec50=0.5, hill=1.0)
     .with_dose_schedule(DoseSchedule([
         # 2-hour infusion of antibiotic starting at t=0
@@ -690,8 +690,8 @@ plt.tight_layout()
                 {
                     "name": "Phage 0",
                     "initial_P": 1e6,
-                    # Phage 0 adsorbs WT at 2e-9 but Resistant at 1e-12 (resistant)
-                    "adsorption_rates": [2e-9, 1e-12],
+                    # Phage 0 adsorbs WT at 1e-8 but Resistant at 1e-12 (resistant)
+                    "adsorption_rates": [1e-8, 1e-12],
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -712,7 +712,7 @@ cfg = (
     ModelBuilder(n_bacteria=2, n_phages=1, n_latent=5)
     .with_growth_rates([1.2, 0.9], bacteria_to_resource_ratio=1e9)
     .with_phage_params(
-        adsorption_rates=np.array([[2e-9], [1e-12]]),
+        adsorption_rates=np.array([[1e-8], [1e-12]]),
         burst_sizes=50.0,
         latent_periods=0.5,
         phage_decay_rates=0.1,
@@ -795,8 +795,8 @@ plt.tight_layout()
                 {
                     "name": "Phage 0",
                     "initial_P": 1e7,
-                    # Phage adsorbs S_S and S_R at 2e-9; R_S and R_R at 1e-11
-                    "adsorption_rates": [2e-9, 1e-11, 2e-9, 1e-11],
+                    # Phage adsorbs S_S and S_R at 1e-8; R_S and R_R at 1e-11
+                    "adsorption_rates": [1e-8, 1e-11, 1e-8, 1e-11],
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -910,7 +910,7 @@ plt.tight_layout()
                 {
                     "name": "Phage A",
                     "initial_P": 1e7,
-                    "adsorption_rates": [2e-9, 1e-11],  # mutant resistant
+                    "adsorption_rates": [1e-8, 1e-11],  # mutant resistant
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -949,10 +949,10 @@ from pbisim.analysis.single import plot_simulation
 cfg = (
     ModelBuilder(n_bacteria=2, n_phages=2)
     .with_growth_rates([1.2, 1.0], bacteria_to_resource_ratio=1e9)
-    # Phage A: WT sensitive (2e-9), Mutant resistant (1e-11)
+    # Phage A: WT sensitive (1e-8), Mutant resistant (1e-11)
     # Phage B: WT sensitive (1e-9), Mutant collaterally sensitive (5e-9)
     .with_phage_params(
-        adsorption_rates=[[2e-9, 1e-9],
+        adsorption_rates=[[1e-8, 1e-9],
                           [1e-11, 5e-9]],
         burst_sizes=50.0,
         latent_periods=0.5,
@@ -1005,7 +1005,7 @@ def make_model(config):
 base_builder = (
     ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
-    .with_phage_params(adsorption_rates=2e-9, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
+    .with_phage_params(adsorption_rates=1e-8, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
     .with_nutrient(monod_constant=0.3)
 )
 
@@ -1059,7 +1059,7 @@ def make_model(config):
 base_builder = (
     ModelBuilder(n_bacteria=1, n_phages=1)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
-    .with_phage_params(adsorption_rates=2e-9, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
+    .with_phage_params(adsorption_rates=1e-8, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
 )
 
 # IIV
@@ -1141,7 +1141,7 @@ plt.tight_layout()
                 {
                     "name": "Washout Phage",
                     "initial_P": 0.0,
-                    "adsorption_rates": 2e-9,
+                    "adsorption_rates": 1e-8,
                     "adsorption_rates_dormant": 0.0,
                     "burst_sizes": 50.0,
                     "latent_periods": 0.5,
@@ -1170,7 +1170,7 @@ from pbisim.analysis.single import plot_simulation
 cfg = (
     ModelBuilder(n_bacteria=1, n_phages=1)
     .with_growth_rates(1.2, bacteria_to_resource_ratio=1e9)
-    .with_phage_params(adsorption_rates=2e-9, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
+    .with_phage_params(adsorption_rates=1e-8, burst_sizes=50.0, latent_periods=0.5, phage_decay_rates=0.1)
     # Enable Debris and OD conversion
     .with_od_debris(u=1.0, v=0.5, kdis=0.1, od_to_cfu_conversion_factor=1e8)
     # Enable continuous inflow and washout

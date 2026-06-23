@@ -399,7 +399,7 @@ builder.with_antibiotic("cipro", k_elim=0.18, emax=3.0, ec50=0.25, f_lyse=1.0)
 from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic
 
 bacteria = BacterialStrain(base_growth_rate=1.2)   # field is base_growth_rate, not growth_rate
-phages   = [PhageStrain(name="Phi1", burst_size_s=50.0, latent_period_s=0.5, adsorption_s=2e-9)]
+phages   = [PhageStrain(name="Phi1", burst_size_s=50.0, latent_period_s=0.5, adsorption_s=1e-8)]
 abx      = [Antibiotic(name="Cipro", emax_s=3.0, ec50_s=0.2, emax_r=0.3, ec50_r=2.0,
                        hill=1.5, k_elim=0.3, Vc=250.0)]
 
