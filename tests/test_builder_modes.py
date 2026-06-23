@@ -1,0 +1,138 @@
+"""Tests for pbisim-app builder modes (BRG, StrainSet) and cohort trials."""
+
+from __future__ import annotations
+
+import numpy as np
+from pbisim import PBIModel, solve_ode
+from pbisim.strains import StrainDefinition, StrainSet
+from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic
+
+
+def test_brg_build_and_run():
+    """Verify BinaryResistanceGenotypes constructs config and runs successfully."""
+    # 1. Setup BRG
+    b = BacterialStrain(base_growth_rate=1.2)
+    p = [PhageStrain(name="Phage0", burst_size_s=50.0)]
+    abx = [Antibiotic(name="Drug0", emax_s=3.0, ec50_s=0.2, emax_r=0.1, ec50_r=2.0)]
+    
+    brg = BinaryResistanceGenotypes.from_strains(p, bacteria=b, antibiotics=abx)
+    config = brg.to_config(n_latent=5, n_depth=1)
+    
+    # 2 phages/abx loci -> 4 genotypes: '00', '10', '01', '11'
+    initial_B = np.array([1e7, 10.0, 10.0, 0.0])
+    initial_P = np.array([1e6])
+    initial_S = 1.0
+    
+    model = PBIModel(config, initial_B=initial_B, initial_P=initial_P, initial_S=initial_S)
+    result = solve_ode(model, t_end=24.0, dt=1.0)
+    assert result is not None
+    assert len(result.time) > 0
+
+
+def test_strainset_build_and_run():
+    """Verify StrainSet with graph mutation dictionary constructs config and runs successfully."""
+    # 1. Setup StrainSet
+    ss = StrainSet(n_phages=1)
+    from pbisim.pk.antibiotic import AntibioticDefinition, AntibioticSensitivity
+    ss.add_antibiotic(AntibioticDefinition("cipro", k_elim=0.5))
+    
+    ss.add_strain(StrainDefinition(
+        name="WT",
+        growth_rate=1.2,
+        adsorption_rates=np.array([1e-7]),
+        adsorption_rates_dormant=np.array([0.0]),
+        burst_sizes=np.array([50.0]),
+        latent_periods=np.array([0.5]),
+        latent_periods_dormant=np.array([0.5]),
+        bacteria_to_resource_ratio=1e9,
+        dormancy_rate=0.0,
+        resuscitation_rate=0.0,
+        dormancy_diffusion_rate=0.0,
+        imm_stim_rate=0.0,
+        imm_kill_rate=0.0,
+        attenuation_rate=np.zeros(1),
+        antibiotic_sensitivity={"cipro": AntibioticSensitivity(emax=5.0, ec50=0.5)}
+    ))
+    
+    ss.add_strain(StrainDefinition(
+        name="R_cipro",
+        growth_rate=1.1,
+        adsorption_rates=np.array([1e-7]),
+        adsorption_rates_dormant=np.array([0.0]),
+        burst_sizes=np.array([50.0]),
+        latent_periods=np.array([0.5]),
+        latent_periods_dormant=np.array([0.5]),
+        bacteria_to_resource_ratio=1e9,
+        dormancy_rate=0.0,
+        resuscitation_rate=0.0,
+        dormancy_diffusion_rate=0.0,
+        imm_stim_rate=0.0,
+        imm_kill_rate=0.0,
+        attenuation_rate=np.zeros(1),
+        antibiotic_sensitivity={"cipro": AntibioticSensitivity(emax=0.5, ec50=5.0)}
+    ))
+    
+    ss.set_mutation_graph({"WT": {"R_cipro": 1e-7}})
+    config = ss.to_config(
+        n_latent=3,
+        n_depth=1,
+        phage_decay_rates=np.array([0.03]),
+        imm_decay_rate=0.1,
+        imm_stim50=1e6,
+        imm_kill50=1e6,
+        monod_constant=1.0,
+        recycle_fraction=0.5
+    )
+    
+    initial_B = np.array([1e7, 10.0])
+    initial_P = np.array([1e6])
+    initial_S = 1.0
+    
+    model = PBIModel(config, initial_B=initial_B, initial_P=initial_P, initial_S=initial_S)
+    result = solve_ode(model, t_end=24.0, dt=1.0)
+    assert result is not None
+    assert len(result.time) > 0
+
+
+def test_clinical_trial_with_pretreatment():
+    """Verify that a ClinicalTrial running with a PretreatmentPhase succeeds with InitialConditions attached."""
+    from pbisim.trial.clinical import TreatmentArm
+    from pbisim.trial.population import InitialConditions
+    from pbisim.builder import ModelBuilder
+    from pbisim_app.trial_helper import run_trial_simulation
+    
+    cfg = ModelBuilder(n_bacteria=1, n_phages=0).with_growth_rates(1.0).build()
+    
+    init_B = np.array([1e6])
+    init_P = np.zeros(0)
+    init_S = 1.0
+    
+    cfg.initial_conditions = InitialConditions(
+        B=init_B,
+        P=init_P,
+        S=init_S
+    )
+    
+    iiv_inputs = [
+        {"path": "growth_rates", "dist_type": "LogNormal", "params": {"cv": 0.2}, "mode": "multiplicative"}
+    ]
+    
+    arms = [TreatmentArm(name="Control", dose_schedule=None)]
+    
+    res = run_trial_simulation(
+        cfg,
+        iiv_inputs,
+        arms,
+        n_patients=2,
+        t_end=5.0,
+        dt=1.0,
+        seed=42,
+        pretreatment_hours=2.0,
+        n_jobs=1,
+        base_initial_B=init_B,
+        base_initial_P=init_P,
+        base_initial_S=init_S
+    )
+    
+    assert res is not None
+    assert "Control" in res.arm_names

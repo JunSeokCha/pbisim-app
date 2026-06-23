@@ -78,13 +78,16 @@ class SimulationAgent:
             Contains generated code, narrative, and assumptions.
         """
         self.history.append({"role": "user", "content": user_message})
-
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=_SYSTEM_PROMPT,
-            messages=self.history,
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=self.history,
+            )
+        except Exception:
+            self.history.pop()  # Keep history clean
+            raise
 
         raw_text = response.content[0].text
         self.history.append({"role": "assistant", "content": raw_text})
