@@ -442,15 +442,21 @@ def load_preset_to_state(params: dict):
         )
     st.session_state["int_phages"] = phages_list
 
-    # 7. Adsorption matrices (restore from list in presets if any, else default 2e-9)
+    # 7. Adsorption matrices (restore from list in presets if any)
+    # Default: WT strain (s_idx=0) gets 1e-8; resistant strains get 0.
     for s_idx in range(len(strains_list)):
         for p_idx in range(len(phages_list)):
             p_orig = params.get("phages", [])[p_idx]
-            ads = p_orig.get("adsorption_rates", 2e-9)
+            ads = p_orig.get("adsorption_rates", None)
             ads_dorm = p_orig.get("adsorption_rates_dormant", 0.0)
 
-            # Resolve lists or arrays
-            val_ads = ads[s_idx] if isinstance(ads, list) else ads
+            # Resolve lists or scalars; None → per-strain default
+            if isinstance(ads, list):
+                val_ads = ads[s_idx]
+            elif ads is not None:
+                val_ads = ads
+            else:
+                val_ads = 1e-8 if s_idx == 0 else 0.0
             val_ads_dorm = ads_dorm[s_idx] if isinstance(ads_dorm, list) else ads_dorm
 
             st.session_state[f"ads_{s_idx}_{p_idx}"] = float(val_ads)
@@ -599,7 +605,7 @@ def build_nominal_config_from_gui():
                 s_ads = []
                 s_ads_dorm = []
                 for p_idx in range(n_phages):
-                    s_ads.append(st.session_state.get(f"ads_{s_idx}_{p_idx}", 2e-9))
+                    s_ads.append(st.session_state.get(f"ads_{s_idx}_{p_idx}", 1e-8 if s_idx == 0 else 0.0))
                     s_ads_dorm.append(st.session_state.get(f"ads_dorm_{s_idx}_{p_idx}", 0.0))
                 adsorption_rates.append(s_ads)
                 adsorption_rates_dormant.append(s_ads_dorm)
@@ -854,10 +860,14 @@ def build_nominal_config_from_gui():
         )
         
         # Resolve initial densities
-        initial_B = np.zeros(brg.n_strains)
-        saved_init_B = st.session_state.get("int_brg_initial_B", {})
-        for idx, lbl in enumerate(brg.strain_labels):
-            initial_B[idx] = saved_init_B.get(lbl, 1e7 if idx == 0 else 0.0)
+        if st.session_state.get("int_brg_use_eq_ic", False):
+            total_B = st.session_state.get("int_brg_eq_total_B", 1e7)
+            initial_B = brg.equilibrium_initial_condition(total_bacteria=total_B)
+        else:
+            initial_B = np.zeros(brg.n_strains)
+            saved_init_B = st.session_state.get("int_brg_initial_B", {})
+            for idx, lbl in enumerate(brg.strain_labels):
+                initial_B[idx] = saved_init_B.get(lbl, 1e7 if idx == 0 else 0.0)
             
         initial_P = np.array([p["initial_P"] for p in phages])
         initial_S = st.session_state.get("int_initial_S", 1.0) if track_nutrients else 1.0
@@ -897,7 +907,7 @@ def build_nominal_config_from_gui():
             hibernations = []
             resumptions = []
             for p_idx in range(n_phages):
-                ads_rates.append(st.session_state.get(f"ads_{i}_{p_idx}", 2e-9))
+                ads_rates.append(st.session_state.get(f"ads_{i}_{p_idx}", 1e-8 if i == 0 else 0.0))
                 ads_rates_dorm.append(st.session_state.get(f"ads_dorm_{i}_{p_idx}", 0.0))
                 p = phages[p_idx]
                 bursts.append(p["burst_sizes"])
@@ -1090,7 +1100,7 @@ def generate_reproduction_code() -> str:
             ads = []
             ads_dorm = []
             for s_idx in range(len(strains)):
-                s_ads = [st.session_state.get(f"ads_{s_idx}_{p_idx}", 2e-9) for p_idx in range(len(phages))]
+                s_ads = [st.session_state.get(f"ads_{s_idx}_{p_idx}", 1e-8 if s_idx == 0 else 0.0) for p_idx in range(len(phages))]
                 s_ads_dorm = [st.session_state.get(f"ads_dorm_{s_idx}_{p_idx}", 0.0) for p_idx in range(len(phages))]
                 ads.append(s_ads)
                 ads_dorm.append(s_ads_dorm)
@@ -1155,7 +1165,26 @@ def generate_reproduction_code() -> str:
         code.append("]")
         code.append("")
         code.append("brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=antibiotics or None)")
-        code.append("cfg = brg.to_config(n_latent=5, n_depth=1)")
+        _brg_n_depth = 3 if st.session_state.get("int_brg_dormancy_enabled", False) else 1
+        code.append(f"cfg = brg.to_config(n_latent=5, n_depth={_brg_n_depth})")
+        if st.session_state.get("int_brg_use_eq_ic", False):
+            _eq_total = st.session_state.get("int_brg_eq_total_B", 1e7)
+            code.append(f"initial_B = brg.equilibrium_initial_condition(total_bacteria={_eq_total})")
+        else:
+            import itertools as _it
+            _n_abx_r = len(antibiotics)
+            _combs_r = list(_it.product([0, 1], repeat=len(phages) + _n_abx_r))
+            _saved = st.session_state.get("int_brg_initial_B", {})
+            _ic_brg = []
+            for _idx, _comb in enumerate(_combs_r):
+                if _n_abx_r == 0:
+                    _lbl = "".join(map(str, _comb))
+                else:
+                    _p = "".join(map(str, _comb[:len(phages)])) if phages else ""
+                    _a = "".join(map(str, _comb[len(phages):]))
+                    _lbl = f"phi{_p}_abx{_a}" if phages else f"abx{_a}"
+                _ic_brg.append(_saved.get(_lbl, 1e7 if _idx == 0 else 0.0))
+            code.append(f"initial_B = np.array({_ic_brg})")
         
     # ──── STRAINSET ────
     else:
@@ -1166,7 +1195,7 @@ def generate_reproduction_code() -> str:
         for abx in antibiotics:
             code.append(f"ss.add_antibiotic(AntibioticDefinition('{abx['name']}', k_elim={abx['k_elim']}))")
         for i, s in enumerate(strains):
-            ads_rates = [st.session_state.get(f"ads_{i}_{p_idx}", 2e-9) for p_idx in range(len(phages))]
+            ads_rates = [st.session_state.get(f"ads_{i}_{p_idx}", 1e-8 if i == 0 else 0.0) for p_idx in range(len(phages))]
             ads_dorm = [st.session_state.get(f"ads_dorm_{i}_{p_idx}", 0.0) for p_idx in range(len(phages))]
             bursts = [p["burst_sizes"] for p in phages]
             latents = [p["latent_periods"] for p in phages]
@@ -1222,8 +1251,14 @@ def generate_reproduction_code() -> str:
     
     # Prerun stationary phase
     t_prerun = st.session_state.get("int_t_prerun", 0.0)
-    _ic_B = [s["initial_B"] for s in strains] if builder_mode == "Direct (ModelBuilder)" else [1e7]
-    _ic_P = [p["initial_P"] for p in phages] if (builder_mode == "Direct (ModelBuilder)" and phages) else [1e6]
+    # Determine initial_B representation for the reproduction code
+    if builder_mode == "Direct (ModelBuilder)":
+        _ic_B_repr = f"np.array({[s['initial_B'] for s in strains]})"
+    elif builder_mode == "Binary Genotypes (BRG)":
+        _ic_B_repr = "initial_B"   # already emitted above in the BRG block
+    else:
+        _ic_B_repr = f"np.array({[s['initial_B'] for s in strains]})"
+    _ic_P = [p["initial_P"] for p in phages] if phages else [1e6]
     _ic_S = st.session_state.get("int_initial_S", 1.0) if st.session_state.get("int_track_nutrients", True) else 1.0
     _imm_enabled = st.session_state.get("int_immunity_enabled", False)
     _imm_str = f", initial_Imm={st.session_state.get('int_innate_max', 1e7)}" if _imm_enabled else ""
@@ -1234,7 +1269,7 @@ def generate_reproduction_code() -> str:
         code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun})")
         code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=float(ic.S){_imm_str}{_ic_D_str})")
     else:
-        code.append(f"model = PBIModel(cfg, initial_B=np.array({_ic_B}), initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str}{_ic_D_str})")
+        code.append(f"model = PBIModel(cfg, initial_B={_ic_B_repr}, initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str}{_ic_D_str})")
 
     _method = st.session_state.get("int_solver_method", "BDF")
     _thresh = st.session_state.get("int_extinction_threshold", 1.0) or None
@@ -1469,7 +1504,7 @@ elif st.session_state.current_page == "AI Assistant":
                         st.code(exec_result.error, language="text")
 
     # input
-    if prompt := st.chat_input("Ex: simulate 1 wild-type strain and 1 phage with burst size 50 and adsorption 2e-9..."):
+    if prompt := st.chat_input("Ex: simulate 1 wild-type strain and 1 phage with burst size 50 and adsorption 1e-8..."):
         st.chat_message("user").markdown(prompt)
 
         # Call agent
@@ -2411,7 +2446,8 @@ elif st.session_state.current_page == "Interactive Simulator":
                         strains.append(
                             {
                                 "name": f"Strain {i}",
-                                "initial_B": 1e7,
+                                "initial_B": 1e7 if i == 0 else 0.0,
+                                "initial_D": 0.0,
                                 "growth_rate": 1.2,
                                 "bacteria_to_resource_ratio": 1e9,
                                 "death_rate_B": 0.0,
@@ -2536,7 +2572,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             {
                                 "name": f"Phage {i}",
                                 "initial_P": 1e6,
-                                "adsorption_rates": 2e-9,
+                                "adsorption_rates": 1e-8,
                                 "adsorption_rates_dormant": 0.0,
                                 "burst_sizes": 50.0,
                                 "latent_periods": 0.5,
@@ -2601,7 +2637,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             # suscept ads
                             st.session_state[ads_key] = st.number_input(
                                 f"Adsorption to {strains[s_idx]['name']} (mL/h)",
-                                value=float(st.session_state.get(ads_key, 2e-9)),
+                                value=float(st.session_state.get(ads_key, 1e-8 if s_idx == 0 else 0.0)),
                                 format="%.1e",
                                 key=f"ads_input_{s_idx}_{i}",
                             )
@@ -2745,26 +2781,38 @@ elif st.session_state.current_page == "Interactive Simulator":
                 combs = list(itertools.product([0, 1], repeat=n_phg_loci + n_abx))
                 st.caption(f"Based on {n_phg_loci} phages and {n_abx} antibiotics, there are {len(combs)} genotypes:")
                 
-                brg_initial_B = st.session_state.get("int_brg_initial_B", {})
-                for idx, comb in enumerate(combs):
-                    if n_abx == 0:
-                        lbl = "".join(map(str, comb))
-                    else:
-                        p_lbl = "".join(map(str, comb[:n_phg_loci])) if n_phg_loci > 0 else ""
-                        a_lbl = "".join(map(str, comb[n_phg_loci:]))
-                        if n_phg_loci > 0:
-                            lbl = f"phi{p_lbl}_abx{a_lbl}"
-                        else:
-                            lbl = f"abx{a_lbl}"
-                    
-                    # input field
-                    brg_initial_B[lbl] = st.number_input(
-                        f"Initial count for genotype {lbl}",
-                        value=float(brg_initial_B.get(lbl, 1e7 if idx == 0 else 0.0)),
+                st.session_state["int_brg_use_eq_ic"] = st.checkbox(
+                    "Use equilibrium initial condition",
+                    value=st.session_state.get("int_brg_use_eq_ic", False),
+                    help="Compute B0 per genotype from replicator-dynamics equilibrium (BRG growth rates + mutation matrix). Overrides per-genotype inputs.",
+                )
+                if st.session_state["int_brg_use_eq_ic"]:
+                    st.session_state["int_brg_eq_total_B"] = st.number_input(
+                        "Total bacteria at t=0 (cells/mL)",
+                        value=float(st.session_state.get("int_brg_eq_total_B", 1e7)),
                         format="%.1e",
-                        key=f"brg_init_B_{lbl}"
+                        key="brg_eq_total_B",
                     )
-                st.session_state.int_brg_initial_B = brg_initial_B
+                    st.caption("Per-genotype B0 computed from `brg.equilibrium_initial_condition()` at run time.")
+                else:
+                    brg_initial_B = st.session_state.get("int_brg_initial_B", {})
+                    for idx, comb in enumerate(combs):
+                        if n_abx == 0:
+                            lbl = "".join(map(str, comb))
+                        else:
+                            p_lbl = "".join(map(str, comb[:n_phg_loci])) if n_phg_loci > 0 else ""
+                            a_lbl = "".join(map(str, comb[n_phg_loci:]))
+                            if n_phg_loci > 0:
+                                lbl = f"phi{p_lbl}_abx{a_lbl}"
+                            else:
+                                lbl = f"abx{a_lbl}"
+                        brg_initial_B[lbl] = st.number_input(
+                            f"Initial count for genotype {lbl}",
+                            value=float(brg_initial_B.get(lbl, 1e7 if idx == 0 else 0.0)),
+                            format="%.1e",
+                            key=f"brg_init_B_{lbl}"
+                        )
+                    st.session_state.int_brg_initial_B = brg_initial_B
 
         # ── CUSTOM STRAINS & MUTATION GRAPH (StrainSet) ──
         elif builder_mode == "Custom Strains & Graph (StrainSet)":
@@ -2808,7 +2856,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 p_name = phages[p_idx]["name"]
                                 st.session_state[f"ads_{i}_{p_idx}"] = st.number_input(
                                     f"Adsorption of {p_name} (mL/h)",
-                                    value=float(st.session_state.get(f"ads_{i}_{p_idx}", 2e-9)),
+                                    value=float(st.session_state.get(f"ads_{i}_{p_idx}", 1e-8 if i == 0 else 0.0)),
                                     format="%.1e",
                                     key=f"ss_ads_input_{i}_{p_idx}"
                                 )
