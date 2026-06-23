@@ -17,8 +17,8 @@ This file is read at the start of every Claude Code session in this repository.
 run parameter sweeps, design clinical trials, and ask an AI assistant to build and
 explain simulations in natural language.
 
-**Status:** active development (antigravity agent owns this repo; orchestrator
-coordinates API compatibility). **48 tests passing.** Depends on `pbisim>=1.0` (and,
+**Status:** active development (**orchestrator owns this repo** — antigravity built
+the initial scaffold; API wiring requires engine-author oversight). **48 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
