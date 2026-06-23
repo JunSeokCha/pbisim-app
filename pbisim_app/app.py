@@ -375,9 +375,18 @@ def load_preset_to_state(params: dict):
     st.session_state["int_innate_kill_rate"] = params.get("innate_kill_rate", 1e7)
     st.session_state["int_innate_kill50"] = params.get("innate_kill50", 1e8)
     st.session_state["int_innate_max"] = params.get("innate_max", 1e7)
-    st.session_state["int_innate_decay_rate"] = params.get("innate_decay_rate", 0.05)
+    # backward compat: old presets stored "adaptive_decay_rate"
+    st.session_state["int_innate_decay_rate"] = params.get(
+        "innate_decay_rate", params.get("adaptive_decay_rate", 0.05)
+    )
     st.session_state["int_imm_kill_rate_D"] = params.get("innate_kill_rate_D", 0.0)
-    st.session_state["int_immune_module"] = params.get("immune_module", "innate")
+    # translate legacy "adaptive" (invented by scaffold, not a pbisim module) → "innate"
+    _raw_module = params.get("immune_module", "innate")
+    st.session_state["int_immune_module"] = "innate" if _raw_module == "adaptive" else _raw_module
+    # new fields (missing from older presets → sensible defaults)
+    st.session_state["int_imm_stim_rate"] = params.get("imm_stim_rate", 1.0)
+    st.session_state["int_imm_stim50"] = params.get("imm_stim50", 1e6)
+    st.session_state["int_imm_initial"] = params.get("imm_initial", 0.0)
 
     # 4. OD & Debris settings
     st.session_state["int_debris_enabled"] = params.get("debris_enabled", False)
@@ -706,26 +715,28 @@ def build_nominal_config_from_gui():
         if immunity_enabled:
             kill_rate_D = st.session_state.get("int_imm_kill_rate_D", 0.0)
             builder = builder.with_immunity(
-                imm_kill_rate=st.session_state.get("int_innate_kill_rate", 1e7),
+                imm_stim_rate=np.full(n_bacteria, st.session_state.get("int_imm_stim_rate", 1.0)),
+                imm_stim50=st.session_state.get("int_imm_stim50", 1e6),
+                imm_kill_rate=np.full(n_bacteria, st.session_state.get("int_innate_kill_rate", 1e7)),
                 imm_kill50=st.session_state.get("int_innate_kill50", 1e8),
                 imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.05),
                 immune_module=st.session_state.get("int_immune_module", "innate"),
                 imm_max=st.session_state.get("int_innate_max", 1e7),
                 imm_kill_rate_D=np.array([kill_rate_D] * n_bacteria) if kill_rate_D > 0 else None
             )
-            
+
         if schedule:
             builder = builder.with_dose_schedule(schedule)
-            
+
         config = builder.build(**extra_kwargs)
-        
+
         initial_B = np.array([s["initial_B"] for s in strains])
         initial_P = np.array([p["initial_P"] for p in phages])
         initial_S = st.session_state.get("int_initial_S", 1.0) if track_nutrients else 1.0
-        
+
         model_kwargs = {}
         if immunity_enabled:
-            model_kwargs["initial_Imm"] = st.session_state.get("int_innate_max", 1e7)
+            model_kwargs["initial_Imm"] = st.session_state.get("int_imm_initial", 0.0)
             
         # Dormant initial conditions — use per-strain initial_D (default 0).
         # PBIModel accepts shape (n_bacteria,) and distributes evenly across Q layers.
@@ -844,14 +855,17 @@ def build_nominal_config_from_gui():
         # Immunity
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
         if immunity_enabled:
-            extra_kwargs["imm_kill_rate"] = st.session_state.get("int_innate_kill_rate", 1e7)
+            extra_kwargs["imm_stim_rate"] = np.full(brg.n_strains, st.session_state.get("int_imm_stim_rate", 1.0))
+            extra_kwargs["imm_stim50"] = st.session_state.get("int_imm_stim50", 1e6)
+            extra_kwargs["imm_kill_rate"] = np.full(brg.n_strains, st.session_state.get("int_innate_kill_rate", 1e7))
             extra_kwargs["imm_kill50"] = st.session_state.get("int_innate_kill50", 1e8)
             extra_kwargs["imm_decay_rate"] = st.session_state.get("int_innate_decay_rate", 0.05)
+            extra_kwargs["immune_module"] = st.session_state.get("int_immune_module", "innate")
             extra_kwargs["imm_max"] = st.session_state.get("int_innate_max", 1e7)
             kill_rate_D = st.session_state.get("int_imm_kill_rate_D", 0.0)
             if kill_rate_D > 0:
                 extra_kwargs["imm_kill_rate_D"] = np.array([kill_rate_D] * brg.n_strains)
-                
+
         config = brg.to_config(
             n_latent=5,
             n_depth=max_depth,
@@ -874,8 +888,8 @@ def build_nominal_config_from_gui():
         
         model_kwargs = {}
         if immunity_enabled:
-            model_kwargs["initial_Imm"] = st.session_state.get("int_innate_max", 1e7)
-            
+            model_kwargs["initial_Imm"] = st.session_state.get("int_imm_initial", 0.0)
+
         return config, initial_B, initial_P, initial_S, model_kwargs
 
     # ── BUILDER MODE: Custom Strains & Graph (StrainSet) ──────────────────────
@@ -937,8 +951,8 @@ def build_nominal_config_from_gui():
                     dormancy_rate=s["dormancy_rate"] if s.get("dormancy_enabled", False) else 0.0,
                     resuscitation_rate=s["resuscitation_rate"] if s.get("dormancy_enabled", False) else 0.0,
                     dormancy_diffusion_rate=s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0,
-                    imm_stim_rate=0.0,
-                    imm_kill_rate=0.0,
+                    imm_stim_rate=st.session_state.get("int_imm_stim_rate", 1.0) if st.session_state.get("int_immunity_enabled", False) else 0.0,
+                    imm_kill_rate=st.session_state.get("int_innate_kill_rate", 1e7) if st.session_state.get("int_immunity_enabled", False) else 0.0,
                     attenuation_rate=np.zeros(n_phages),
                     death_rate_B=s.get("death_rate_B", None) if s.get("death_rate_B", 0.0) > 0 else None,
                     death_rate_D=s.get("death_rate_D", None) if s.get("death_rate_D", 0.0) > 0 else None,
@@ -997,31 +1011,29 @@ def build_nominal_config_from_gui():
             
         # Immunity defaults
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
-        imm_decay = st.session_state.get("int_innate_decay_rate", 0.05)
-        imm_max_val = st.session_state.get("int_innate_max", 1e7)
-        imm_kill_rate = st.session_state.get("int_innate_kill_rate", 1e7)
-        imm_kill50 = st.session_state.get("int_innate_kill50", 1e8)
-        
+
         config = ss.to_config(
             n_latent=5,
             n_depth=max_depth,
             phage_decay_rates=decay_rates,
-            imm_decay_rate=imm_decay,
-            imm_stim50=1e6, # nominal
-            imm_kill50=imm_kill50,
+            imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.05),
+            imm_stim50=st.session_state.get("int_imm_stim50", 1e6),
+            imm_kill50=st.session_state.get("int_innate_kill50", 1e8),
             monod_constant=st.session_state.get("int_monod_constant", 0.3),
             recycle_fraction=st.session_state.get("int_recycle_fraction", 0.0),
             phage_pk_config=phage_pk_config,
+            immune_module=st.session_state.get("int_immune_module", "innate"),
+            imm_max=st.session_state.get("int_innate_max", 1e7),
             **extra_kwargs
         )
-        
+
         initial_B = np.array([s["initial_B"] for s in strains])
         initial_P = np.array([p["initial_P"] for p in phages])
         initial_S = st.session_state.get("int_initial_S", 1.0) if track_nutrients else 1.0
-        
+
         model_kwargs = {}
         if immunity_enabled:
-            model_kwargs["initial_Imm"] = imm_max_val
+            model_kwargs["initial_Imm"] = st.session_state.get("int_imm_initial", 0.0)
             
         return config, initial_B, initial_P, initial_S, model_kwargs
 
@@ -1139,7 +1151,18 @@ def generate_reproduction_code() -> str:
         if st.session_state.get("int_immunity_enabled", False):
             _kD = st.session_state.get("int_imm_kill_rate_D", 0.0)
             _kD_arg = f", imm_kill_rate_D=np.array([{_kD}] * {len(strains)})" if _kD > 0 else ""
-            code.append(f"builder = builder.with_immunity(imm_kill_rate={st.session_state.get('int_innate_kill_rate', 1e7)}, imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}, imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}, immune_module='{st.session_state.get('int_immune_module', 'innate')}', imm_max={st.session_state.get('int_innate_max', 1e7)}{_kD_arg})")
+            _n = len(strains)
+            code.append(
+                f"builder = builder.with_immunity("
+                f"imm_stim_rate=np.full({_n}, {st.session_state.get('int_imm_stim_rate', 1.0)}), "
+                f"imm_stim50={st.session_state.get('int_imm_stim50', 1e6)}, "
+                f"imm_kill_rate=np.full({_n}, {st.session_state.get('int_innate_kill_rate', 1e7)}), "
+                f"imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}, "
+                f"imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}, "
+                f"immune_module='{st.session_state.get('int_immune_module', 'innate')}', "
+                f"imm_max={st.session_state.get('int_innate_max', 1e7)}"
+                f"{_kD_arg})"
+            )
 
     # ──── BRG ────
     elif builder_mode == "Binary Genotypes (BRG)":
@@ -1166,7 +1189,6 @@ def generate_reproduction_code() -> str:
         code.append("")
         code.append("brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=antibiotics or None)")
         _brg_n_depth = 3 if st.session_state.get("int_brg_dormancy_enabled", False) else 1
-        code.append(f"cfg = brg.to_config(n_latent=5, n_depth={_brg_n_depth})")
         if st.session_state.get("int_brg_use_eq_ic", False):
             _eq_total = st.session_state.get("int_brg_eq_total_B", 1e7)
             code.append(f"initial_B = brg.equilibrium_initial_condition(total_bacteria={_eq_total})")
@@ -1185,7 +1207,26 @@ def generate_reproduction_code() -> str:
                     _lbl = f"phi{_p}_abx{_a}" if phages else f"abx{_a}"
                 _ic_brg.append(_saved.get(_lbl, 1e7 if _idx == 0 else 0.0))
             code.append(f"initial_B = np.array({_ic_brg})")
-        
+
+        # BRG immunity repro — pass as kwargs to brg.to_config(...)
+        _brg_imm_args = ""
+        if st.session_state.get("int_immunity_enabled", False):
+            _n_brg = 2 ** (len(phages) + len(antibiotics))
+            _kD = st.session_state.get("int_imm_kill_rate_D", 0.0)
+            _kD_arg = f", imm_kill_rate_D=np.array([{_kD}] * {_n_brg})" if _kD > 0 else ""
+            _mod = st.session_state.get("int_immune_module", "innate")
+            _brg_imm_args = (
+                f", imm_stim_rate=np.full({_n_brg}, {st.session_state.get('int_imm_stim_rate', 1.0)})"
+                f", imm_stim50={st.session_state.get('int_imm_stim50', 1e6)}"
+                f", imm_kill_rate=np.full({_n_brg}, {st.session_state.get('int_innate_kill_rate', 1e7)})"
+                f", imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}"
+                f", imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}"
+                f", immune_module='{_mod}'"
+                f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
+                f"{_kD_arg}"
+            )
+        code.append(f"cfg = brg.to_config(n_latent=5, n_depth={_brg_n_depth}{_brg_imm_args})")
+
     # ──── STRAINSET ────
     else:
         code.append("from pbisim.strains import StrainDefinition, StrainSet")
@@ -1215,7 +1256,10 @@ def generate_reproduction_code() -> str:
             code.append(f"            bacteria_to_resource_ratio={s.get('bacteria_to_resource_ratio', 1e9)},")
             code.append(f"            dormancy_rate={dorm_rate}, resuscitation_rate={resus_rate}, dormancy_diffusion_rate={diff_rate},")
             code.append(f"            death_rate_B={db_val if db_val > 0 else None}, death_rate_D={dd_val if dd_val > 0 else None},")
-            code.append(f"            imm_stim_rate=0.0, imm_kill_rate=0.0, attenuation_rate=np.zeros({len(phages)}),")
+            _imm_on = st.session_state.get("int_immunity_enabled", False)
+            _stim_r = st.session_state.get("int_imm_stim_rate", 1.0) if _imm_on else 0.0
+            _kill_r = st.session_state.get("int_innate_kill_rate", 1e7) if _imm_on else 0.0
+            code.append(f"            imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.zeros({len(phages)}),")
             if antibiotics:
                 code.append(f"            antibiotic_sensitivity={{")
                 for abx in antibiotics:
@@ -1228,7 +1272,19 @@ def generate_reproduction_code() -> str:
         transitions = st.session_state.get("int_transitions", [])
         graph_dict = {t["from"]: {t["to"]: t["rate"]} for t in transitions if t["from"] and t["to"]}
         code.append(f"ss.set_mutation_graph({graph_dict})")
-        code.append("cfg = ss.to_config(n_latent=5, n_depth=1, phage_decay_rates=np.array([0.1]))")
+        _ss_decay = [p["phage_decay_rates"] for p in phages]
+        _ss_max_depth = max((s.get("dormancy_depth", 3) for s in strains if s.get("dormancy_enabled", False)), default=1)
+        _ss_imm_on = st.session_state.get("int_immunity_enabled", False)
+        _ss_imm_args = ""
+        if _ss_imm_on:
+            _ss_imm_args = (
+                f", imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}"
+                f", imm_stim50={st.session_state.get('int_imm_stim50', 1e6)}"
+                f", imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}"
+                f", immune_module='{st.session_state.get('int_immune_module', 'innate')}'"
+                f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
+            )
+        code.append(f"cfg = ss.to_config(n_latent=5, n_depth={_ss_max_depth}, phage_decay_rates=np.array({_ss_decay}){_ss_imm_args})")
 
     # ──── Dosing Schedule ────
     if doses:
@@ -1261,7 +1317,7 @@ def generate_reproduction_code() -> str:
     _ic_P = [p["initial_P"] for p in phages] if phages else [1e6]
     _ic_S = st.session_state.get("int_initial_S", 1.0) if st.session_state.get("int_track_nutrients", True) else 1.0
     _imm_enabled = st.session_state.get("int_immunity_enabled", False)
-    _imm_str = f", initial_Imm={st.session_state.get('int_innate_max', 1e7)}" if _imm_enabled else ""
+    _imm_str = f", initial_Imm={st.session_state.get('int_imm_initial', 0.0)}" if _imm_enabled else ""
     _ic_D_vals = [s.get("initial_D", 0.0) for s in strains] if builder_mode == "Direct (ModelBuilder)" else []
     _ic_D_str = f", initial_D=np.array({_ic_D_vals})" if any(v > 0 for v in _ic_D_vals) else ""
     if t_prerun > 0:
@@ -1693,6 +1749,16 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                         for d in nominal_doses:
                             t_name = "phage" if d["target_type"] == "phage" else ("antibiotic" if d["target_type"] == "antibiotic" else "nutrient")
                             combo_doses.append(DoseEvent(time=d["time"], amount=d["amount"], target=t_name, index=d["target_idx"], route=d["route"], duration=d["duration"]))
+                        # Warn if Combo is identical to an existing monotherapy arm
+                        _has_phage = any(d["target_type"] == "phage" for d in nominal_doses)
+                        _has_abx = any(d["target_type"] == "antibiotic" for d in nominal_doses)
+                        if not (_has_phage and _has_abx):
+                            _overlap = "Phage-Only" if _has_phage else "Antibiotic-Only"
+                            st.warning(
+                                f"Combo arm contains only {_overlap.split('-')[0].lower()} doses — "
+                                f"it will be identical to the {_overlap} arm. "
+                                "Add doses for both phage and antibiotic to create a meaningful combination arm."
+                            )
                         arms.append(TreatmentArm(name="Combo", dose_schedule=DoseSchedule(combo_doses)))
                         
                     if not arms:
@@ -3068,38 +3134,73 @@ elif st.session_state.current_page == "Interactive Simulator":
             )
 
             if st.session_state["int_immunity_enabled"]:
+                _valid_modules = ["innate", "hill"]
+                _cur_module = st.session_state.get("int_immune_module", "innate")
+                if _cur_module not in _valid_modules:
+                    _cur_module = "innate"
                 st.session_state["int_immune_module"] = st.selectbox(
-                    "Immune Module type",
-                    ["innate", "adaptive"],
-                    index=["innate", "adaptive"].index(
-                        st.session_state.get("int_immune_module", "innate")
+                    "Immune module",
+                    _valid_modules,
+                    index=_valid_modules.index(_cur_module),
+                    help=(
+                        "innate: dImm/dt = stim_rate·B/(stim50+B) − decay·Imm  "
+                        "| hill: dImm/dt = imm_max·B/(stim50+B) − decay·Imm"
                     ),
                 )
-                st.session_state["int_innate_kill_rate"] = st.number_input(
-                    "Immune cell kill rate (k_imm)",
-                    value=float(st.session_state.get("int_innate_kill_rate", 1e7)),
-                    format="%.1e",
-                )
-                st.session_state["int_innate_kill50"] = st.number_input(
-                    "Immune killing half-saturation (K_kill)",
-                    value=float(st.session_state.get("int_innate_kill50", 1e8)),
-                    format="%.1e",
-                )
-                st.session_state["int_innate_max"] = st.number_input(
-                    "Immune capacity (Imm_max)",
-                    value=float(st.session_state.get("int_innate_max", 1e7)),
-                    format="%.1e",
-                )
-                st.session_state["int_innate_decay_rate"] = st.number_input(
-                    "Immune decay rate",
-                    value=float(st.session_state.get("int_innate_decay_rate", 0.05)),
-                    step=0.01,
-                )
+                _module = st.session_state["int_immune_module"]
+
+                imm_col1, imm_col2 = st.columns(2)
+                with imm_col1:
+                    st.session_state["int_imm_stim_rate"] = st.number_input(
+                        "Stimulation rate (imm_stim_rate)",
+                        value=float(st.session_state.get("int_imm_stim_rate", 1.0)),
+                        format="%.2e",
+                        help="Rate at which each bacterium recruits immune effectors (innate module only).",
+                    )
+                    st.session_state["int_innate_kill_rate"] = st.number_input(
+                        "Kill rate coefficient (imm_kill_rate)",
+                        value=float(st.session_state.get("int_innate_kill_rate", 1e7)),
+                        format="%.1e",
+                        help="Per-bacterium immune killing coefficient.",
+                    )
+                    st.session_state["int_innate_decay_rate"] = st.number_input(
+                        "Effector decay rate (imm_decay_rate)",
+                        value=float(st.session_state.get("int_innate_decay_rate", 0.05)),
+                        step=0.01,
+                    )
+                with imm_col2:
+                    st.session_state["int_imm_stim50"] = st.number_input(
+                        "Stimulation half-sat. (imm_stim50)",
+                        value=float(st.session_state.get("int_imm_stim50", 1e6)),
+                        format="%.1e",
+                        help="Bacterial density at half-max immune stimulation.",
+                    )
+                    st.session_state["int_innate_kill50"] = st.number_input(
+                        "Killing half-sat. (imm_kill50)",
+                        value=float(st.session_state.get("int_innate_kill50", 1e8)),
+                        format="%.1e",
+                        help="Bacterial density at half-max immune killing.",
+                    )
+                    st.session_state["int_imm_initial"] = st.number_input(
+                        "Initial immune density (initial_Imm)",
+                        value=float(st.session_state.get("int_imm_initial", 0.0)),
+                        format="%.1e",
+                        help="Starting immune effector level. Typically 0 — grows from bacterial stimulation.",
+                    )
+
+                if _module == "hill":
+                    st.session_state["int_innate_max"] = st.number_input(
+                        "Max stimulation (imm_max) — hill module only",
+                        value=float(st.session_state.get("int_innate_max", 1e7)),
+                        format="%.1e",
+                        help="Asymptotic stimulation strength for the hill module.",
+                    )
+
                 st.session_state["int_imm_kill_rate_D"] = st.number_input(
-                    "Immune kill rate for dormant/hibernating cells (k_imm_D)",
+                    "Kill rate for dormant/hibernating cells (imm_kill_rate_D)",
                     value=float(st.session_state.get("int_imm_kill_rate_D", 0.0)),
                     format="%.1e",
-                    help="Set > 0 to allow immune cells to also clear dormant compartments."
+                    help="Set > 0 to allow immune clearance of dormant compartments.",
                 )
 
     # ──── Tab 3: Environment & Dosing ─────────────────────────────────────────

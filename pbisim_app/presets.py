@@ -257,13 +257,14 @@ plt.tight_layout()
             "s_in": 0.0,
             "s_out": 0.0,
             "immunity_enabled": True,
+            "immune_module": "innate",
+            "imm_stim_rate": 1.0,
+            "imm_stim50": 1e6,
             "innate_kill_rate": 1e7,
             "innate_kill50": 1e8,
+            "innate_decay_rate": 0.05,
             "innate_max": 1e7,
-            "adaptive_stimulation_rate": 0.0,
-            "adaptive_decay_rate": 0.0,
-            "adaptive_max": 0.0,
-            "adaptive_delay": 0.0,
+            "imm_initial": 0.0,
             "debris_enabled": False,
             "strains": [
                 {
