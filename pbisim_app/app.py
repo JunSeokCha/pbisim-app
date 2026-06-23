@@ -1042,7 +1042,9 @@ def run_sim_from_gui_params():
     
     t_end = st.session_state.get("int_t_end", 48.0)
     dt = st.session_state.get("int_dt", 0.25)
-    result = solve_ode(model, t_end=t_end, dt=dt)
+    method = st.session_state.get("int_solver_method", "BDF")
+    extinction_threshold = st.session_state.get("int_extinction_threshold", 1.0) or None
+    result = solve_ode(model, t_end=t_end, dt=dt, method=method, extinction_threshold=extinction_threshold)
     return result, config
 
 
@@ -1065,7 +1067,8 @@ def generate_reproduction_code() -> str:
         code.append("from pbisim import ModelBuilder")
         code.append("")
         code.append("# 1. Build Model Configuration")
-        code.append(f"builder = ModelBuilder(n_bacteria={len(strains)}, n_phages={len(phages)}, n_latent=5)")
+        max_depth = max([s.get("dormancy_depth", 1) for s in strains] if strains else [1])
+        code.append(f"builder = ModelBuilder(n_bacteria={len(strains)}, n_phages={len(phages)}, n_latent=5, n_depth={max_depth})")
         
         # growth
         rates = [s["growth_rate"] for s in strains]
@@ -1098,8 +1101,10 @@ def generate_reproduction_code() -> str:
             code.append(f"builder = builder.with_phage_params(")
             code.append(f"    adsorption_rates=np.array({ads}),")
             code.append(f"    adsorption_rates_dormant=np.array({ads_dorm}),")
-            code.append(f"    burst_sizes=np.array({[p['burst_sizes'] for p in phages]}),")
-            code.append(f"    latent_periods=np.array({[p['latent_periods'] for p in phages]}),")
+            _burst_2d = [[p['burst_sizes'] for p in phages]] * len(strains)
+            _latent_2d = [[p['latent_periods'] for p in phages]] * len(strains)
+            code.append(f"    burst_sizes=np.array({_burst_2d}),")
+            code.append(f"    latent_periods=np.array({_latent_2d}),")
             code.append(f"    phage_decay_rates=np.array({[p['phage_decay_rates'] for p in phages]}),")
             code.append(f"    allow_superinfection={st.session_state.get('int_superinfection', False)}")
             code.append(f")")
@@ -1116,7 +1121,20 @@ def generate_reproduction_code() -> str:
         if phages and len(strains) == 2**len(phages):
             phg_res_rates = st.session_state.get("direct_phg_res_rates", [1e-7] * len(phages))
             code.append(f"builder = builder.with_mutations(phage_resistance_rates={phg_res_rates})")
-            
+
+        # nutrients
+        _track_nutrients = st.session_state.get("int_track_nutrients", True)
+        if not _track_nutrients:
+            code.append(f"builder = builder.with_nutrient(track_nutrients=False, carrying_capacity={st.session_state.get('int_carrying_capacity', 1e9)})")
+        else:
+            code.append(f"builder = builder.with_nutrient(track_nutrients=True, monod_constant={st.session_state.get('int_monod_constant', 0.3)}, recycle_fraction={st.session_state.get('int_recycle_fraction', 0.0)}, s_in={st.session_state.get('int_s_in', 0.0)}, s_out={st.session_state.get('int_s_out', 0.0)})")
+
+        # immunity
+        if st.session_state.get("int_immunity_enabled", False):
+            _kD = st.session_state.get("int_imm_kill_rate_D", 0.0)
+            _kD_arg = f", imm_kill_rate_D=np.array([{_kD}] * {len(strains)})" if _kD > 0 else ""
+            code.append(f"builder = builder.with_immunity(imm_kill_rate={st.session_state.get('int_innate_kill_rate', 1e7)}, imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}, imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}, immune_module='{st.session_state.get('int_immune_module', 'innate')}', imm_max={st.session_state.get('int_innate_max', 1e7)}{_kD_arg})")
+
     # ──── BRG ────
     elif builder_mode == "Binary Genotypes (BRG)":
         code.append("from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic")
@@ -1200,20 +1218,29 @@ def generate_reproduction_code() -> str:
             code.append("cfg = builder.build()")
         else:
             code.append("# Add schedule to brg/ss config manually if required")
-            
+    elif builder_mode == "Direct (ModelBuilder)":
+        code.append("cfg = builder.build()")
+
     code.append("")
     code.append("# 3. Initialize Model and Solve")
     
     # Prerun stationary phase
     t_prerun = st.session_state.get("int_t_prerun", 0.0)
+    _ic_B = [s["initial_B"] for s in strains] if builder_mode == "Direct (ModelBuilder)" else [1e7]
+    _ic_P = [p["initial_P"] for p in phages] if (builder_mode == "Direct (ModelBuilder)" and phages) else [1e6]
+    _ic_S = st.session_state.get("int_initial_S", 1.0) if st.session_state.get("int_track_nutrients", True) else 1.0
+    _imm_enabled = st.session_state.get("int_immunity_enabled", False)
+    _imm_str = f", initial_Imm={st.session_state.get('int_innate_max', 1e7)}" if _imm_enabled else ""
     if t_prerun > 0:
         code.append(f"# Run stationary phase equilibration prerun for {t_prerun} hours")
         code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun})")
-        code.append("model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array([1e6]), initial_S=ic.S)")
+        code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=float(ic.S){_imm_str})")
     else:
-        code.append("model = PBIModel(cfg, initial_B=np.array([1e7]), initial_P=np.array([1e6]))")
-        
-    code.append(f"result = solve_ode(model, t_end={st.session_state.get('int_t_end', 48.0)}, dt={st.session_state.get('int_dt', 0.25)})")
+        code.append(f"model = PBIModel(cfg, initial_B=np.array({_ic_B}), initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str})")
+
+    _method = st.session_state.get("int_solver_method", "BDF")
+    _thresh = st.session_state.get("int_extinction_threshold", 1.0) or None
+    code.append(f"result = solve_ode(model, t_end={st.session_state.get('int_t_end', 48.0)}, dt={st.session_state.get('int_dt', 0.25)}, method='{_method}', extinction_threshold={_thresh})")
     
     code.append("")
     code.append("# 4. Plot trajectories")
@@ -2145,7 +2172,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         is_k = float(ic.S)
                         
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
-                    result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25))
+                    result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None)
 
                     # Compute metrics
                     total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -2262,7 +2289,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                             is_k = float(ic.S)
 
                         model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
-                        result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25))
+                        result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None)
 
                         total_bacteria = result.sum_prefixes("B", "D", "I", "H")
                         nadir_val = np.min(total_bacteria)
