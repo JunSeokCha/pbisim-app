@@ -27,20 +27,32 @@ Simulate phage therapy, antibiotic treatment, and combination regimens through a
 
 ## Installation
 
-```bash
-# 1. Install pbisim first (dependency)
-cd pbisim/
-pip install -e .
+### Option A — existing environment (quickest)
 
-# 2. Install pbisim-app
-cd ../pbisim-app/
-pip install -e .
+Install in dependency order from the workspace root:
+
+```bash
+pip install -e pbisim/      # engine (dependency)
+pip install -e pbisim-app/  # this package
 ```
 
-Or install both in one go from the workspace root:
+### Option B — dedicated conda environment (recommended)
 
 ```bash
-pip install -e pbisim/ && pip install -e pbisim-app/
+# From the workspace root
+conda env create -f environment.yml   # create once
+conda activate pbisim
+pip install -e pbisim/
+pip install -e pbisim-app/
+```
+
+### Full ecosystem (all three packages)
+
+```bash
+conda env create -f environment.yml
+conda activate pbisim
+./install.sh          # Linux/macOS — installs pbisim, pbisim-fit, pbisim-app
+# .\install.ps1       # Windows equivalent
 ```
 
 ---
@@ -48,9 +60,8 @@ pip install -e pbisim/ && pip install -e pbisim-app/
 ## Running
 
 ```bash
-# Activate your environment first
-conda activate pbisim202602   # Linux
-# conda activate pbisim202606  # Windows
+# Activate the environment first
+conda activate pbisim
 
 # Start the app
 python -m streamlit run pbisim_app/app.py

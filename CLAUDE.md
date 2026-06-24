@@ -128,8 +128,7 @@ Streamlit UI (app.py)
 
 ## Test commands
 
-Activate the project env first (`conda activate pbisim202606` on Windows /
-`pbisim202602` on Linux), then:
+Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
 # Full suite — expected: 48 passed
