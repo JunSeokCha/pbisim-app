@@ -3772,8 +3772,3 @@ elif st.session_state.current_page == "Interactive Simulator":
         if show_code:
             with st.expander("🐍 View Python Reproduction Code"):
                 st.code(rep_code, language="python")
-
-
-def main():
-    """Console script entry point."""
-    pass

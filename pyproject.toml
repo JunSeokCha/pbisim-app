@@ -32,7 +32,7 @@ dev = [
 ]
 
 [project.scripts]
-pbisim-app = "pbisim_app.app:main"
+pbisim-app = "pbisim_app.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
