@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **49 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **50 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -49,7 +49,7 @@ pbisim-app/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
 │   ├── test_presets.py      18 tests — preset structure and parameter validity
-│   ├── test_builder_modes.py 15 tests — BRG, StrainSet, cohort trial, phage-leak guard
+│   ├── test_builder_modes.py 16 tests — BRG, StrainSet, cohort, phage-leak + immune-refuge guards
 │   ├── test_sweeps.py       9 tests — sweep_helper parameter application
 │   └── test_self_healing.py 6 tests — self-healing loop and history rollback
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
@@ -131,14 +131,14 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 48 passed
+# Full suite — expected: 50 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
 python -m pytest tests/test_presets.py -q         # 18 tests
-python -m pytest tests/test_builder_modes.py -q   # 15 tests (BRG, StrainSet, cohort, phage-leak guard)
+python -m pytest tests/test_builder_modes.py -q   # 16 tests (BRG, StrainSet, cohort, phage-leak + immune-refuge)
 python -m pytest tests/test_sweeps.py -q          # 9 tests
 python -m pytest tests/test_self_healing.py -q    # 6 tests
 ```
@@ -240,3 +240,48 @@ python -m streamlit run pbisim_app/app.py
 acts on a zeroed baseline in trials, so it no longer varies the inoculum — phage comes
 from the dose. If per-patient phage-dose variability is wanted, wire IIV to the dose
 amount (small follow-up).
+
+## Done this session (2026-07-07) — immune module investigation
+
+- **Investigated "immune module doesn't work" reports. The immune module is NOT
+  broken** — innate immunity kills active bacteria (both strains) correctly in all
+  three builder modes and the exact app solve path (BDF + extinction_threshold). Two
+  real issues found:
+  1. **Dormancy is an immune refuge (root cause of the user's 2-strain report).**
+     Reproduced exactly (2 strains, dormancy on, defaults, immunity on → nadir 1.57e6,
+     never clears, resistant fraction ~99.7% — matches user's numbers). Mechanism:
+     immunity crushes the *active* resistant strain (B1: 4.7e8→2.9e6) but the resistant
+     population mass-converts to dormancy when nutrients crash, and dormant/hibernating
+     cells are **immune-privileged** — the engine neither kills them (`imm_kill_rate_D`
+     defaults to 0/None) nor lets them stimulate immunity (excluded from
+     `bac_total_active`). So a ~3.6e8 dormant reservoir persists and the infection never
+     clears. Confirmed fix path: `imm_kill_rate_D > 0` drops the burden to 1.8e5. This
+     is correct model biology (persister immune evasion), but the app gave no hint.
+     **→ Added a UI warning** in the immunity tab (Tab 2) when dormancy + immunity are
+     both on and `imm_kill_rate_D <= 0`, explaining the refuge and pointing to the
+     control. No biology/default changes. Regression test
+     `test_builder_modes.py::test_dormancy_creates_immune_refuge`. **50 tests passing.**
+  2. **The `hill` immune module is genuinely broken by defaults (not yet fixed).**
+     Hill killing is driven by `imm_max` (default `1e7`, ~100× too small — it's an
+     absolute clearance flux needing ~1e9) and **ignores** the prominent
+     `imm_kill_rate` field entirely (verified: 1e7→1e13 changes nothing; hill also
+     freezes `Imm`, so `imm_stim_rate`/`imm_decay_rate` are inert). The UI help text
+     describes a stimulation formula the engine doesn't implement. **Deferred pending
+     user direction** on fix scope (defaults + UX + help text vs defaults only).
+
+- **Fixed blank "Antibiotics & Host Immunity" results graph.** When immunity was on
+  but no antibiotic was configured, the plot did `ax2 = ... else plt.subplots(...)[1]`,
+  drawing `Imm` onto a throwaway figure while `st.pyplot(fig)` showed the empty
+  original — so the graph was blank. Now plots `Imm` on `ax1` (the displayed figure)
+  in the no-antibiotic case. (User's reported symptom.)
+- **Updated default innate immune parameters** (per owner): `imm_stim_rate` 1.0→**0.1**,
+  `imm_decay_rate` 0.05→**0.1**, `imm_kill50` 1e8→**1e5**; `imm_kill_rate` (1e7) and
+  `imm_stim50` (1e6) unchanged. Applied across session defaults, all three builder
+  paths, UI widgets, preset-load, and repro-code.
+- **Exposed `extinction_check_interval`** (pbisim solver arg) as a new "Extinction
+  check interval (hours)" UI control (0 = check only at dose boundaries). Wired into
+  the main sim, 1D/2D sweep solves, repro-code, and preset-load. Zeroes a sub-threshold
+  strain at the chosen cadence so it can't regrow from a below-threshold pool (verified:
+  a 3.4-cell residual regrows to 9.35e8 with interval off, stays extinct at interval=6h).
+
+**Still open (immune):** hill-module defaults/UX/help fix (see #2 above).

@@ -216,3 +216,50 @@ def test_trial_control_arm_has_no_phage():
         assert np.max(r.sum_prefixes("P")) > init_P[0], "phage inoculum not delivered"
         total_b = r.sum_prefixes("B", "D", "I", "H")
         assert total_b[-1] < 1.0, "phage arm should eradicate bacteria"
+
+
+def test_dormancy_creates_immune_refuge():
+    """Dormant cells are immune-privileged unless imm_kill_rate_D > 0.
+
+    This locks in the mechanism behind the app's dormancy+immunity warning: with
+    dormancy enabled, a resistant strain survives in the dormant reservoir that
+    immunity neither kills (imm_kill_rate_D=0) nor is stimulated by, so the
+    infection never clears — whereas imm_kill_rate_D > 0 lets immunity clear it.
+    """
+    from pbisim.builder import ModelBuilder
+
+    def build(kill_rate_D):
+        b = ModelBuilder(n_bacteria=2, n_phages=1, n_latent=5, n_depth=3)
+        b = b.with_growth_rates([1.2, 1.2], bacteria_to_resource_ratio=[1e9, 1e9])
+        b = b.with_dormancy(
+            dormancy_rate=np.array([0.2, 0.2]),
+            resuscitation_rate=np.array([0.1, 0.1]),
+            dormancy_diffusion_rate=np.array([0.05, 0.05]),
+        )
+        b = b.with_phage_params(
+            adsorption_rates=np.array([[1e-8], [0.0]]),
+            adsorption_rates_dormant=np.array([[0.0], [0.0]]),
+            burst_sizes=np.array([[50.0], [50.0]]),
+            latent_periods=np.array([[0.5], [0.5]]),
+            phage_decay_rates=np.array([0.1]),
+        )
+        b = b.with_mutations(phage_resistance_rates=[1e-7])
+        b = b.with_nutrient(track_nutrients=True, monod_constant=0.3)
+        b = b.with_immunity(
+            imm_stim_rate=np.full(2, 1.0), imm_stim50=1e6,
+            imm_kill_rate=np.full(2, 1e7), imm_kill50=1e8,
+            imm_decay_rate=0.05, immune_module="innate",
+            imm_kill_rate_D=(np.array([kill_rate_D, kill_rate_D])
+                             if kill_rate_D > 0 else None),
+        )
+        m = PBIModel(b.build(), initial_B=np.array([1e7, 0.0]),
+                     initial_P=np.array([1e6]), initial_S=1.0, initial_Imm=0.0)
+        return solve_ode(m, t_end=48.0, dt=0.5, method="BDF", extinction_threshold=1.0)
+
+    refuge = build(0.0).sum_prefixes("B", "D", "I", "H")[-1]
+    cleared = build(1e7).sum_prefixes("B", "D", "I", "H")[-1]
+
+    # With no dormant killing, a large reservoir persists (>1e7); enabling it
+    # drops the burden by orders of magnitude.
+    assert refuge > 1e7, "dormant reservoir should persist when imm_kill_rate_D=0"
+    assert cleared < refuge / 100.0, "imm_kill_rate_D>0 should clear the reservoir"

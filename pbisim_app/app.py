@@ -358,6 +358,7 @@ def load_preset_to_state(params: dict):
     st.session_state["int_t_end"] = params.get("t_end", 48.0)
     st.session_state["int_dt"] = params.get("dt", 0.25)
     st.session_state["int_extinction_threshold"] = params.get("extinction_threshold", 1.0)
+    st.session_state["int_extinction_check_interval"] = params.get("extinction_check_interval", 0.0)
     st.session_state["int_solver_method"] = params.get("solver_method", "BDF")
     st.session_state["int_track_nutrients"] = params.get("track_nutrients", True)
     st.session_state["int_initial_S"] = params.get("initial_S", 1.0)
@@ -373,18 +374,18 @@ def load_preset_to_state(params: dict):
     # 3. Immunity settings
     st.session_state["int_immunity_enabled"] = params.get("immunity_enabled", False)
     st.session_state["int_innate_kill_rate"] = params.get("innate_kill_rate", 1e7)
-    st.session_state["int_innate_kill50"] = params.get("innate_kill50", 1e8)
+    st.session_state["int_innate_kill50"] = params.get("innate_kill50", 1e5)
     st.session_state["int_innate_max"] = params.get("innate_max", 1e7)
     # backward compat: old presets stored "adaptive_decay_rate"
     st.session_state["int_innate_decay_rate"] = params.get(
-        "innate_decay_rate", params.get("adaptive_decay_rate", 0.05)
+        "innate_decay_rate", params.get("adaptive_decay_rate", 0.1)
     )
     st.session_state["int_imm_kill_rate_D"] = params.get("innate_kill_rate_D", 0.0)
     # translate legacy "adaptive" (invented by scaffold, not a pbisim module) → "innate"
     _raw_module = params.get("immune_module", "innate")
     st.session_state["int_immune_module"] = "innate" if _raw_module == "adaptive" else _raw_module
     # new fields (missing from older presets → sensible defaults)
-    st.session_state["int_imm_stim_rate"] = params.get("imm_stim_rate", 1.0)
+    st.session_state["int_imm_stim_rate"] = params.get("imm_stim_rate", 0.1)
     st.session_state["int_imm_stim50"] = params.get("imm_stim50", 1e6)
     st.session_state["int_imm_initial"] = params.get("imm_initial", 0.0)
 
@@ -715,11 +716,11 @@ def build_nominal_config_from_gui():
         if immunity_enabled:
             kill_rate_D = st.session_state.get("int_imm_kill_rate_D", 0.0)
             builder = builder.with_immunity(
-                imm_stim_rate=np.full(n_bacteria, st.session_state.get("int_imm_stim_rate", 1.0)),
+                imm_stim_rate=np.full(n_bacteria, st.session_state.get("int_imm_stim_rate", 0.1)),
                 imm_stim50=st.session_state.get("int_imm_stim50", 1e6),
                 imm_kill_rate=np.full(n_bacteria, st.session_state.get("int_innate_kill_rate", 1e7)),
-                imm_kill50=st.session_state.get("int_innate_kill50", 1e8),
-                imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.05),
+                imm_kill50=st.session_state.get("int_innate_kill50", 1e5),
+                imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.1),
                 immune_module=st.session_state.get("int_immune_module", "innate"),
                 imm_max=st.session_state.get("int_innate_max", 1e7),
                 imm_kill_rate_D=np.array([kill_rate_D] * n_bacteria) if kill_rate_D > 0 else None
@@ -855,11 +856,11 @@ def build_nominal_config_from_gui():
         # Immunity
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
         if immunity_enabled:
-            extra_kwargs["imm_stim_rate"] = np.full(brg.n_strains, st.session_state.get("int_imm_stim_rate", 1.0))
+            extra_kwargs["imm_stim_rate"] = np.full(brg.n_strains, st.session_state.get("int_imm_stim_rate", 0.1))
             extra_kwargs["imm_stim50"] = st.session_state.get("int_imm_stim50", 1e6)
             extra_kwargs["imm_kill_rate"] = np.full(brg.n_strains, st.session_state.get("int_innate_kill_rate", 1e7))
-            extra_kwargs["imm_kill50"] = st.session_state.get("int_innate_kill50", 1e8)
-            extra_kwargs["imm_decay_rate"] = st.session_state.get("int_innate_decay_rate", 0.05)
+            extra_kwargs["imm_kill50"] = st.session_state.get("int_innate_kill50", 1e5)
+            extra_kwargs["imm_decay_rate"] = st.session_state.get("int_innate_decay_rate", 0.1)
             extra_kwargs["immune_module"] = st.session_state.get("int_immune_module", "innate")
             extra_kwargs["imm_max"] = st.session_state.get("int_innate_max", 1e7)
             kill_rate_D = st.session_state.get("int_imm_kill_rate_D", 0.0)
@@ -951,7 +952,7 @@ def build_nominal_config_from_gui():
                     dormancy_rate=s["dormancy_rate"] if s.get("dormancy_enabled", False) else 0.0,
                     resuscitation_rate=s["resuscitation_rate"] if s.get("dormancy_enabled", False) else 0.0,
                     dormancy_diffusion_rate=s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0,
-                    imm_stim_rate=st.session_state.get("int_imm_stim_rate", 1.0) if st.session_state.get("int_immunity_enabled", False) else 0.0,
+                    imm_stim_rate=st.session_state.get("int_imm_stim_rate", 0.1) if st.session_state.get("int_immunity_enabled", False) else 0.0,
                     imm_kill_rate=st.session_state.get("int_innate_kill_rate", 1e7) if st.session_state.get("int_immunity_enabled", False) else 0.0,
                     attenuation_rate=np.zeros(n_phages),
                     death_rate_B=s.get("death_rate_B", None) if s.get("death_rate_B", 0.0) > 0 else None,
@@ -1016,9 +1017,9 @@ def build_nominal_config_from_gui():
             n_latent=5,
             n_depth=max_depth,
             phage_decay_rates=decay_rates,
-            imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.05),
+            imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.1),
             imm_stim50=st.session_state.get("int_imm_stim50", 1e6),
-            imm_kill50=st.session_state.get("int_innate_kill50", 1e8),
+            imm_kill50=st.session_state.get("int_innate_kill50", 1e5),
             monod_constant=st.session_state.get("int_monod_constant", 0.3),
             recycle_fraction=st.session_state.get("int_recycle_fraction", 0.0),
             phage_pk_config=phage_pk_config,
@@ -1062,7 +1063,10 @@ def run_sim_from_gui_params():
     dt = st.session_state.get("int_dt", 0.25)
     method = st.session_state.get("int_solver_method", "BDF")
     extinction_threshold = st.session_state.get("int_extinction_threshold", 1.0) or None
-    result = solve_ode(model, t_end=t_end, dt=dt, method=method, extinction_threshold=extinction_threshold)
+    extinction_check_interval = st.session_state.get("int_extinction_check_interval", 0.0) or None
+    result = solve_ode(model, t_end=t_end, dt=dt, method=method,
+                       extinction_threshold=extinction_threshold,
+                       extinction_check_interval=extinction_check_interval)
     return result, config
 
 
@@ -1257,7 +1261,7 @@ def generate_reproduction_code() -> str:
             code.append(f"            dormancy_rate={dorm_rate}, resuscitation_rate={resus_rate}, dormancy_diffusion_rate={diff_rate},")
             code.append(f"            death_rate_B={db_val if db_val > 0 else None}, death_rate_D={dd_val if dd_val > 0 else None},")
             _imm_on = st.session_state.get("int_immunity_enabled", False)
-            _stim_r = st.session_state.get("int_imm_stim_rate", 1.0) if _imm_on else 0.0
+            _stim_r = st.session_state.get("int_imm_stim_rate", 0.1) if _imm_on else 0.0
             _kill_r = st.session_state.get("int_innate_kill_rate", 1e7) if _imm_on else 0.0
             code.append(f"            imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.zeros({len(phages)}),")
             if antibiotics:
@@ -1329,7 +1333,8 @@ def generate_reproduction_code() -> str:
 
     _method = st.session_state.get("int_solver_method", "BDF")
     _thresh = st.session_state.get("int_extinction_threshold", 1.0) or None
-    code.append(f"result = solve_ode(model, t_end={st.session_state.get('int_t_end', 48.0)}, dt={st.session_state.get('int_dt', 0.25)}, method='{_method}', extinction_threshold={_thresh})")
+    _check_int = st.session_state.get("int_extinction_check_interval", 0.0) or None
+    code.append(f"result = solve_ode(model, t_end={st.session_state.get('int_t_end', 48.0)}, dt={st.session_state.get('int_dt', 0.25)}, method='{_method}', extinction_threshold={_thresh}, extinction_check_interval={_check_int})")
     
     code.append("")
     code.append("# 4. Plot trajectories")
@@ -2294,7 +2299,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         is_k = float(ic.S)
                         
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
-                    result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None)
+                    result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
 
                     # Compute metrics
                     total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -2411,7 +2416,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                             is_k = float(ic.S)
 
                         model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
-                        result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None)
+                        result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
 
                         total_bacteria = result.sum_prefixes("B", "D", "I", "H")
                         nadir_val = np.min(total_bacteria)
@@ -3176,7 +3181,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 with imm_col1:
                     st.session_state["int_imm_stim_rate"] = st.number_input(
                         "Stimulation rate (imm_stim_rate)",
-                        value=float(st.session_state.get("int_imm_stim_rate", 1.0)),
+                        value=float(st.session_state.get("int_imm_stim_rate", 0.1)),
                         format="%.2e",
                         help="Rate at which each bacterium recruits immune effectors (innate module only).",
                     )
@@ -3188,7 +3193,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     )
                     st.session_state["int_innate_decay_rate"] = st.number_input(
                         "Effector decay rate (imm_decay_rate)",
-                        value=float(st.session_state.get("int_innate_decay_rate", 0.05)),
+                        value=float(st.session_state.get("int_innate_decay_rate", 0.1)),
                         step=0.01,
                     )
                 with imm_col2:
@@ -3200,7 +3205,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     )
                     st.session_state["int_innate_kill50"] = st.number_input(
                         "Killing half-sat. (imm_kill50)",
-                        value=float(st.session_state.get("int_innate_kill50", 1e8)),
+                        value=float(st.session_state.get("int_innate_kill50", 1e5)),
                         format="%.1e",
                         help="Bacterial density at half-max immune killing.",
                     )
@@ -3225,6 +3230,29 @@ elif st.session_state.current_page == "Interactive Simulator":
                     format="%.1e",
                     help="Set > 0 to allow immune clearance of dormant compartments.",
                 )
+
+                # Immune-refuge warning: dormant cells are immune-privileged unless
+                # imm_kill_rate_D > 0. With dormancy on, a resistant/persister
+                # population can hide in the dormant compartment — the immune system
+                # neither kills it (imm_kill_rate_D=0) nor is stimulated by it
+                # (dormant cells are excluded from the immune signal). The infection
+                # then never clears even though immunity is "on", which is a common
+                # source of confusion.
+                _dormancy_on = any(
+                    s.get("dormancy_enabled", False)
+                    for s in st.session_state.get("int_strains", [])
+                )
+                if _dormancy_on and st.session_state["int_imm_kill_rate_D"] <= 0:
+                    st.warning(
+                        "⚠️ **Dormancy + immunity:** dormant/hibernating cells are "
+                        "immune-privileged while `imm_kill_rate_D = 0` — the immune "
+                        "system will not kill them and they do not stimulate it. A "
+                        "phage-resistant (or persister) population can survive in the "
+                        "dormant reservoir, so the infection may never clear and the "
+                        "resistant fraction can stay near 100% even with immunity "
+                        "enabled. Set `imm_kill_rate_D > 0` above to let immunity "
+                        "clear dormant cells."
+                    )
 
     # ──── Tab 3: Environment & Dosing ─────────────────────────────────────────
     with config_tabs[2]:
@@ -3443,6 +3471,18 @@ elif st.session_state.current_page == "Interactive Simulator":
                 value=float(st.session_state.get("int_extinction_threshold", 1.0)),
                 step=1.0,
                 help="If density falls below this threshold, it is locked to 0 to prevent numerical recovery.",
+            )
+            st.session_state["int_extinction_check_interval"] = st.number_input(
+                "Extinction check interval (hours)",
+                value=float(st.session_state.get("int_extinction_check_interval", 0.0)),
+                min_value=0.0,
+                step=1.0,
+                help=(
+                    "Apply the extinction threshold every this many hours (not just at "
+                    "dose events). Zeroes any sub-threshold strain before it can regrow "
+                    "from a below-threshold pool. Set to 0 to check only at dose boundaries. "
+                    "Ignored when the extinction threshold is 0."
+                ),
             )
             st.session_state["int_solver_method"] = st.selectbox(
                 "ODE Solver integration method",
@@ -3738,7 +3778,13 @@ elif st.session_state.current_page == "Interactive Simulator":
                     ax1.tick_params(axis="y", labelcolor=color)
 
                 if imm_present:
-                    ax2 = ax1.twinx() if abx_present else plt.subplots(figsize=(10, 4.5))[1]
+                    # When an antibiotic is present, put Imm on a twin y-axis;
+                    # otherwise plot it directly on ax1 (the displayed figure).
+                    # NOTE: previously this used plt.subplots(...)[1] in the no-abx
+                    # case, which drew Imm onto a throwaway figure while st.pyplot(fig)
+                    # showed the empty original — so the graph appeared blank whenever
+                    # immunity was enabled without an antibiotic.
+                    ax2 = ax1.twinx() if abx_present else ax1
                     color = "#ec4899"
                     ax2.set_ylabel("Immune Effector Cells (Imm)", color=color)
                     ax2.plot(
