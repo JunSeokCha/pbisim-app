@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **52 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **53 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -49,7 +49,7 @@ pbisim-app/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
 │   ├── test_presets.py      12 tests — preset structure and parameter validity
-│   ├── test_builder_modes.py 7 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
+│   ├── test_builder_modes.py 8 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
 │   ├── test_sweeps.py       4 tests — sweep_helper parameter application
 │   └── test_self_healing.py 2 tests — self-healing loop and history rollback
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
@@ -131,14 +131,14 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 52 passed
+# Full suite — expected: 53 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
 python -m pytest tests/test_presets.py -q         # 12 tests
-python -m pytest tests/test_builder_modes.py -q   # 7 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
+python -m pytest tests/test_builder_modes.py -q   # 8 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
 python -m pytest tests/test_sweeps.py -q          # 4 tests
 python -m pytest tests/test_self_healing.py -q    # 2 tests
 ```
@@ -314,8 +314,13 @@ amount (small follow-up).
   auto-generated reproduction code. Regression test
   `test_prerun_carries_dormant_reservoir`. **52 tests passing.**
 
-**Still open (pre-run):** the clinical-trial `PretreatmentPhase` path has the *same*
-latent drop — `trial_helper.create_model_factory` reads `ic.B/P/S` from the per-patient
-config but takes `initial_D`/`initial_Imm` from the GUI base kwargs, not the
-pretreatment result. Not yet fixed (out of scope for the reported simulator bug); worth
-fixing for trial pretreatment + dormancy/immunity.
+- **Fixed the same drop in the clinical-trial `PretreatmentPhase` path**
+  (`trial_helper.create_model_factory`). The factory read `ic.B/P/S` from the
+  per-patient config but took `initial_D`/`initial_Imm` from the GUI base kwargs, so a
+  trial pretreatment discarded its dormant reservoir + immune priming. Now the factory
+  prefers `config.initial_conditions.D`/`.Imm` (set by `PretreatmentPhase`) and clamps
+  `initial_S = max(ic.S, 0)`. Verified: a 48 h pretreatment on a dormancy model now
+  starts every patient's treatment at ~1e9 (was collapsing). Regression test
+  `test_trial_pretreatment_carries_dormant_reservoir`. **53 tests passing.**
+
+**Still open (pre-run):** none outstanding.

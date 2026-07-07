@@ -138,6 +138,45 @@ def test_clinical_trial_with_pretreatment():
     assert "Control" in res.arm_names
 
 
+def test_trial_pretreatment_carries_dormant_reservoir():
+    """A trial PretreatmentPhase must carry its dormant reservoir into treatment.
+
+    Same class of bug as the interactive-simulator pre-run: PretreatmentPhase replaces
+    the patient config's initial_conditions with the full stationary-phase state, but
+    the model factory previously took initial_D/initial_Imm from the GUI base kwargs,
+    discarding the (dominant) dormant population. A long pretreatment on a dormancy
+    model must still start the treatment near the stationary carrying capacity.
+    """
+    from pbisim.trial.clinical import TreatmentArm
+    from pbisim.trial.population import InitialConditions
+    from pbisim.builder import ModelBuilder
+    from pbisim_app.trial_helper import run_trial_simulation
+
+    b = ModelBuilder(n_bacteria=1, n_phages=0, n_latent=5, n_depth=3)
+    b = b.with_growth_rates([1.2], bacteria_to_resource_ratio=[1e9])
+    b = b.with_dormancy(dormancy_rate=np.array([0.2]), resuscitation_rate=np.array([0.1]),
+                        dormancy_diffusion_rate=np.array([0.05]))
+    b = b.with_nutrient(track_nutrients=True, monod_constant=0.3)
+    cfg = b.build()
+
+    init_B = np.array([1e7])
+    init_P = np.zeros(0)
+    init_S = 1.0
+    cfg.initial_conditions = InitialConditions(B=init_B, P=init_P, S=init_S)
+
+    res = run_trial_simulation(
+        cfg, [], [TreatmentArm(name="Control", dose_schedule=None)],
+        n_patients=2, t_end=12.0, dt=0.5, seed=1,
+        pretreatment_hours=48.0,  # long prerun -> population mostly dormant
+        n_jobs=1, base_initial_B=init_B, base_initial_P=init_P, base_initial_S=init_S,
+    )
+
+    for r in res["Control"].results:
+        assert r is not None
+        total = r.sum_prefixes("B", "D", "I", "H")
+        assert total[0] > 1e8, "treatment must start from the full stationary population"
+
+
 def test_trial_control_arm_has_no_phage():
     """Regression: the phage inoculum must not leak into non-phage arms.
 

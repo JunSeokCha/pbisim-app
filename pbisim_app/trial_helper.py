@@ -66,31 +66,44 @@ def create_model_factory(
     """
     def factory(config):
         ic = config.initial_conditions
-        
+
         # Resolve bacterial density
         if ic is not None and ic.B is not None:
             init_B = ic.B
         else:
             init_B = base_initial_B
-            
+
         # Resolve phage density
         if ic is not None and ic.P is not None:
             init_P = ic.P
         else:
             init_P = base_initial_P
-            
+
         # Resolve substrate density
         if ic is not None and ic.S is not None:
             init_S = float(ic.S)
         else:
             init_S = base_initial_S
-            
+        init_S = max(init_S, 0.0)  # a PretreatmentPhase can leave S slightly negative
+
         # Extract additional keyword arguments
         kwargs = {}
         for k, v in base_kwargs.items():
             if v is not None:
                 kwargs[k] = v
-                
+
+        # Prefer the config's initial conditions for the dormant reservoir (D) and
+        # immune priming (Imm). When a PretreatmentPhase runs, it replaces
+        # config.initial_conditions with the full stationary-phase state; taking D/Imm
+        # from the GUI base kwargs instead would discard the (usually dominant) dormant
+        # population and immune priming, collapsing the treatment population — the same
+        # bug fixed for the interactive simulator's pre-run.
+        if ic is not None:
+            if getattr(ic, "D", None) is not None:
+                kwargs["initial_D"] = ic.D
+            if getattr(ic, "Imm", None) is not None:
+                kwargs["initial_Imm"] = ic.Imm
+
         return PBIModel(config, initial_B=init_B, initial_P=init_P, initial_S=init_S, **kwargs)
     return factory
 
