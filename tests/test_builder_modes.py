@@ -263,3 +263,41 @@ def test_dormancy_creates_immune_refuge():
     # drops the burden by orders of magnitude.
     assert refuge > 1e7, "dormant reservoir should persist when imm_kill_rate_D=0"
     assert cleared < refuge / 100.0, "imm_kill_rate_D>0 should clear the reservoir"
+
+
+def test_hill_immune_module_active_at_app_defaults():
+    """The hill module must actually kill bacteria at the app's default parameters.
+
+    Hill killing is imm_max·B/(imm_kill50+B); with the app defaults (imm_max=1e7,
+    imm_kill50=1e5) it should control an otherwise-unchecked bloom. Also verifies the
+    engine ignores the innate-only fields in hill mode (imm_stim_rate/imm_kill_rate/
+    imm_decay_rate), which is why the UI hides them — changing them must not move the
+    hill result.
+    """
+    from pbisim.builder import ModelBuilder
+
+    def build(immune, **imm):
+        b = ModelBuilder(n_bacteria=1, n_phages=0, n_latent=5, n_depth=1)
+        b = b.with_growth_rates([1.2], bacteria_to_resource_ratio=[1e9])
+        b = b.with_nutrient(track_nutrients=True, monod_constant=0.3)
+        if immune:
+            b = b.with_immunity(immune_module="hill", **imm)
+        m = PBIModel(b.build(), initial_B=np.array([1e7]),
+                     initial_P=np.zeros(0), initial_S=1.0)
+        return solve_ode(m, t_end=48.0, dt=0.5, method="BDF",
+                         extinction_threshold=1.0).sum_prefixes("B", "D", "I", "H")
+
+    defaults = dict(imm_max=1e7, imm_kill50=1e5, imm_stim_rate=np.full(1, 0.1),
+                    imm_kill_rate=np.full(1, 1e7), imm_decay_rate=0.1, imm_stim50=1e6)
+
+    off = build(False)[-1]
+    on = build(True, **defaults)[-1]
+    assert off > 1e8, "control should bloom to carrying capacity"
+    assert on < off / 1000.0, "hill immunity must control the bloom at app defaults"
+
+    # Innate-only fields are inert in hill mode: perturbing them by orders of
+    # magnitude must not change the outcome.
+    inert = {**defaults, "imm_stim_rate": np.full(1, 1e3),
+             "imm_kill_rate": np.full(1, 1e13), "imm_decay_rate": 5.0}
+    assert np.isclose(build(True, **inert)[-1], on, atol=1.0), \
+        "hill output must not depend on imm_stim_rate/imm_kill_rate/imm_decay_rate"

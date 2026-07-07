@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **50 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **51 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -49,7 +49,7 @@ pbisim-app/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
 │   ├── test_presets.py      18 tests — preset structure and parameter validity
-│   ├── test_builder_modes.py 16 tests — BRG, StrainSet, cohort, phage-leak + immune-refuge guards
+│   ├── test_builder_modes.py 17 tests — BRG, StrainSet, cohort, phage-leak + immune guards
 │   ├── test_sweeps.py       9 tests — sweep_helper parameter application
 │   └── test_self_healing.py 6 tests — self-healing loop and history rollback
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
@@ -131,14 +131,14 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 50 passed
+# Full suite — expected: 51 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
 python -m pytest tests/test_presets.py -q         # 18 tests
-python -m pytest tests/test_builder_modes.py -q   # 16 tests (BRG, StrainSet, cohort, phage-leak + immune-refuge)
+python -m pytest tests/test_builder_modes.py -q   # 17 tests (BRG, StrainSet, cohort, phage-leak + immune guards)
 python -m pytest tests/test_sweeps.py -q          # 9 tests
 python -m pytest tests/test_self_healing.py -q    # 6 tests
 ```
@@ -260,14 +260,19 @@ amount (small follow-up).
      **→ Added a UI warning** in the immunity tab (Tab 2) when dormancy + immunity are
      both on and `imm_kill_rate_D <= 0`, explaining the refuge and pointing to the
      control. No biology/default changes. Regression test
-     `test_builder_modes.py::test_dormancy_creates_immune_refuge`. **50 tests passing.**
-  2. **The `hill` immune module is genuinely broken by defaults (not yet fixed).**
-     Hill killing is driven by `imm_max` (default `1e7`, ~100× too small — it's an
-     absolute clearance flux needing ~1e9) and **ignores** the prominent
-     `imm_kill_rate` field entirely (verified: 1e7→1e13 changes nothing; hill also
-     freezes `Imm`, so `imm_stim_rate`/`imm_decay_rate` are inert). The UI help text
-     describes a stimulation formula the engine doesn't implement. **Deferred pending
-     user direction** on fix scope (defaults + UX + help text vs defaults only).
+     `test_builder_modes.py::test_dormancy_creates_immune_refuge`. **51 tests passing.**
+  2. **The `hill` immune module — FIXED this session.** Hill killing is
+     `imm_max·B/(imm_kill50+B)` with `Imm` frozen, so it **ignores** `imm_kill_rate`,
+     `imm_stim_rate`, `imm_decay_rate`, `initial_Imm` (verified: 1e7→1e13 on
+     `imm_kill_rate` changes nothing). Previously `imm_max=1e7` did nothing at
+     `imm_kill50=1e8`; the owner's `imm_kill50` 1e8→1e5 change (see below) now makes
+     hill effective at the default `imm_max=1e7` (OFF→1e9, ON→0). Remaining defects
+     were UX/docs: (a) the module-selector help described a stimulation formula the
+     engine doesn't implement — corrected; (b) the immunity tab showed the inert
+     innate-only fields in hill mode — now hill renders only `imm_max` + `imm_kill50`
+     (+ `imm_kill_rate_D`) with a caption explaining `Imm` is frozen. Regression test
+     `test_hill_immune_module_active_at_app_defaults` (hill controls the bloom at
+     defaults; output is invariant to the inert fields).
 
 - **Fixed blank "Antibiotics & Host Immunity" results graph.** When immunity was on
   but no antibiotic was configured, the plot did `ax2 = ... else plt.subplots(...)[1]`,
@@ -284,4 +289,7 @@ amount (small follow-up).
   strain at the chosen cadence so it can't regrow from a below-threshold pool (verified:
   a 3.4-cell residual regrows to 9.35e8 with interval off, stays extinct at interval=6h).
 
-**Still open (immune):** hill-module defaults/UX/help fix (see #2 above).
+- **Fixed the `hill` immune-module UX/docs** (see #2 above): corrected the
+  module-selector help text and hid the inert innate-only fields in hill mode.
+
+**Still open (immune):** none outstanding.

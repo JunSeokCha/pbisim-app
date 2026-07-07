@@ -3171,58 +3171,79 @@ elif st.session_state.current_page == "Interactive Simulator":
                     _valid_modules,
                     index=_valid_modules.index(_cur_module),
                     help=(
-                        "innate: dImm/dt = stim_rate·B/(stim50+B) − decay·Imm  "
-                        "| hill: dImm/dt = imm_max·B/(stim50+B) − decay·Imm"
+                        "innate: Imm is integrated (dImm/dt = stim_rate·B/(stim50+B) "
+                        "− decay·Imm) and killing ∝ imm_kill_rate·Imm.  |  "
+                        "hill: Imm is frozen; killing = imm_max·B/(imm_kill50+B) directly "
+                        "(imm_stim_rate / imm_kill_rate / imm_decay_rate / initial_Imm unused)."
                     ),
                 )
                 _module = st.session_state["int_immune_module"]
 
-                imm_col1, imm_col2 = st.columns(2)
-                with imm_col1:
-                    st.session_state["int_imm_stim_rate"] = st.number_input(
-                        "Stimulation rate (imm_stim_rate)",
-                        value=float(st.session_state.get("int_imm_stim_rate", 0.1)),
-                        format="%.2e",
-                        help="Rate at which each bacterium recruits immune effectors (innate module only).",
+                if _module == "innate":
+                    imm_col1, imm_col2 = st.columns(2)
+                    with imm_col1:
+                        st.session_state["int_imm_stim_rate"] = st.number_input(
+                            "Stimulation rate (imm_stim_rate)",
+                            value=float(st.session_state.get("int_imm_stim_rate", 0.1)),
+                            format="%.2e",
+                            help="Rate at which each bacterium recruits immune effectors.",
+                        )
+                        st.session_state["int_innate_kill_rate"] = st.number_input(
+                            "Kill rate coefficient (imm_kill_rate)",
+                            value=float(st.session_state.get("int_innate_kill_rate", 1e7)),
+                            format="%.1e",
+                            help="Per-bacterium immune killing coefficient.",
+                        )
+                        st.session_state["int_innate_decay_rate"] = st.number_input(
+                            "Effector decay rate (imm_decay_rate)",
+                            value=float(st.session_state.get("int_innate_decay_rate", 0.1)),
+                            step=0.01,
+                        )
+                    with imm_col2:
+                        st.session_state["int_imm_stim50"] = st.number_input(
+                            "Stimulation half-sat. (imm_stim50)",
+                            value=float(st.session_state.get("int_imm_stim50", 1e6)),
+                            format="%.1e",
+                            help="Bacterial density at half-max immune stimulation.",
+                        )
+                        st.session_state["int_innate_kill50"] = st.number_input(
+                            "Killing half-sat. (imm_kill50)",
+                            value=float(st.session_state.get("int_innate_kill50", 1e5)),
+                            format="%.1e",
+                            help="Bacterial density at half-max immune killing.",
+                        )
+                        st.session_state["int_imm_initial"] = st.number_input(
+                            "Initial immune density (initial_Imm)",
+                            value=float(st.session_state.get("int_imm_initial", 0.0)),
+                            format="%.1e",
+                            help="Starting immune effector level. Typically 0 — grows from bacterial stimulation.",
+                        )
+                else:  # hill
+                    st.caption(
+                        "**Hill module:** immune killing = `imm_max · B / (imm_kill50 + B_total)`. "
+                        "The `Imm` state is *frozen* (not integrated), so `imm_stim_rate`, "
+                        "`imm_kill_rate`, `imm_decay_rate` and `initial_Imm` have no effect here — "
+                        "only the two parameters below (plus `imm_kill_rate_D`) apply."
                     )
-                    st.session_state["int_innate_kill_rate"] = st.number_input(
-                        "Kill rate coefficient (imm_kill_rate)",
-                        value=float(st.session_state.get("int_innate_kill_rate", 1e7)),
-                        format="%.1e",
-                        help="Per-bacterium immune killing coefficient.",
-                    )
-                    st.session_state["int_innate_decay_rate"] = st.number_input(
-                        "Effector decay rate (imm_decay_rate)",
-                        value=float(st.session_state.get("int_innate_decay_rate", 0.1)),
-                        step=0.01,
-                    )
-                with imm_col2:
-                    st.session_state["int_imm_stim50"] = st.number_input(
-                        "Stimulation half-sat. (imm_stim50)",
-                        value=float(st.session_state.get("int_imm_stim50", 1e6)),
-                        format="%.1e",
-                        help="Bacterial density at half-max immune stimulation.",
-                    )
-                    st.session_state["int_innate_kill50"] = st.number_input(
-                        "Killing half-sat. (imm_kill50)",
-                        value=float(st.session_state.get("int_innate_kill50", 1e5)),
-                        format="%.1e",
-                        help="Bacterial density at half-max immune killing.",
-                    )
-                    st.session_state["int_imm_initial"] = st.number_input(
-                        "Initial immune density (initial_Imm)",
-                        value=float(st.session_state.get("int_imm_initial", 0.0)),
-                        format="%.1e",
-                        help="Starting immune effector level. Typically 0 — grows from bacterial stimulation.",
-                    )
-
-                if _module == "hill":
-                    st.session_state["int_innate_max"] = st.number_input(
-                        "Max stimulation (imm_max) — hill module only",
-                        value=float(st.session_state.get("int_innate_max", 1e7)),
-                        format="%.1e",
-                        help="Asymptotic stimulation strength for the hill module.",
-                    )
+                    imm_col1, imm_col2 = st.columns(2)
+                    with imm_col1:
+                        st.session_state["int_innate_max"] = st.number_input(
+                            "Max clearance rate (imm_max)",
+                            value=float(st.session_state.get("int_innate_max", 1e7)),
+                            format="%.1e",
+                            help=(
+                                "Maximum immune clearance flux (cells/mL/h) at saturating bacterial "
+                                "density: killing = imm_max·B/(imm_kill50+B). Set comparable to the "
+                                "bacterial growth flux (~growth_rate × bacterial load)."
+                            ),
+                        )
+                    with imm_col2:
+                        st.session_state["int_innate_kill50"] = st.number_input(
+                            "Killing half-sat. (imm_kill50)",
+                            value=float(st.session_state.get("int_innate_kill50", 1e5)),
+                            format="%.1e",
+                            help="Bacterial density at half-max immune killing.",
+                        )
 
                 st.session_state["int_imm_kill_rate_D"] = st.number_input(
                     "Kill rate for dormant/hibernating cells (imm_kill_rate_D)",
