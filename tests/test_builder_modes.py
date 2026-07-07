@@ -301,3 +301,40 @@ def test_hill_immune_module_active_at_app_defaults():
              "imm_kill_rate": np.full(1, 1e13), "imm_decay_rate": 5.0}
     assert np.isclose(build(True, **inert)[-1], on, atol=1.0), \
         "hill output must not depend on imm_stim_rate/imm_kill_rate/imm_decay_rate"
+
+
+def test_prerun_carries_dormant_reservoir():
+    """A long stationary-phase prerun must not collapse the treatment population.
+
+    Guards the run_sim_from_gui_params prerun fix: stationary_phase_ic returns the
+    active B *and* the dormant reservoir D (which dominates at stationary phase).
+    Keeping only B (the old behaviour) discards most of the culture, so a longer
+    prerun starts the treatment with fewer and fewer cells until it reads as ~0.
+    Carrying ic.D forward must preserve the full population regardless of prerun
+    length.
+    """
+    from pbisim.builder import ModelBuilder
+    from pbisim.analysis import stationary_phase_ic
+
+    b = ModelBuilder(n_bacteria=1, n_phages=0, n_latent=5, n_depth=3)
+    b = b.with_growth_rates([1.2], bacteria_to_resource_ratio=[1e9])
+    b = b.with_dormancy(dormancy_rate=np.array([0.2]), resuscitation_rate=np.array([0.1]),
+                        dormancy_diffusion_rate=np.array([0.05]))
+    b = b.with_nutrient(track_nutrients=True, monod_constant=0.3)
+    cfg = b.build()
+
+    def treat(t_prerun, keep_dormant):
+        ic = stationary_phase_ic(cfg, t_prerun=t_prerun, B0=np.array([1e7]))
+        kw = {}
+        if keep_dormant and ic.D is not None:
+            kw["initial_D"] = ic.D
+        m = PBIModel(cfg, initial_B=ic.B, initial_P=np.zeros(0),
+                     initial_S=max(float(ic.S), 0.0), **kw)
+        return solve_ode(m, t_end=24.0, dt=0.5, method="BDF",
+                         extinction_threshold=1.0).sum_prefixes("B", "D", "I", "H")
+
+    dropped = treat(48.0, keep_dormant=False)   # old behaviour
+    kept = treat(48.0, keep_dormant=True)        # fixed behaviour
+    assert dropped.max() < 1e7, "dropping ic.D should lose most of the stationary culture"
+    assert kept.max() > 1e8, "carrying ic.D must preserve the stationary population"
+    assert kept.max() > 100 * dropped.max(), "fix must retain orders of magnitude more biomass"

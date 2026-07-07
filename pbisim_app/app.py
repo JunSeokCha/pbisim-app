@@ -1046,11 +1046,22 @@ def run_sim_from_gui_params():
     # ── Pretreatment equilibrate prerun ───────────────────────────────────────
     t_prerun = st.session_state.get("int_t_prerun", 0.0)
     if t_prerun > 0:
-        # run stationary prerun
-        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=initial_B, S0=initial_S)
+        # Equilibrate to stationary phase (no treatment) and carry the FULL final
+        # state into the treatment sim: active B, the dormant reservoir D, nutrient
+        # S, and immune priming Imm. Previously only B and S were kept — discarding
+        # ic.D silently dropped the (usually dominant) dormant population, so longer
+        # preruns lost more of the culture until the residual active cells fell below
+        # the extinction floor and the treatment plotted as a flat 0 CFU curve.
+        # (S0= was also passed here but stationary_phase_ic has no such argument — it
+        # was silently forwarded to the solver and ignored.)
+        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=initial_B)
         initial_B = ic.B
-        initial_S = float(ic.S)
-        
+        initial_S = max(float(ic.S), 0.0)  # prerun can leave S slightly negative (numerical)
+        if ic.D is not None:
+            model_kwargs["initial_D"] = ic.D
+        if ic.Imm is not None:
+            model_kwargs["initial_Imm"] = ic.Imm
+
     model = PBIModel(
         config,
         initial_B=initial_B,
@@ -1327,7 +1338,8 @@ def generate_reproduction_code() -> str:
     if t_prerun > 0:
         code.append(f"# Run stationary phase equilibration prerun for {t_prerun} hours")
         code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun})")
-        code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=float(ic.S){_imm_str}{_ic_D_str})")
+        code.append("# Carry the full stationary state — active B, dormant D, nutrient S, immune Imm")
+        code.append(f"model = PBIModel(cfg, initial_B=ic.B, initial_P=np.array({_ic_P}), initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0))")
     else:
         code.append(f"model = PBIModel(cfg, initial_B={_ic_B_repr}, initial_P=np.array({_ic_P}), initial_S={_ic_S}{_imm_str}{_ic_D_str})")
 
@@ -2291,13 +2303,18 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         val, meta1, nominal_config, initial_B, initial_P, initial_S, model_kwargs
                     )
 
-                    # equilibrate pre-treatment prerun
+                    # equilibrate pre-treatment prerun — carry the full stationary
+                    # state (B, D, S, Imm), not just B/S (see run_sim_from_gui_params).
                     t_prerun = st.session_state.get("int_t_prerun", 0.0)
                     if t_prerun > 0:
-                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, S0=is_k)
+                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
                         ib_k = ic.B
-                        is_k = float(ic.S)
-                        
+                        is_k = max(float(ic.S), 0.0)
+                        if ic.D is not None:
+                            mk_k["initial_D"] = ic.D
+                        if ic.Imm is not None:
+                            mk_k["initial_Imm"] = ic.Imm
+
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                     result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
 
@@ -2408,12 +2425,16 @@ elif st.session_state.current_page == "Parameter Sweeps":
                             val2, meta2, c_k, ib_k, ip_k, is_k, mk_k
                         )
 
-                        # equilibrate
+                        # equilibrate — carry the full stationary state (B, D, S, Imm).
                         t_prerun = st.session_state.get("int_t_prerun", 0.0)
                         if t_prerun > 0:
-                            ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, S0=is_k)
+                            ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
                             ib_k = ic.B
-                            is_k = float(ic.S)
+                            is_k = max(float(ic.S), 0.0)
+                            if ic.D is not None:
+                                mk_k["initial_D"] = ic.D
+                            if ic.Imm is not None:
+                                mk_k["initial_Imm"] = ic.Imm
 
                         model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                         result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)

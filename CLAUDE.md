@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **51 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **52 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -48,10 +48,10 @@ pbisim-app/
 ├── tests/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
-│   ├── test_presets.py      18 tests — preset structure and parameter validity
-│   ├── test_builder_modes.py 17 tests — BRG, StrainSet, cohort, phage-leak + immune guards
-│   ├── test_sweeps.py       9 tests — sweep_helper parameter application
-│   └── test_self_healing.py 6 tests — self-healing loop and history rollback
+│   ├── test_presets.py      12 tests — preset structure and parameter validity
+│   ├── test_builder_modes.py 7 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
+│   ├── test_sweeps.py       4 tests — sweep_helper parameter application
+│   └── test_self_healing.py 2 tests — self-healing loop and history rollback
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -131,16 +131,16 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 51 passed
+# Full suite — expected: 52 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
-python -m pytest tests/test_presets.py -q         # 18 tests
-python -m pytest tests/test_builder_modes.py -q   # 17 tests (BRG, StrainSet, cohort, phage-leak + immune guards)
-python -m pytest tests/test_sweeps.py -q          # 9 tests
-python -m pytest tests/test_self_healing.py -q    # 6 tests
+python -m pytest tests/test_presets.py -q         # 12 tests
+python -m pytest tests/test_builder_modes.py -q   # 7 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
+python -m pytest tests/test_sweeps.py -q          # 4 tests
+python -m pytest tests/test_self_healing.py -q    # 2 tests
 ```
 
 After any pbisim API change, also run:
@@ -293,3 +293,29 @@ amount (small follow-up).
   module-selector help text and hid the inert innate-only fields in hill mode.
 
 **Still open (immune):** none outstanding.
+
+## Done this session (2026-07-07) — stationary-phase pre-run fix
+
+- **Fixed: long pre-run collapsed the treatment to a flat 0 CFU curve.**
+  `run_sim_from_gui_params` (and the 1D/2D sweeps + repro-code) equilibrated with
+  `stationary_phase_ic` but kept only `ic.B` and `ic.S`, **discarding the dormant
+  reservoir `ic.D` and immune priming `ic.Imm`**. At stationary phase most of the
+  culture is dormant, so the longer the pre-run the more cells were silently thrown
+  away — the surviving active `B` shrinks with pre-run length until it drops below the
+  extinction floor and the treatment plots as flat 0 (reproduced: with dormancy, active
+  `ic.B` falls 2.6e8→2.0e5 as t_prerun 12→48 while `ic.D` grows to ~1e9; treatment peak
+  collapses 2.6e8→2.0e5). Fix: carry the full stationary state — `initial_D = ic.D`,
+  `initial_Imm = ic.Imm` — into the treatment `PBIModel`; treatment now starts at the
+  full ~1e9 population for any pre-run length.
+- Also: removed the bogus `S0=` kwarg passed to `stationary_phase_ic` (no such
+  parameter — it was silently forwarded to scipy and ignored with a warning), and
+  clamped the carried nutrient `initial_S = max(ic.S, 0)` (the pre-run can leave S
+  slightly negative numerically). Applied in the main sim, 1D + 2D sweeps, and the
+  auto-generated reproduction code. Regression test
+  `test_prerun_carries_dormant_reservoir`. **52 tests passing.**
+
+**Still open (pre-run):** the clinical-trial `PretreatmentPhase` path has the *same*
+latent drop — `trial_helper.create_model_factory` reads `ic.B/P/S` from the per-patient
+config but takes `initial_D`/`initial_Imm` from the GUI base kwargs, not the
+pretreatment result. Not yet fixed (out of scope for the reported simulator bug); worth
+fixing for trial pretreatment + dormancy/immunity.
