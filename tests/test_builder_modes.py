@@ -136,3 +136,83 @@ def test_clinical_trial_with_pretreatment():
     
     assert res is not None
     assert "Control" in res.arm_names
+
+
+def test_trial_control_arm_has_no_phage():
+    """Regression: the phage inoculum must not leak into non-phage arms.
+
+    Crossover trials share initial conditions across arms and differ only by
+    dose schedule, so seeding the phage via ``initial_P`` would contaminate the
+    Control (and Antibiotic-Only) arms and eradicate the bacteria there, making
+    the control indistinguishable from phage therapy.  The app instead starts
+    every arm at zero free phage and delivers the inoculum as a t=0 bolus only
+    in phage-containing arms.  This test locks in that invariant: Control keeps
+    phage at zero and bacteria grow, while the phage arm eradicates them.
+    """
+    from pbisim.trial.clinical import TreatmentArm
+    from pbisim.trial.population import InitialConditions
+    from pbisim.builder import ModelBuilder
+    from pbisim.pk.dosing import DoseEvent, DoseSchedule
+    from pbisim_app.trial_helper import run_trial_simulation
+
+    builder = ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5, n_depth=1)
+    builder = builder.with_growth_rates([0.6], bacteria_to_resource_ratio=[1e9])
+    builder = builder.with_phage_params(
+        adsorption_rates=np.array([[1e-8]]),
+        adsorption_rates_dormant=np.array([[0.0]]),
+        burst_sizes=np.array([[50.0]]),
+        latent_periods=np.array([[0.5]]),
+        phage_decay_rates=np.array([0.1]),
+    )
+    builder = builder.with_nutrient(track_nutrients=True, monod_constant=0.3)
+    base_cfg = builder.build()
+
+    init_B = np.array([1e7])
+    init_P = np.array([1e6])
+    init_S = 1.0
+
+    # Replicate the fixed app arm-assembly: zero the shared phage baseline and
+    # deliver the inoculum only as a t=0 phage bolus in the phage arm.
+    base_P = np.zeros_like(init_P)
+    phage_inoculum_doses = [
+        DoseEvent(time=0.0, amount=float(init_P[i]), target="phage",
+                  index=i, route="bolus", duration=0.0)
+        for i in range(len(init_P)) if float(init_P[i]) > 0.0
+    ]
+    base_cfg.initial_conditions = InitialConditions(B=init_B, P=base_P, S=init_S)
+
+    arms = [
+        TreatmentArm(name="Control", dose_schedule=DoseSchedule([])),
+        TreatmentArm(name="Phage-Only", dose_schedule=DoseSchedule(phage_inoculum_doses)),
+    ]
+
+    res = run_trial_simulation(
+        base_cfg,
+        [],  # no IIV — deterministic
+        arms,
+        n_patients=3,
+        t_end=48.0,
+        dt=0.5,
+        seed=1,
+        pretreatment_hours=0.0,
+        n_jobs=1,
+        base_initial_B=init_B,
+        base_initial_P=base_P,
+        base_initial_S=init_S,
+    )
+
+    # Control: no phage present at any time, bacteria grow (no eradication).
+    control = res["Control"]
+    for r in control.results:
+        assert r is not None
+        assert np.max(r.sum_prefixes("P")) < 1.0, "phage leaked into the Control arm"
+        total_b = r.sum_prefixes("B", "D", "I", "H")
+        assert total_b[-1] > total_b[0], "Control bacteria should grow untreated"
+
+    # Phage-Only: phage delivered, bacteria eradicated.
+    phage_arm = res["Phage-Only"]
+    for r in phage_arm.results:
+        assert r is not None
+        assert np.max(r.sum_prefixes("P")) > init_P[0], "phage inoculum not delivered"
+        total_b = r.sum_prefixes("B", "D", "I", "H")
+        assert total_b[-1] < 1.0, "phage arm should eradicate bacteria"

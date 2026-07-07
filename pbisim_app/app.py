@@ -1719,45 +1719,68 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 try:
                     # 1. Compile nominal base config
                     base_cfg, init_B, init_P, init_S, model_kwargs = build_nominal_config_from_gui()
-                    
+
+                    # Phage is the *intervention*, not part of the shared baseline.
+                    # Arms in a crossover trial differ only by their dose_schedule
+                    # (initial conditions are shared across all arms), so a phage
+                    # inoculum seeded via `initial_P` would leak into the Control
+                    # and Antibiotic-Only arms and eradicate the bacteria there —
+                    # making the control indistinguishable from phage therapy.
+                    # Instead, start every arm with zero free phage and deliver the
+                    # configured inoculum as a t=0 bolus in the phage-containing
+                    # arms only (numerically identical to seeding initial_P).
+                    init_P = np.asarray(init_P, dtype=float)
+                    base_P = np.zeros_like(init_P)
+                    phage_inoculum_doses = [
+                        DoseEvent(time=0.0, amount=float(init_P[i]), target="phage",
+                                  index=i, route="bolus", duration=0.0)
+                        for i in range(len(init_P)) if float(init_P[i]) > 0.0
+                    ]
+
                     from pbisim.trial.population import InitialConditions
                     base_cfg.initial_conditions = InitialConditions(
                         B=init_B,
-                        P=init_P,
+                        P=base_P,
                         S=init_S,
                         D=model_kwargs.get("initial_D", None),
                         Imm=model_kwargs.get("initial_Imm", None),
                     )
-                    
+
                     # 2. Assemble arms
                     arms = []
                     nominal_doses = st.session_state.get("int_doses", [])
-                    
+                    nominal_phage_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="phage", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "phage"]
+                    nominal_abx_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="antibiotic", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "antibiotic"]
+                    _has_phage = bool(phage_inoculum_doses) or bool(nominal_phage_doses)
+                    _has_abx = bool(nominal_abx_doses)
+
                     if run_control:
                         arms.append(TreatmentArm(name="Control", dose_schedule=DoseSchedule([])))
-                        
-                    if run_phage and any(d["target_type"] == "phage" for d in nominal_doses):
-                        phg_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="phage", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "phage"]
+
+                    if run_phage and _has_phage:
+                        phg_doses = phage_inoculum_doses + nominal_phage_doses
                         arms.append(TreatmentArm(name="Phage-Only", dose_schedule=DoseSchedule(phg_doses)))
-                        
-                    if run_abx and any(d["target_type"] == "antibiotic" for d in nominal_doses):
-                        abx_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="antibiotic", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "antibiotic"]
-                        arms.append(TreatmentArm(name="Antibiotic-Only", dose_schedule=DoseSchedule(abx_doses)))
-                        
+
+                    if run_abx and _has_abx:
+                        arms.append(TreatmentArm(name="Antibiotic-Only", dose_schedule=DoseSchedule(nominal_abx_doses)))
+
                     if run_combo:
-                        combo_doses = []
+                        combo_doses = list(phage_inoculum_doses)
                         for d in nominal_doses:
                             t_name = "phage" if d["target_type"] == "phage" else ("antibiotic" if d["target_type"] == "antibiotic" else "nutrient")
                             combo_doses.append(DoseEvent(time=d["time"], amount=d["amount"], target=t_name, index=d["target_idx"], route=d["route"], duration=d["duration"]))
                         # Warn if Combo is identical to an existing monotherapy arm
-                        _has_phage = any(d["target_type"] == "phage" for d in nominal_doses)
-                        _has_abx = any(d["target_type"] == "antibiotic" for d in nominal_doses)
                         if not (_has_phage and _has_abx):
-                            _overlap = "Phage-Only" if _has_phage else "Antibiotic-Only"
+                            if _has_phage:
+                                _overlap = "Phage-Only"
+                            elif _has_abx:
+                                _overlap = "Antibiotic-Only"
+                            else:
+                                _overlap = "Control"
                             st.warning(
                                 f"Combo arm contains only {_overlap.split('-')[0].lower()} doses — "
                                 f"it will be identical to the {_overlap} arm. "
-                                "Add doses for both phage and antibiotic to create a meaningful combination arm."
+                                "Add both a phage inoculum/dose and an antibiotic dose to create a meaningful combination arm."
                             )
                         arms.append(TreatmentArm(name="Combo", dose_schedule=DoseSchedule(combo_doses)))
                         
@@ -1777,7 +1800,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                             pretreatment_hours=pretreatment_hours,
                             n_jobs=int(trial_n_jobs),
                             base_initial_B=init_B,
-                            base_initial_P=init_P,
+                            base_initial_P=base_P,
                             base_initial_S=init_S,
                             **model_kwargs
                         )

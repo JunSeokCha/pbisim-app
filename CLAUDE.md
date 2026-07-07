@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **48 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **49 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -49,7 +49,7 @@ pbisim-app/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
 │   ├── test_presets.py      18 tests — preset structure and parameter validity
-│   ├── test_builder_modes.py 14 tests — BRG, StrainSet, cohort trial
+│   ├── test_builder_modes.py 15 tests — BRG, StrainSet, cohort trial, phage-leak guard
 │   ├── test_sweeps.py       9 tests — sweep_helper parameter application
 │   └── test_self_healing.py 6 tests — self-healing loop and history rollback
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
@@ -138,7 +138,7 @@ python -m pytest tests/ -q
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
 python -m pytest tests/test_presets.py -q         # 18 tests
-python -m pytest tests/test_builder_modes.py -q   # 14 tests (BRG, StrainSet, cohort)
+python -m pytest tests/test_builder_modes.py -q   # 15 tests (BRG, StrainSet, cohort, phage-leak guard)
 python -m pytest tests/test_sweeps.py -q          # 9 tests
 python -m pytest tests/test_self_healing.py -q    # 6 tests
 ```
@@ -209,3 +209,34 @@ python -m streamlit run pbisim_app/app.py
 - StrainSet repro code: `n_depth` calculation uses `dormancy_depth` key which may
   differ from actual session state key; edge case, not a blocker.
 - Test count: 48.
+
+## Done this session (2026-07-07) — clinical trial phage-leak fix
+
+- **CRITICAL BUG FIXED — Control arm was secretly receiving the phage inoculum**
+  (`app.py`, Clinical Trials & Cohorts page). Root cause: the crossover
+  `ClinicalTrial` shares `initial_conditions` across all arms and differentiates
+  them only by `dose_schedule` (`ClinicalTrial._apply_arm` never touches ICs). The
+  app seeded phage via `initial_P` on the shared `base_cfg.initial_conditions.P`, so
+  **every** arm — Control and Antibiotic-Only included — started with the full phage
+  inoculum (default `1e6`/mL), which eradicated the bacteria in ~6 h. Every arm
+  looked identical and the untreated control "cured" all patients (the strange
+  outputs the user reported).
+  - **Fix:** phage is the intervention, so it is now delivered per-arm. The trial
+    starts every arm at **zero free phage** (`base_P = np.zeros_like(init_P)`) and
+    injects the configured inoculum as a **t=0 phage bolus** only into the Phage-Only
+    and Combo arms (verified numerically identical to seeding `initial_P`). Control
+    and Antibiotic-Only are now genuine no-phage arms.
+  - Arm-existence guards + Combo "identical to monotherapy" warning updated to treat
+    the inoculum as phage presence (`_has_phage = inoculum or nominal phage dose`).
+  - `base_initial_P` passed to `run_trial_simulation` also zeroed (model-factory
+    fallback consistency).
+  - Verified post-fix (30 patients, IIV on growth): Control 0/30 eradicated
+    (bacteria → ~1e9), Antibiotic-Only 1/30 (weak monotx), Phage/Combo 30/30.
+- **Regression test added**: `test_builder_modes.py::test_trial_control_arm_has_no_phage`
+  — asserts Control keeps `P≈0` throughout and bacteria grow, while the phage arm
+  delivers phage and eradicates. **49 tests passing** (was 48).
+
+**Known limitation introduced:** the IIV option "Initial Phage Density" (`ic.P`) now
+acts on a zeroed baseline in trials, so it no longer varies the inoculum — phage comes
+from the dose. If per-patient phage-dose variability is wanted, wire IIV to the dose
+amount (small follow-up).
