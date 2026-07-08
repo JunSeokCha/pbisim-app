@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **53 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **57 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -51,7 +51,8 @@ pbisim-app/
 │   ├── test_presets.py      12 tests — preset structure and parameter validity
 │   ├── test_builder_modes.py 8 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
 │   ├── test_sweeps.py       4 tests — sweep_helper parameter application
-│   └── test_self_healing.py 2 tests — self-healing loop and history rollback
+│   ├── test_self_healing.py 2 tests — self-healing loop and history rollback
+│   └── test_trial_features.py 4 tests — dose regimens, distribution metrics, PK/PD trajectories
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -131,7 +132,7 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 53 passed
+# Full suite — expected: 57 passed
 python -m pytest tests/ -q
 
 # By file:
@@ -141,6 +142,7 @@ python -m pytest tests/test_presets.py -q         # 12 tests
 python -m pytest tests/test_builder_modes.py -q   # 8 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
 python -m pytest tests/test_sweeps.py -q          # 4 tests
 python -m pytest tests/test_self_healing.py -q    # 2 tests
+python -m pytest tests/test_trial_features.py -q  # 4 tests (dose regimens, metrics, PK/PD trajectories)
 ```
 
 After any pbisim API change, also run:
@@ -324,3 +326,43 @@ amount (small follow-up).
   `test_trial_pretreatment_carries_dormant_reservoir`. **53 tests passing.**
 
 **Still open (pre-run):** none outstanding.
+
+## Done this session (2026-07-08) — trial dosing, PK/PD outputs, builder consistency
+
+Six owner-requested feature updates (all UI-verified via streamlit AppTest: every page
++ builder mode renders and a full trial runs with 0 exceptions):
+
+1. **Antibiotic-aware default dose** (Environment & Dosing): dose-amount default is now
+   target-specific — phage 1e8 PFU, antibiotic 10 mg, nutrient 1.0 — via
+   `DOSE_AMOUNT_DEFAULTS`/`DOSE_AMOUNT_LABELS`; target selector moved before the amount
+   (keyed per target). Applies to the single and repeat-regimen forms.
+2. **`attenuation_rate` exposed** (phage config, all 3 builders): engine param
+   "phage penetration decay with dormancy depth" — effective dormant adsorption =
+   `adsorption_dormant × exp(−attenuation × depth)`. Per-phage input on the shared
+   `phages` dict; wired into Direct (`with_phage_params`), BRG (`to_config`, broadcast),
+   StrainSet (`StrainDefinition`), and all repro-code.
+3. **Trial output dropdowns** (item 1c/1d): survival endpoint keeps tte + tt2lr;
+   distribution-metric options are now Maximum Log Reduction, Log Reduction (baseline→last
+   obs), Bacterial AUC, Nadir Count (time_to_clearance removed — it's a survival endpoint).
+   New per-patient metrics `max_log_reduction` / `log_reduction_final` added to
+   `trial_helper.trial_metric_fns()` and passed to `ClinicalTrial(metric_fns=...)`.
+4. **Configurable n_latent + n_depth** (item 4): global **n_latent** control (Solver
+   Settings → Model structure, `int_n_latent`) used by all three builders (replaced the
+   hardcoded 5). **n_depth**: BRG gained a "Dormancy depth layers (Q)" control
+   (`int_brg_n_depth`); StrainSet gained a per-strain "Depth layers (Q)" input (Direct
+   already had one). All wired into build + repro.
+5. **Trial dedicated dose editor + regimen** (item 1a): the Clinical Trials page now has
+   its own "Trial Dosing Regimen" section — per-agent (phage/antibiotic) amount + start
+   time + regimen (single, or repeat qX h × N) via `trial_helper.build_regimen_doses`.
+   Arms (Control/Phage/Antibiotic/Combo) derive from it instead of the simulator's
+   `int_doses`; the old init_P-inoculum injection is gone (the editor's t=0 dose is the
+   inoculum). Base config still starts every arm at zero free phage.
+6. **Trial raw PK/PD trajectories** (item 1b): per-arm median + IQR-band Plotly plots of
+   total bacteria (CFU) and free phage (PFU) via `trial_helper.plot_pkpd_trajectories_plotly`,
+   shown at the top of the trial outputs.
+
+Regression tests in new `tests/test_trial_features.py` (regimen builder, distribution
+metrics, PK/PD trajectory plots). **57 tests passing.**
+
+**Note:** the Clinical Trials page no longer reads the simulator's Environment & Dosing
+`int_doses` — trial doses come solely from the new Trial Dosing editor.

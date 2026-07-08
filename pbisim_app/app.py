@@ -37,6 +37,8 @@ from pbisim_app.trial_helper import (
     run_trial_simulation,
     plot_kaplan_meier_plotly,
     plot_metric_distributions_plotly,
+    plot_pkpd_trajectories_plotly,
+    build_regimen_doses,
 )
 from pbisim_app.sweep_helper import (
     get_sweep_parameters,
@@ -45,6 +47,16 @@ from pbisim_app.sweep_helper import (
     pad_vectors,
 )
 
+
+# ── Dose defaults per target compartment ───────────────────────────────────────
+# 1e8 only makes sense for phage (PFU); antibiotics are dosed in mg and nutrient
+# in resource units, so give each target a plausible default and unit label.
+DOSE_AMOUNT_DEFAULTS = {"phage": 1e8, "antibiotic": 10.0, "nutrient": 1.0}
+DOSE_AMOUNT_LABELS = {
+    "phage": "Amount (PFU)",
+    "antibiotic": "Amount (mg)",
+    "nutrient": "Amount (resource units)",
+}
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -359,6 +371,7 @@ def load_preset_to_state(params: dict):
     st.session_state["int_dt"] = params.get("dt", 0.25)
     st.session_state["int_extinction_threshold"] = params.get("extinction_threshold", 1.0)
     st.session_state["int_extinction_check_interval"] = params.get("extinction_check_interval", 0.0)
+    st.session_state["int_n_latent"] = params.get("n_latent", 5)
     st.session_state["int_solver_method"] = params.get("solver_method", "BDF")
     st.session_state["int_track_nutrients"] = params.get("track_nutrients", True)
     st.session_state["int_initial_S"] = params.get("initial_S", 1.0)
@@ -530,7 +543,8 @@ def build_nominal_config_from_gui():
     
     n_bacteria = len(strains)
     n_phages = len(phages)
-    
+    n_latent = int(st.session_state.get("int_n_latent", 5))  # latency compartments (all builders)
+
     # ── Resolve solver settings ───────────────────────────────────────────────
     track_nutrients = st.session_state.get("int_track_nutrients", True)
     superinfection = st.session_state.get("int_superinfection", False)
@@ -573,7 +587,7 @@ def build_nominal_config_from_gui():
     # ── BUILDER MODE: Direct (ModelBuilder) ───────────────────────────────────
     if builder_mode == "Direct (ModelBuilder)":
         max_depth = max([s.get("dormancy_depth", 1) for s in strains] if strains else [1])
-        builder = ModelBuilder(n_bacteria=n_bacteria, n_phages=n_phages, n_latent=5, n_depth=max_depth)
+        builder = ModelBuilder(n_bacteria=n_bacteria, n_phages=n_phages, n_latent=n_latent, n_depth=max_depth)
         
         # Growth rates
         growth_rates = [s["growth_rate"] for s in strains]
@@ -646,7 +660,13 @@ def build_nominal_config_from_gui():
                 
             # Phage decay nonlinear Km
             phage_decay_Km = np.array([p.get("phage_decay_Km", 0.0) if p.get("phage_decay_Km", 0.0) > 0 else np.inf for p in phages])
-            
+
+            # Dormant-adsorption attenuation with dormancy depth (per phage, broadcast
+            # across strains): effective dormant rate = adsorption_dormant * exp(-att * depth).
+            attenuation_rate = np.tile(
+                np.array([p.get("attenuation_rate", 0.0) for p in phages]), (n_bacteria, 1)
+            )
+
             builder = builder.with_phage_params(
                 adsorption_rates=np.array(adsorption_rates),
                 adsorption_rates_dormant=np.array(adsorption_rates_dormant),
@@ -655,6 +675,7 @@ def build_nominal_config_from_gui():
                 phage_decay_rates=np.array(decay_rates),
                 allow_superinfection=superinfection,
                 phage_decay_Km=phage_decay_Km,
+                attenuation_rate=attenuation_rate,
             )
             
             # Pseudolysogeny
@@ -816,9 +837,9 @@ def build_nominal_config_from_gui():
             antibiotics=abx_strains if abx_strains else None
         )
         
-        # Build config
-        max_depth = 3 if dormancy_enabled else 1
-        
+        # Build config — dormancy depth compartments (configurable; 1 when dormancy off)
+        max_depth = int(st.session_state.get("int_brg_n_depth", 3)) if dormancy_enabled else 1
+
         # Resolve Phage PK config
         phage_pk_config = None
         has_phage_pk = any(p["pk_mode"] != "None" for p in phages)
@@ -867,8 +888,14 @@ def build_nominal_config_from_gui():
             if kill_rate_D > 0:
                 extra_kwargs["imm_kill_rate_D"] = np.array([kill_rate_D] * brg.n_strains)
 
+        # Per-phage dormant-adsorption attenuation (broadcast across genotypes).
+        if phages:
+            extra_kwargs["attenuation_rate"] = np.array(
+                [p.get("attenuation_rate", 0.0) for p in phages]
+            )
+
         config = brg.to_config(
-            n_latent=5,
+            n_latent=n_latent,
             n_depth=max_depth,
             phage_pk_config=phage_pk_config,
             **extra_kwargs
@@ -954,7 +981,7 @@ def build_nominal_config_from_gui():
                     dormancy_diffusion_rate=s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0,
                     imm_stim_rate=st.session_state.get("int_imm_stim_rate", 0.1) if st.session_state.get("int_immunity_enabled", False) else 0.0,
                     imm_kill_rate=st.session_state.get("int_innate_kill_rate", 1e7) if st.session_state.get("int_immunity_enabled", False) else 0.0,
-                    attenuation_rate=np.zeros(n_phages),
+                    attenuation_rate=np.array([p.get("attenuation_rate", 0.0) for p in phages]),
                     death_rate_B=s.get("death_rate_B", None) if s.get("death_rate_B", 0.0) > 0 else None,
                     death_rate_D=s.get("death_rate_D", None) if s.get("death_rate_D", 0.0) > 0 else None,
                     hibernation_rate=np.array(hibernations) if any(h > 0 for h in hibernations) else None,
@@ -1014,7 +1041,7 @@ def build_nominal_config_from_gui():
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
 
         config = ss.to_config(
-            n_latent=5,
+            n_latent=n_latent,
             n_depth=max_depth,
             phage_decay_rates=decay_rates,
             imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.1),
@@ -1088,7 +1115,8 @@ def generate_reproduction_code() -> str:
     phages = st.session_state.get("int_phages", [])
     antibiotics = st.session_state.get("int_antibiotics", [])
     doses = st.session_state.get("int_doses", [])
-    
+    _n_latent = int(st.session_state.get("int_n_latent", 5))
+
     code = []
     code.append("# ── pbisim Auto-Generated Reproduction Script ──")
     code.append("import numpy as np")
@@ -1101,7 +1129,7 @@ def generate_reproduction_code() -> str:
         code.append("")
         code.append("# 1. Build Model Configuration")
         max_depth = max([s.get("dormancy_depth", 1) for s in strains] if strains else [1])
-        code.append(f"builder = ModelBuilder(n_bacteria={len(strains)}, n_phages={len(phages)}, n_latent=5, n_depth={max_depth})")
+        code.append(f"builder = ModelBuilder(n_bacteria={len(strains)}, n_phages={len(phages)}, n_latent={_n_latent}, n_depth={max_depth})")
         
         # growth
         rates = [s["growth_rate"] for s in strains]
@@ -1139,6 +1167,8 @@ def generate_reproduction_code() -> str:
             code.append(f"    burst_sizes=np.array({_burst_2d}),")
             code.append(f"    latent_periods=np.array({_latent_2d}),")
             code.append(f"    phage_decay_rates=np.array({[p['phage_decay_rates'] for p in phages]}),")
+            _atten_2d = [[p.get('attenuation_rate', 0.0) for p in phages]] * len(strains)
+            code.append(f"    attenuation_rate=np.array({_atten_2d}),")
             code.append(f"    allow_superinfection={st.session_state.get('int_superinfection', False)}")
             code.append(f")")
             
@@ -1203,7 +1233,7 @@ def generate_reproduction_code() -> str:
         code.append("]")
         code.append("")
         code.append("brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=antibiotics or None)")
-        _brg_n_depth = 3 if st.session_state.get("int_brg_dormancy_enabled", False) else 1
+        _brg_n_depth = int(st.session_state.get("int_brg_n_depth", 3)) if st.session_state.get("int_brg_dormancy_enabled", False) else 1
         if st.session_state.get("int_brg_use_eq_ic", False):
             _eq_total = st.session_state.get("int_brg_eq_total_B", 1e7)
             code.append(f"initial_B = brg.equilibrium_initial_condition(total_bacteria={_eq_total})")
@@ -1240,7 +1270,9 @@ def generate_reproduction_code() -> str:
                 f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
                 f"{_kD_arg}"
             )
-        code.append(f"cfg = brg.to_config(n_latent=5, n_depth={_brg_n_depth}{_brg_imm_args})")
+        _brg_atten = [p.get('attenuation_rate', 0.0) for p in phages]
+        _brg_atten_arg = f", attenuation_rate=np.array({_brg_atten})" if phages else ""
+        code.append(f"cfg = brg.to_config(n_latent={_n_latent}, n_depth={_brg_n_depth}{_brg_atten_arg}{_brg_imm_args})")
 
     # ──── STRAINSET ────
     else:
@@ -1274,7 +1306,7 @@ def generate_reproduction_code() -> str:
             _imm_on = st.session_state.get("int_immunity_enabled", False)
             _stim_r = st.session_state.get("int_imm_stim_rate", 0.1) if _imm_on else 0.0
             _kill_r = st.session_state.get("int_innate_kill_rate", 1e7) if _imm_on else 0.0
-            code.append(f"            imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.zeros({len(phages)}),")
+            code.append(f"            imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.array({[p.get('attenuation_rate', 0.0) for p in phages]}),")
             if antibiotics:
                 code.append(f"            antibiotic_sensitivity={{")
                 for abx in antibiotics:
@@ -1299,7 +1331,7 @@ def generate_reproduction_code() -> str:
                 f", immune_module='{st.session_state.get('int_immune_module', 'innate')}'"
                 f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
             )
-        code.append(f"cfg = ss.to_config(n_latent=5, n_depth={_ss_max_depth}, phage_decay_rates=np.array({_ss_decay}){_ss_imm_args})")
+        code.append(f"cfg = ss.to_config(n_latent={_n_latent}, n_depth={_ss_max_depth}, phage_decay_rates=np.array({_ss_decay}){_ss_imm_args})")
 
     # ──── Dosing Schedule ────
     if doses:
@@ -1728,7 +1760,58 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 st.session_state.trial_iiv_inputs = trial_iivs
                 st.success(f"Added variability to {param_display}!")
                 st.rerun()
-                
+
+        # ── Trial Dosing (per-agent, single or repeat regimen) ────────────────
+        st.markdown("### 💉 Trial Dosing Regimen")
+        st.caption("Doses delivered in the phage / antibiotic / combo arms. The Control arm never receives doses.")
+        _trial_phages = st.session_state.get("int_phages", [])
+        _trial_abx = st.session_state.get("int_antibiotics", [])
+        trial_phage_doses = []
+        trial_abx_doses = []
+
+        def _regimen_widgets(prefix, target, unit_default, unit_label):
+            """Render amount/start/regimen widgets and return the dose list."""
+            if target == "phage":
+                items = _trial_phages
+            else:
+                items = _trial_abx
+            idx = 0
+            if len(items) > 1:
+                idx = st.selectbox(
+                    f"{target.title()} target", range(len(items)),
+                    format_func=lambda i: items[i].get("name", f"{target} {i}"),
+                    key=f"{prefix}_idx",
+                )
+            ca, cb = st.columns(2)
+            with ca:
+                amount = st.number_input(unit_label, min_value=0.0, value=unit_default,
+                                         format="%.1e", key=f"{prefix}_amt")
+            with cb:
+                start = st.number_input("Start time (h)", min_value=0.0, value=0.0,
+                                        step=1.0, key=f"{prefix}_start")
+            mode = st.radio("Regimen", ["Single dose", "Repeat (qX h × N)"],
+                            horizontal=True, key=f"{prefix}_mode")
+            is_repeat = mode.startswith("Repeat")
+            interval, n_doses = 8.0, 1
+            if is_repeat:
+                ci, cn = st.columns(2)
+                with ci:
+                    interval = st.number_input("Interval (h)", min_value=0.5, value=8.0,
+                                               step=1.0, key=f"{prefix}_int")
+                with cn:
+                    n_doses = st.number_input("Number of doses", min_value=1, value=4,
+                                              step=1, key=f"{prefix}_n")
+            return build_regimen_doses(target, idx, amount, start, is_repeat, interval, n_doses)
+
+        if _trial_phages:
+            with st.expander("🦠 Phage dosing", expanded=True):
+                trial_phage_doses = _regimen_widgets("trial_phg", "phage", 1e9, "Dose amount (PFU)")
+        if _trial_abx:
+            with st.expander("💊 Antibiotic dosing", expanded=bool(_trial_abx)):
+                trial_abx_doses = _regimen_widgets("trial_abx", "antibiotic", 10.0, "Dose amount (mg)")
+        if not _trial_phages and not _trial_abx:
+            st.info("Configure at least one phage or antibiotic in the Interactive Simulator to enable trial dosing.")
+
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 Run Parallel Clinical Trial", use_container_width=True):
@@ -1737,22 +1820,14 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     # 1. Compile nominal base config
                     base_cfg, init_B, init_P, init_S, model_kwargs = build_nominal_config_from_gui()
 
-                    # Phage is the *intervention*, not part of the shared baseline.
-                    # Arms in a crossover trial differ only by their dose_schedule
-                    # (initial conditions are shared across all arms), so a phage
-                    # inoculum seeded via `initial_P` would leak into the Control
-                    # and Antibiotic-Only arms and eradicate the bacteria there —
-                    # making the control indistinguishable from phage therapy.
-                    # Instead, start every arm with zero free phage and deliver the
-                    # configured inoculum as a t=0 bolus in the phage-containing
-                    # arms only (numerically identical to seeding initial_P).
+                    # Phage is the *intervention*, delivered per-arm via the Trial
+                    # Dosing editor above (single/repeat regimen). In this crossover
+                    # design all arms share initial_conditions and differ only by
+                    # dose_schedule, so every arm starts with zero free phage and the
+                    # phage/combo arms receive the configured phage doses — keeping the
+                    # Control and Antibiotic arms true no-phage controls.
                     init_P = np.asarray(init_P, dtype=float)
                     base_P = np.zeros_like(init_P)
-                    phage_inoculum_doses = [
-                        DoseEvent(time=0.0, amount=float(init_P[i]), target="phage",
-                                  index=i, route="bolus", duration=0.0)
-                        for i in range(len(init_P)) if float(init_P[i]) > 0.0
-                    ]
 
                     from pbisim.trial.population import InitialConditions
                     base_cfg.initial_conditions = InitialConditions(
@@ -1763,29 +1838,22 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                         Imm=model_kwargs.get("initial_Imm", None),
                     )
 
-                    # 2. Assemble arms
+                    # 2. Assemble arms from the Trial Dosing editor
                     arms = []
-                    nominal_doses = st.session_state.get("int_doses", [])
-                    nominal_phage_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="phage", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "phage"]
-                    nominal_abx_doses = [DoseEvent(time=d["time"], amount=d["amount"], target="antibiotic", index=d["target_idx"], route=d["route"], duration=d["duration"]) for d in nominal_doses if d["target_type"] == "antibiotic"]
-                    _has_phage = bool(phage_inoculum_doses) or bool(nominal_phage_doses)
-                    _has_abx = bool(nominal_abx_doses)
+                    _has_phage = bool(trial_phage_doses)
+                    _has_abx = bool(trial_abx_doses)
 
                     if run_control:
                         arms.append(TreatmentArm(name="Control", dose_schedule=DoseSchedule([])))
 
                     if run_phage and _has_phage:
-                        phg_doses = phage_inoculum_doses + nominal_phage_doses
-                        arms.append(TreatmentArm(name="Phage-Only", dose_schedule=DoseSchedule(phg_doses)))
+                        arms.append(TreatmentArm(name="Phage-Only", dose_schedule=DoseSchedule(list(trial_phage_doses))))
 
                     if run_abx and _has_abx:
-                        arms.append(TreatmentArm(name="Antibiotic-Only", dose_schedule=DoseSchedule(nominal_abx_doses)))
+                        arms.append(TreatmentArm(name="Antibiotic-Only", dose_schedule=DoseSchedule(list(trial_abx_doses))))
 
                     if run_combo:
-                        combo_doses = list(phage_inoculum_doses)
-                        for d in nominal_doses:
-                            t_name = "phage" if d["target_type"] == "phage" else ("antibiotic" if d["target_type"] == "antibiotic" else "nutrient")
-                            combo_doses.append(DoseEvent(time=d["time"], amount=d["amount"], target=t_name, index=d["target_idx"], route=d["route"], duration=d["duration"]))
+                        combo_doses = list(trial_phage_doses) + list(trial_abx_doses)
                         # Warn if Combo is identical to an existing monotherapy arm
                         if not (_has_phage and _has_abx):
                             if _has_phage:
@@ -1797,7 +1865,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                             st.warning(
                                 f"Combo arm contains only {_overlap.split('-')[0].lower()} doses — "
                                 f"it will be identical to the {_overlap} arm. "
-                                "Add both a phage inoculum/dose and an antibiotic dose to create a meaningful combination arm."
+                                "Configure both a phage dose and an antibiotic dose above to create a meaningful combination arm."
                             )
                         arms.append(TreatmentArm(name="Combo", dose_schedule=DoseSchedule(combo_doses)))
                         
@@ -1837,19 +1905,48 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             result = st.session_state.trial_result
             
             # Outcome selection
+            _endpoint_labels = {
+                "tte": "Time-to-Eradication (TTE)",
+                "tt2lr": "Time-to-2-Log-Reduction (TT2LR)",
+            }
+            _metric_labels = {
+                "max_log_reduction": "Maximum Log Reduction",
+                "log_reduction_final": "Log Reduction (baseline → last obs)",
+                "bacterial_auc": "Bacterial AUC",
+                "nadir_count": "Nadir Count",
+            }
             c_v1, c_v2 = st.columns(2)
             with c_v1:
-                endpoint_choice = st.selectbox("Survival Endpoint", ["tte", "tt2lr"], index=0, format_func=lambda x: "Time-to-Eradication (TTE)" if x == "tte" else "Time-to-2-Log-Reduction (TT2LR)")
+                endpoint_choice = st.selectbox(
+                    "Survival Endpoint (time-to-event)", ["tte", "tt2lr"], index=0,
+                    format_func=lambda x: _endpoint_labels[x],
+                )
             with c_v2:
-                metric_choice = st.selectbox("Distribution Metric", ["bacterial_auc", "nadir_count", "time_to_clearance"], index=0, format_func=lambda x: x.replace('_', ' ').title())
+                metric_choice = st.selectbox(
+                    "Distribution Metric", list(_metric_labels), index=0,
+                    format_func=lambda x: _metric_labels[x],
+                )
                 
             clearance_threshold = st.session_state.get("int_extinction_threshold", 100.0)
             
+            # Raw PKPD time trajectories (CFU + PFU) per arm
+            st.markdown("#### 🧫 PK/PD trajectories (median & IQR per arm)")
+            fig_cfu = plot_pkpd_trajectories_plotly(
+                result, prefixes=("B", "D", "I", "H"),
+                title="Total Bacteria (CFU/mL)", y_label="log₁₀ CFU/mL",
+            )
+            st.plotly_chart(fig_cfu, use_container_width=True)
+            fig_pfu = plot_pkpd_trajectories_plotly(
+                result, prefixes=("P",),
+                title="Free Phage (PFU/mL)", y_label="log₁₀ PFU/mL",
+            )
+            st.plotly_chart(fig_pfu, use_container_width=True)
+
             # Step survival plot
             st.markdown("#### ⏳ Step-Survival (Kaplan-Meier)")
             fig_km = plot_kaplan_meier_plotly(result, endpoint=endpoint_choice, t_end=trial_t_end, threshold=clearance_threshold, n_logs=2.0)
             st.plotly_chart(fig_km, use_container_width=True)
-            
+
             # Metric distributions
             st.markdown("#### 📦 Distribution of outcomes")
             fig_dist = plot_metric_distributions_plotly(result, metric=metric_choice)
@@ -2773,7 +2870,19 @@ elif st.session_state.current_page == "Interactive Simulator":
                             key=f"phg_decay_km_{i}",
                             help="Phage decay saturation. Set to 0 to disable."
                         )
-                        
+                        phages[i]["attenuation_rate"] = st.number_input(
+                            "Dormant adsorption attenuation (per depth layer)",
+                            value=float(phages[i].get("attenuation_rate", 0.0)),
+                            min_value=0.0,
+                            step=0.1,
+                            key=f"phg_atten_{i}",
+                            help=(
+                                "Exponential decay of adsorption to dormant cells with dormancy "
+                                "depth: effective rate = adsorption_dormant × exp(−attenuation × "
+                                "depth layer). 0 = phage penetrates all dormant layers equally."
+                            ),
+                        )
+
                         st.markdown("**Pseudolysogeny & Hibernation**")
                         phages[i]["hibernation_rate_s"] = st.number_input("Susceptible I->H rate", value=float(phages[i].get("hibernation_rate_s", 0.0)), step=0.05, key=f"phg_hib_s_{i}")
                         phages[i]["hibernation_rate_r"] = st.number_input("Resistant I->H rate", value=float(phages[i].get("hibernation_rate_r", 0.0)), step=0.05, key=f"phg_hib_r_{i}")
@@ -2850,6 +2959,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                     st.session_state["int_brg_diff_rate"] = st.number_input(
                         "Depth diffusion rate", value=float(st.session_state.get("int_brg_diff_rate", 0.05)), step=0.01
                     )
+                    st.session_state["int_brg_n_depth"] = st.number_input(
+                        "Dormancy depth layers (Q)",
+                        min_value=1, max_value=10,
+                        value=int(st.session_state.get("int_brg_n_depth", 3)),
+                        help="Number of dormancy-depth compartments for all genotypes.",
+                    )
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
                         "Dormant death rate (dD)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                     )
@@ -2887,6 +3002,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                         phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
                         phages[idx]["fitness_cost"] = st.number_input("Resistance fitness cost", value=float(phages[idx].get("fitness_cost", 0.05)), step=0.01, key=f"brg_phg_fit_{idx}")
                         phages[idx]["mu"] = st.number_input("Mutation rate (mu)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
+                        phages[idx]["attenuation_rate"] = st.number_input(
+                            "Dormant adsorption attenuation (per depth layer)",
+                            value=float(phages[idx].get("attenuation_rate", 0.0)),
+                            min_value=0.0, step=0.1, key=f"brg_phg_atten_{idx}",
+                            help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
+                        )
 
             with col2:
                 st.markdown("### 🧮 Auto-generated Genotypes")
@@ -2960,6 +3081,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
                         if strains[i]["dormancy_enabled"]:
+                            strains[i]["dormancy_depth"] = st.number_input("Depth layers (Q)", min_value=1, max_value=10, value=int(strains[i].get("dormancy_depth", 3)), key=f"ss_str_depth_{i}", help="Number of dormancy-depth compartments (max across strains sets the model n_depth).")
                             strains[i]["dormancy_rate"] = st.number_input("Dormancy rate", value=float(strains[i].get("dormancy_rate", 0.2)), key=f"ss_str_sleep_{i}")
                             strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
                             strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
@@ -3033,6 +3155,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                         phages[idx]["burst_sizes"] = st.number_input("Burst size (Y)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx].get("latent_periods", 0.5)), step=0.1, key=f"ss_phg_latent_{idx}")
                         phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
+                        phages[idx]["attenuation_rate"] = st.number_input(
+                            "Dormant adsorption attenuation (per depth layer)",
+                            value=float(phages[idx].get("attenuation_rate", 0.0)),
+                            min_value=0.0, step=0.1, key=f"ss_phg_atten_{idx}",
+                            help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
+                        )
 
     # ──── Tab 2: Antibiotics & Immunity ───────────────────────────────────────
     with config_tabs[1]:
@@ -3397,9 +3525,6 @@ elif st.session_state.current_page == "Interactive Simulator":
 
                 st.markdown("#### Add Single Dose Event")
                 with st.expander("➕ Define Single Dosing Event"):
-                    d_time = st.number_input("Time (hours)", min_value=0.0, value=0.0, step=1.0)
-                    d_amount = st.number_input("Amount", min_value=0.0, value=1e8, format="%.1e")
-
                     # Build target options
                     target_ops = ["phage"]
                     if len(antibiotics) > 0:
@@ -3407,6 +3532,18 @@ elif st.session_state.current_page == "Interactive Simulator":
                     target_ops.append("nutrient")
 
                     d_type = st.selectbox("Target Compartment", target_ops)
+
+                    d_time = st.number_input("Time (hours)", min_value=0.0, value=0.0, step=1.0)
+                    # Target-appropriate default amount (1e8 makes sense only for phage).
+                    # Keyed by target so switching target suggests a sensible default.
+                    d_amount = st.number_input(
+                        DOSE_AMOUNT_LABELS[d_type],
+                        min_value=0.0,
+                        value=DOSE_AMOUNT_DEFAULTS[d_type],
+                        format="%.1e",
+                        key=f"single_dose_amount_{d_type}",
+                        help="Phage in PFU (e.g. 1e8); antibiotic in mg (e.g. 10); nutrient in resource units.",
+                    )
 
                     d_idx = 0
                     if d_type == "phage" and len(phages) > 1:
@@ -3437,17 +3574,24 @@ elif st.session_state.current_page == "Interactive Simulator":
             with sub_col2:
                 st.markdown("#### Add Repeat Dosing Regimen")
                 with st.expander("➕ Define Repeat Dosing Regimen"):
-                    r_amount = st.number_input("Dose Amount", min_value=0.0, value=1e8, format="%.1e", key="rep_dose_amount")
-                    r_interval = st.number_input("Interdose Interval (hours)", min_value=1.0, value=12.0, step=1.0, key="rep_dose_interval")
-                    r_count = st.number_input("Number of Repeats", min_value=1, value=4, step=1, key="rep_dose_count")
-                    r_start = st.number_input("Start Time (hours)", min_value=0.0, value=0.0, step=1.0, key="rep_dose_start")
-
                     # Target options
                     target_ops_rep = ["phage"]
                     if len(antibiotics) > 0:
                         target_ops_rep.append("antibiotic")
                     target_ops_rep.append("nutrient")
                     r_type = st.selectbox("Target Compartment", target_ops_rep, key="rep_dose_type")
+
+                    r_amount = st.number_input(
+                        DOSE_AMOUNT_LABELS[r_type],
+                        min_value=0.0,
+                        value=DOSE_AMOUNT_DEFAULTS[r_type],
+                        format="%.1e",
+                        key=f"rep_dose_amount_{r_type}",
+                        help="Phage in PFU (e.g. 1e8); antibiotic in mg (e.g. 10); nutrient in resource units.",
+                    )
+                    r_interval = st.number_input("Interdose Interval (hours)", min_value=1.0, value=12.0, step=1.0, key="rep_dose_interval")
+                    r_count = st.number_input("Number of Repeats", min_value=1, value=4, step=1, key="rep_dose_count")
+                    r_start = st.number_input("Start Time (hours)", min_value=0.0, value=0.0, step=1.0, key="rep_dose_start")
 
                     r_idx = 0
                     if r_type == "phage" and len(phages) > 1:
@@ -3490,6 +3634,15 @@ elif st.session_state.current_page == "Interactive Simulator":
                 "ODE output interval (dt)",
                 value=float(st.session_state.get("int_dt", 0.25)),
                 step=0.05,
+            )
+
+            st.markdown("### 🧬 Model structure")
+            st.session_state["int_n_latent"] = st.number_input(
+                "Latency compartments (n_latent)",
+                min_value=1, max_value=20,
+                value=int(st.session_state.get("int_n_latent", 5)),
+                help="Number of latent-infection stages (Erlang-distributed latent period). "
+                     "Applies to all builder modes (Direct / BRG / Custom Strains).",
             )
 
             st.markdown("### 🧩 Advanced solver options")
