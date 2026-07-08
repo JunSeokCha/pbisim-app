@@ -14,9 +14,9 @@ services:
   - type: web
     name: pbisim-app
     runtime: docker
-    plan: starter            # free tier sleeps; starter stays warm
+    plan: free               # free sleeps after ~15 min idle; upgrade to starter ($7/mo) to stay warm
     dockerfilePath: ./Dockerfile
-    autoDeploy: false
+    autoDeploy: true         # redeploy on every push to main (no CI/deploy-hook needed)
     healthCheckPath: /_stcore/health
     envVars:
       # git ref of the private engine to build against (non-secret)
