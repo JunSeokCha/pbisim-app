@@ -1,0 +1,53 @@
+name: test-and-deploy
+
+# Runs the test suite against the current pbisim-app + the private pbisim engine,
+# and triggers a Render deploy ONLY when tests pass. Fires on:
+#   - push to main (app changes)
+#   - repository_dispatch "pbisim-updated" (engine changes — see the companion
+#     workflow installed in the pbisim repo)
+#   - manual dispatch
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   PBISIM_TOKEN            read-only fine-grained PAT for the pbisim repo
+#   RENDER_DEPLOY_HOOK_URL  Render service "Deploy Hook" URL
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  repository_dispatch:
+    types: [pbisim-updated]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve pbisim ref
+        id: ref
+        run: echo "ref=${{ github.event.client_payload.ref || 'main' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install pbisim (private) + app + pytest
+        env:
+          PBISIM_TOKEN: ${{ secrets.PBISIM_TOKEN }}
+          PBISIM_REF: ${{ steps.ref.outputs.ref }}
+        run: |
+          pip install "git+https://${PBISIM_TOKEN}@github.com/phage-therapy-sim/pbisim.git@${PBISIM_REF}"
+          pip install -e .
+          pip install pytest
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
+
+      - name: Trigger Render deploy
+        if: success()
+        run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"

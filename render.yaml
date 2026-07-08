@@ -1,0 +1,31 @@
+# Render Blueprint for pbisim-app.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Secrets are NOT stored here. `sync: false` means "I will set this value in the
+# Render dashboard" — Render keeps it out of the repo. Render exposes service
+# environment variables to the Docker build as build ARGs, so PBISIM_TOKEN /
+# PBISIM_REF reach the Dockerfile's `ARG` lines.
+#
+# autoDeploy is off: we let CI run the test suite first and trigger the deploy
+# hook only when tests pass (see .github/workflows/deploy.yml). Flip to true if
+# you prefer deploy-on-every-push without the test gate.
+
+services:
+  - type: web
+    name: pbisim-app
+    runtime: docker
+    plan: starter            # free tier sleeps; starter stays warm
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false
+    healthCheckPath: /_stcore/health
+    envVars:
+      # git ref of the private engine to build against (non-secret)
+      - key: PBISIM_REF
+        value: main
+      # fine-grained READ-ONLY GitHub PAT scoped to the pbisim repo — set in dashboard
+      - key: PBISIM_TOKEN
+        sync: false
+      # Optional. If set, ALL visitors use this key (cost/abuse risk — see DEPLOY.md).
+      # Omit it to force each user to enter their own key in the sidebar.
+      - key: ANTHROPIC_API_KEY
+        sync: false
