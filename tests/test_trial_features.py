@@ -86,3 +86,45 @@ def test_metric_functions_directly():
     assert r is not None
     assert max_log_reduction(r) > 5.0
     assert np.isfinite(log_reduction_final(r))
+
+
+def test_multiple_dose_arms_produce_distinct_outcomes():
+    """Low-dose vs high-dose phage arms must give measurably different exposure/kill.
+
+    This is the multi-arm trial feature: arbitrary named arms, each with its own dose
+    schedule, run over the same cohort and compared.
+    """
+    b = ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5, n_depth=1).with_growth_rates([1.2])
+    b = b.with_phage_params(
+        adsorption_rates=np.array([[3e-9]]), adsorption_rates_dormant=np.array([[0.0]]),
+        burst_sizes=np.array([[30.0]]), latent_periods=np.array([[0.6]]),
+        phage_decay_rates=np.array([0.3]),
+    )
+    b = b.with_nutrient(track_nutrients=True, monod_constant=0.3)
+    cfg = b.build()
+    cfg.initial_conditions = InitialConditions(B=np.array([1e7]), P=np.zeros(1), S=1.0)
+
+    low = build_regimen_doses("phage", 0, 1e6, 0.0, False, 8.0, 1)
+    high = build_regimen_doses("phage", 0, 1e10, 0.0, False, 8.0, 1)
+    arms = [
+        TreatmentArm("Control", dose_schedule=DoseSchedule([])),
+        TreatmentArm("Low dose", dose_schedule=DoseSchedule(low)),
+        TreatmentArm("High dose", dose_schedule=DoseSchedule(high)),
+    ]
+    res = run_trial_simulation(
+        cfg, [], arms, n_patients=3, t_end=48.0, dt=0.5, seed=1, pretreatment_hours=0.0,
+        n_jobs=1, base_initial_B=np.zeros(1), base_initial_P=np.zeros(1), base_initial_S=1.0,
+    )
+    assert res.arm_names == ["Control", "Low dose", "High dose"]
+
+    def auc(name):
+        return float(res[name].metrics["bacterial_auc"].median())
+
+    # Control (no phage) grows unchecked -> far larger bacterial burden than either dose
+    assert auc("Control") > auc("High dose") * 10
+    # Higher dose clears faster -> lower bacterial AUC than the low dose
+    assert auc("High dose") < auc("Low dose")
+    # Peak phage exposure scales with dose
+    hi_p = res["High dose"].get_trajectories("P")[1].max()
+    lo_p = res["Low dose"].get_trajectories("P")[1].max()
+    assert hi_p > lo_p

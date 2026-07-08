@@ -59,6 +59,69 @@ DOSE_AMOUNT_LABELS = {
 }
 
 
+def render_regimen_config(prefix, items, target, default_amount, unit_label,
+                          default_on=True):
+    """Render dose-regimen widgets for one agent and return a config dict.
+
+    Returns ``{"on": False}`` when the agent is not included in this arm, else
+    ``{"on": True, "index", "amount", "start", "repeat", "interval", "n"}``.
+    """
+    on = st.checkbox(f"Include {target}", value=default_on, key=f"{prefix}_on")
+    if not on:
+        return {"on": False}
+    idx = 0
+    if len(items) > 1:
+        idx = st.selectbox(
+            f"{target.title()} target", range(len(items)),
+            format_func=lambda i: items[i].get("name", f"{target} {i}"),
+            key=f"{prefix}_idx",
+        )
+    c1, c2 = st.columns(2)
+    with c1:
+        amount = st.number_input(unit_label, min_value=0.0, value=default_amount,
+                                 format="%.1e", key=f"{prefix}_amt")
+    with c2:
+        start = st.number_input("Start (h)", min_value=0.0, value=0.0, step=1.0,
+                                key=f"{prefix}_start")
+    repeat = st.checkbox("Repeat regimen (qX h × N)", value=False, key=f"{prefix}_rep")
+    interval, n_doses = 8.0, 1
+    if repeat:
+        c3, c4 = st.columns(2)
+        with c3:
+            interval = st.number_input("Interval (h)", min_value=0.5, value=8.0,
+                                       step=1.0, key=f"{prefix}_int")
+        with c4:
+            n_doses = st.number_input("Doses", min_value=1, value=4, step=1,
+                                      key=f"{prefix}_n")
+    return {"on": True, "index": int(idx), "amount": float(amount),
+            "start": float(start), "repeat": bool(repeat),
+            "interval": float(interval), "n": int(n_doses)}
+
+
+def arm_dose_events(arm):
+    """Build the DoseEvent list for a treatment-arm config from its regimens."""
+    doses = []
+    for key, target in (("phage", "phage"), ("abx", "antibiotic")):
+        c = arm.get(key)
+        if c and c.get("on"):
+            doses += build_regimen_doses(
+                target, c["index"], c["amount"], c["start"],
+                c["repeat"], c["interval"], c["n"],
+            )
+    return doses
+
+
+def arm_regimen_summary(arm):
+    """One-line human summary of an arm's dosing."""
+    parts = []
+    for key, label in (("phage", "P"), ("abx", "A")):
+        c = arm.get(key)
+        if c and c.get("on"):
+            reg = f"q{c['interval']:g}h×{c['n']}" if c.get("repeat") else "single"
+            parts.append(f"{label} {c['amount']:.1e} @ {c['start']:g}h ({reg})")
+    return ", ".join(parts) if parts else "no doses (control-like)"
+
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="pbisim — Phage-Bacteria Simulation Control Center",
@@ -340,6 +403,8 @@ def _init_app_state():
     # Clinical trial states
     if "trial_iiv_inputs" not in st.session_state:
         st.session_state.trial_iiv_inputs = []
+    if "trial_arms" not in st.session_state:
+        st.session_state.trial_arms = []
     if "trial_result" not in st.session_state:
         st.session_state.trial_result = None
 
@@ -459,7 +524,7 @@ def load_preset_to_state(params: dict):
                 # BRG specific
                 "adsorption_s": p.get("adsorption_s", p.get("adsorption_rates")[0] if isinstance(p.get("adsorption_rates"), (list, np.ndarray)) else (p.get("adsorption_rates") if p.get("adsorption_rates") is not None else 5e-8)),
                 "adsorption_r": p.get("adsorption_r", 0.0),
-                "fitness_cost": p.get("fitness_cost", 0.0),
+                "fitness_cost": p.get("fitness_cost", 0.05),
                 "mu": p.get("mu", 1e-7),
             }
         )
@@ -504,7 +569,7 @@ def load_preset_to_state(params: dict):
                 # BRG specific
                 "emax_r": a.get("emax_r", a.get("emax", 3.0) * 0.1),
                 "ec50_r": a.get("ec50_r", a.get("ec50", 0.2) * 10.0),
-                "fitness_cost": a.get("fitness_cost", 0.0),
+                "fitness_cost": a.get("fitness_cost", 0.05),
                 "mu": a.get("mu", 1e-7),
             }
         )
@@ -1697,12 +1762,43 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
         trial_dt = st.number_input("Solver output step (dt)", min_value=0.05, max_value=1.0, value=0.25, step=0.05)
         trial_n_jobs = st.slider("Parallel workers (n_jobs)", min_value=1, max_value=16, value=4, help="Select number of threads")
         
-        st.markdown("### 💉 Active Treatment Arms")
-        run_control = st.checkbox("Control Arm (No Doses)", value=True)
-        run_phage = st.checkbox("Phage Monotherapy Arm", value=True)
-        run_abx = st.checkbox("Antibiotic Monotherapy Arm", value=False)
-        run_combo = st.checkbox("Combination Therapy Arm (Combo)", value=True)
-        
+        st.markdown("### 💉 Treatment Arms")
+        st.caption("Define any number of arms (e.g. low-dose vs high-dose), each with its own phage / antibiotic regimen. The Control arm never receives doses.")
+        trial_include_control = st.checkbox("Include Control arm (no doses)", value=True)
+
+        _tphages = st.session_state.get("int_phages", [])
+        _tabx = st.session_state.get("int_antibiotics", [])
+        trial_arms = st.session_state.get("trial_arms", [])
+
+        if not _tphages and not _tabx:
+            st.info("Configure at least one phage or antibiotic in the Interactive Simulator to define dosed arms.")
+
+        # Existing arms
+        for _ai, _arm in enumerate(list(trial_arms)):
+            _lc, _dc = st.columns([6, 1])
+            with _lc:
+                st.markdown(f"**{_arm['name']}** — {arm_regimen_summary(_arm)}")
+            with _dc:
+                if st.button("🗑️", key=f"del_arm_{_ai}"):
+                    trial_arms.pop(_ai)
+                    st.session_state.trial_arms = trial_arms
+                    st.rerun()
+
+        # Add-arm form
+        with st.expander("➕ Add treatment arm", expanded=not trial_arms):
+            _new_name = st.text_input("Arm name", value=f"Arm {len(trial_arms) + 1}", key="new_arm_name")
+            _pcfg, _acfg = {"on": False}, {"on": False}
+            if _tphages:
+                st.markdown("**Phage dosing**")
+                _pcfg = render_regimen_config("new_arm_p", _tphages, "phage", 1e9, "Amount (PFU)", default_on=True)
+            if _tabx:
+                st.markdown("**Antibiotic dosing**")
+                _acfg = render_regimen_config("new_arm_a", _tabx, "antibiotic", 10.0, "Amount (mg)", default_on=not _tphages)
+            if st.button("➕ Add arm", key="add_arm_btn"):
+                trial_arms.append({"name": _new_name, "phage": _pcfg, "abx": _acfg})
+                st.session_state.trial_arms = trial_arms
+                st.rerun()
+
         st.markdown("### 🧬 Parameter Variability (IIV)")
         
         # Display active IIVs
@@ -1761,57 +1857,6 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 st.success(f"Added variability to {param_display}!")
                 st.rerun()
 
-        # ── Trial Dosing (per-agent, single or repeat regimen) ────────────────
-        st.markdown("### 💉 Trial Dosing Regimen")
-        st.caption("Doses delivered in the phage / antibiotic / combo arms. The Control arm never receives doses.")
-        _trial_phages = st.session_state.get("int_phages", [])
-        _trial_abx = st.session_state.get("int_antibiotics", [])
-        trial_phage_doses = []
-        trial_abx_doses = []
-
-        def _regimen_widgets(prefix, target, unit_default, unit_label):
-            """Render amount/start/regimen widgets and return the dose list."""
-            if target == "phage":
-                items = _trial_phages
-            else:
-                items = _trial_abx
-            idx = 0
-            if len(items) > 1:
-                idx = st.selectbox(
-                    f"{target.title()} target", range(len(items)),
-                    format_func=lambda i: items[i].get("name", f"{target} {i}"),
-                    key=f"{prefix}_idx",
-                )
-            ca, cb = st.columns(2)
-            with ca:
-                amount = st.number_input(unit_label, min_value=0.0, value=unit_default,
-                                         format="%.1e", key=f"{prefix}_amt")
-            with cb:
-                start = st.number_input("Start time (h)", min_value=0.0, value=0.0,
-                                        step=1.0, key=f"{prefix}_start")
-            mode = st.radio("Regimen", ["Single dose", "Repeat (qX h × N)"],
-                            horizontal=True, key=f"{prefix}_mode")
-            is_repeat = mode.startswith("Repeat")
-            interval, n_doses = 8.0, 1
-            if is_repeat:
-                ci, cn = st.columns(2)
-                with ci:
-                    interval = st.number_input("Interval (h)", min_value=0.5, value=8.0,
-                                               step=1.0, key=f"{prefix}_int")
-                with cn:
-                    n_doses = st.number_input("Number of doses", min_value=1, value=4,
-                                              step=1, key=f"{prefix}_n")
-            return build_regimen_doses(target, idx, amount, start, is_repeat, interval, n_doses)
-
-        if _trial_phages:
-            with st.expander("🦠 Phage dosing", expanded=True):
-                trial_phage_doses = _regimen_widgets("trial_phg", "phage", 1e9, "Dose amount (PFU)")
-        if _trial_abx:
-            with st.expander("💊 Antibiotic dosing", expanded=bool(_trial_abx)):
-                trial_abx_doses = _regimen_widgets("trial_abx", "antibiotic", 10.0, "Dose amount (mg)")
-        if not _trial_phages and not _trial_abx:
-            st.info("Configure at least one phage or antibiotic in the Interactive Simulator to enable trial dosing.")
-
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 Run Parallel Clinical Trial", use_container_width=True):
@@ -1820,12 +1865,11 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     # 1. Compile nominal base config
                     base_cfg, init_B, init_P, init_S, model_kwargs = build_nominal_config_from_gui()
 
-                    # Phage is the *intervention*, delivered per-arm via the Trial
-                    # Dosing editor above (single/repeat regimen). In this crossover
-                    # design all arms share initial_conditions and differ only by
-                    # dose_schedule, so every arm starts with zero free phage and the
-                    # phage/combo arms receive the configured phage doses — keeping the
-                    # Control and Antibiotic arms true no-phage controls.
+                    # Phage is the *intervention*, delivered per-arm via each arm's
+                    # dose schedule (Treatment Arms builder). In this crossover design
+                    # all arms share initial_conditions and differ only by dose_schedule,
+                    # so every arm starts with zero free phage and receives only its own
+                    # configured doses — keeping the Control arm a true no-treatment arm.
                     init_P = np.asarray(init_P, dtype=float)
                     base_P = np.zeros_like(init_P)
 
@@ -1838,39 +1882,30 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                         Imm=model_kwargs.get("initial_Imm", None),
                     )
 
-                    # 2. Assemble arms from the Trial Dosing editor
+                    # 2. Assemble arms from the Treatment Arms builder
                     arms = []
-                    _has_phage = bool(trial_phage_doses)
-                    _has_abx = bool(trial_abx_doses)
+                    _used_names = set()
 
-                    if run_control:
-                        arms.append(TreatmentArm(name="Control", dose_schedule=DoseSchedule([])))
+                    def _add_arm(name, doses):
+                        # ClinicalTrial requires unique arm names
+                        base = name.strip() or "Arm"
+                        uniq, k = base, 2
+                        while uniq in _used_names:
+                            uniq = f"{base} ({k})"; k += 1
+                        _used_names.add(uniq)
+                        arms.append(TreatmentArm(name=uniq, dose_schedule=DoseSchedule(list(doses))))
 
-                    if run_phage and _has_phage:
-                        arms.append(TreatmentArm(name="Phage-Only", dose_schedule=DoseSchedule(list(trial_phage_doses))))
+                    if trial_include_control:
+                        _add_arm("Control", [])
 
-                    if run_abx and _has_abx:
-                        arms.append(TreatmentArm(name="Antibiotic-Only", dose_schedule=DoseSchedule(list(trial_abx_doses))))
+                    for _arm in trial_arms:
+                        _doses = arm_dose_events(_arm)
+                        if not _doses:
+                            st.warning(f"Arm '{_arm['name']}' has no doses — it will behave like the Control arm.")
+                        _add_arm(_arm["name"], _doses)
 
-                    if run_combo:
-                        combo_doses = list(trial_phage_doses) + list(trial_abx_doses)
-                        # Warn if Combo is identical to an existing monotherapy arm
-                        if not (_has_phage and _has_abx):
-                            if _has_phage:
-                                _overlap = "Phage-Only"
-                            elif _has_abx:
-                                _overlap = "Antibiotic-Only"
-                            else:
-                                _overlap = "Control"
-                            st.warning(
-                                f"Combo arm contains only {_overlap.split('-')[0].lower()} doses — "
-                                f"it will be identical to the {_overlap} arm. "
-                                "Configure both a phage dose and an antibiotic dose above to create a meaningful combination arm."
-                            )
-                        arms.append(TreatmentArm(name="Combo", dose_schedule=DoseSchedule(combo_doses)))
-                        
                     if not arms:
-                        st.error("Please configure at least one treatment arm to run.")
+                        st.error("Add at least one treatment arm (or enable the Control arm) to run.")
                     else:
                         pretreatment_hours = st.session_state.get("int_t_prerun", 0.0)
                         
@@ -2986,7 +3021,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             "Vc": 5000.0, "k_elim": 0.2, "k_in": 0.1, "k_out": 0.05, "Vi": 10.0,
                             "adsorption_s": 5e-8,
                             "adsorption_r": 0.0,
-                            "fitness_cost": 0.0,
+                            "fitness_cost": 0.05,
                             "mu": 1e-7,
                         })
                     st.session_state["int_phages"] = phages
@@ -3000,7 +3035,15 @@ elif st.session_state.current_page == "Interactive Simulator":
                         phages[idx]["burst_sizes"] = st.number_input("Burst size", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx]["latent_periods"]), step=0.1, key=f"brg_phg_latent_{idx}")
                         phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
-                        phages[idx]["fitness_cost"] = st.number_input("Resistance fitness cost", value=float(phages[idx].get("fitness_cost", 0.05)), step=0.01, key=f"brg_phg_fit_{idx}")
+                        phages[idx]["fitness_cost"] = st.number_input(
+                            "Resistance fitness cost",
+                            value=float(phages[idx].get("fitness_cost", 0.05)), step=0.01,
+                            key=f"brg_phg_fit_{idx}",
+                            help="Fractional growth-rate penalty of phage-resistant genotypes "
+                                 "(resistant growth = base × (1 − cost)). Drives the equilibrium "
+                                 "initial condition — with cost 0 the resistant mutants are neutral "
+                                 "and dominate the pre-treatment equilibrium.",
+                        )
                         phages[idx]["mu"] = st.number_input("Mutation rate (mu)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
                             "Dormant adsorption attenuation (per depth layer)",
@@ -3194,7 +3237,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             "Km_elim": 0.0,
                             "emax_r": 0.3,
                             "ec50_r": 2.0,
-                            "fitness_cost": 0.0,
+                            "fitness_cost": 0.05,
                             "mu": 1e-7,
                         }
                     )
@@ -3247,7 +3290,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                         antibiotics[i]["ec50"] = st.number_input("Susceptible EC50_s", value=float(antibiotics[i].get("ec50", 0.2)), key=f"abx_ec50_s_{i}")
                         antibiotics[i]["ec50_r"] = st.number_input("Resistant EC50_r", value=float(antibiotics[i].get("ec50_r", 2.0)), key=f"abx_ec50_r_{i}")
                         
-                        antibiotics[i]["fitness_cost"] = st.number_input("Resistance fitness cost", value=float(antibiotics[i].get("fitness_cost", 0.05)), step=0.01, key=f"abx_fit_{i}")
+                        antibiotics[i]["fitness_cost"] = st.number_input(
+                            "Resistance fitness cost",
+                            value=float(antibiotics[i].get("fitness_cost", 0.05)), step=0.01,
+                            key=f"abx_fit_{i}",
+                            help="Fractional growth-rate penalty of antibiotic-resistant genotypes. "
+                                 "Drives the equilibrium initial condition; cost 0 → resistant "
+                                 "mutants dominate the pre-treatment equilibrium.",
+                        )
                         antibiotics[i]["mu"] = st.number_input("Mutation rate (mu)", value=float(antibiotics[i].get("mu", 1e-7)), format="%.1e", key=f"abx_mu_{i}")
                     else:
                         # Direct parameters
