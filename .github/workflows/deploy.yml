@@ -7,6 +7,9 @@ name: test-and-deploy
 #     workflow installed in the pbisim repo)
 #   - manual dispatch
 #
+# Until you configure deployment it auto-skips (stays green) — the real work only
+# runs once the PBISIM_TOKEN secret exists.
+#
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
 #   PBISIM_TOKEN            read-only fine-grained PAT for the pbisim repo
 #   RENDER_DEPLOY_HOOK_URL  Render service "Deploy Hook" URL
@@ -26,17 +29,33 @@ jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Check deployment is configured
+        id: cfg
+        env:
+          PBISIM_TOKEN: ${{ secrets.PBISIM_TOKEN }}
+        run: |
+          if [ -z "$PBISIM_TOKEN" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deployment not configured yet (PBISIM_TOKEN secret is unset) — skipping test/deploy. See DEPLOY.md."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.cfg.outputs.configured == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.configured == 'true'
         with:
           python-version: "3.11"
 
       - name: Resolve pbisim ref
+        if: steps.cfg.outputs.configured == 'true'
         id: ref
         run: echo "ref=${{ github.event.client_payload.ref || 'main' }}" >> "$GITHUB_OUTPUT"
 
       - name: Install pbisim (private) + app + pytest
+        if: steps.cfg.outputs.configured == 'true'
         env:
           PBISIM_TOKEN: ${{ secrets.PBISIM_TOKEN }}
           PBISIM_REF: ${{ steps.ref.outputs.ref }}
@@ -46,8 +65,9 @@ jobs:
           pip install pytest
 
       - name: Run test suite
+        if: steps.cfg.outputs.configured == 'true'
         run: python -m pytest tests/ -q
 
       - name: Trigger Render deploy
-        if: success()
+        if: steps.cfg.outputs.configured == 'true' && success()
         run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
