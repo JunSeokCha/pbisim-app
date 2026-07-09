@@ -14,6 +14,24 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+# ── Precision fix for float number inputs ─────────────────────────────────────
+# Streamlit's number_input infers a display format from the step (default "%.2f"
+# for floats), so a value like 0.001 rounds to 0.00 on entry — losing precision
+# for small rates (death, dormancy, resuscitation, decay, …). Inject a compact
+# full-precision format ("%g") for any *float* input that doesn't set one. This
+# auto-skips integer inputs (their value is an int) and any input that already
+# specifies `format=` (e.g. scientific "%.1e").
+_orig_number_input = st.number_input
+
+
+def _number_input_precise(label, *args, **kwargs):
+    if "format" not in kwargs and isinstance(kwargs.get("value"), float):
+        kwargs["format"] = "%g"
+    return _orig_number_input(label, *args, **kwargs)
+
+
+st.number_input = _number_input_precise
+
 from pbisim import (
     ModelBuilder,
     PBIModel,
@@ -815,7 +833,17 @@ def build_nominal_config_from_gui():
         if schedule:
             builder = builder.with_dose_schedule(schedule)
 
-        config = builder.build(**extra_kwargs)
+        # OD / debris ODE (Direct mode). ModelBuilder.build() takes no kwargs — debris
+        # must be configured via with_od_debris(), not passed to build().
+        if debris_enabled:
+            builder = builder.with_od_debris(
+                u=extra_kwargs.get("debris_u", 1.0),
+                v=extra_kwargs.get("debris_v", 0.5),
+                kdis=extra_kwargs.get("debris_kdis", 0.1),
+                od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 1.0),
+            )
+
+        config = builder.build()
 
         initial_B = np.array([s["initial_B"] for s in strains])
         initial_P = np.array([p["initial_P"] for p in phages])
@@ -1272,6 +1300,16 @@ def generate_reproduction_code() -> str:
                 f"immune_module='{st.session_state.get('int_immune_module', 'innate')}', "
                 f"imm_max={st.session_state.get('int_innate_max', 1e7)}"
                 f"{_kD_arg})"
+            )
+
+        # OD / debris ODE
+        if st.session_state.get("int_debris_enabled", False):
+            code.append(
+                f"builder = builder.with_od_debris("
+                f"u={st.session_state.get('int_debris_u', 1.0)}, "
+                f"v={st.session_state.get('int_debris_v', 0.5)}, "
+                f"kdis={st.session_state.get('int_debris_kdis', 0.1)}, "
+                f"od_to_cfu_conversion_factor={st.session_state.get('int_od_to_cfu_conversion_factor', 1.0)})"
             )
 
     # ──── BRG ────
