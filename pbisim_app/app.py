@@ -6,7 +6,9 @@ an AI assistant, and a clinical trials cohort simulator.
 
 from __future__ import annotations
 
+import copy
 import io
+import json
 import os
 import re
 import matplotlib.pyplot as plt
@@ -49,7 +51,6 @@ from pbisim.trial.clinical import TreatmentArm
 
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
-from pbisim_app.presets import TUTORIALS
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,
     run_trial_simulation,
@@ -425,6 +426,9 @@ def _init_app_state():
         st.session_state.trial_arms = []
     if "trial_result" not in st.session_state:
         st.session_state.trial_result = None
+    if "user_scenarios" not in st.session_state:
+        # name -> {"annotation": str, "schema_version": int, "state": {...}}
+        st.session_state.user_scenarios = {}
 
 
 _init_app_state()
@@ -609,8 +613,147 @@ def load_preset_to_state(params: dict):
     st.session_state["int_doses"] = doses_list
 
 
+# ── Scenario snapshots (Tier 1: full-config save / load / export / import) ─────
+# A "scenario" is everything needed to reproduce a simulation: the builder mode,
+# strains / phages / antibiotics, pairwise adsorption, dosing, nutrient, immune,
+# debris, solver, prerun, and the trial design. We snapshot the *input* session
+# keys directly (rather than maintaining an inverse of load_preset_to_state), so
+# new parameters are captured automatically and every builder mode is covered.
+SCENARIO_SCHEMA_VERSION = 1
+
+# Non-int_ session keys that are still scenario *data* (not widgets).
+_SCENARIO_EXTRA_DATA_KEYS = ("direct_phg_res_rates", "trial_arms", "trial_iiv_inputs")
+# Pairwise adsorption data keys written by the phage-config widgets.
+_ADS_DATA_RE = re.compile(r"^ads_(dorm_)?\d+_\d+$")
+# Widget-key prefixes to clear on load so widgets re-read the restored values
+# (Streamlit keeps a widget's value under its key and would otherwise override
+# the freshly-loaded data).
+_SCENARIO_WIDGET_PREFIXES = (
+    "int_", "str_", "phg_", "ss_", "brg_", "abx_", "ads_", "dose_",
+    "rep_dose", "single_dose", "new_arm", "trial_phg", "trial_abx",
+    "widget_builder_mode",
+)
+
+
+def _is_scenario_data_key(k: str) -> bool:
+    return (
+        k.startswith("int_")
+        or k in _SCENARIO_EXTRA_DATA_KEYS
+        or bool(_ADS_DATA_RE.match(k))
+    )
+
+
+def _json_safe(obj):
+    """Coerce numpy scalars/arrays to plain Python for JSON serialisation."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
+
+
+def dump_state_to_scenario() -> dict:
+    """Snapshot the current input configuration as a JSON-safe scenario state."""
+    return {
+        k: _json_safe(copy.deepcopy(st.session_state[k]))
+        for k in list(st.session_state.keys())
+        if _is_scenario_data_key(k)
+    }
+
+
+def load_scenario_to_state(state: dict) -> None:
+    """Restore a scenario snapshot, clearing stale widget state first."""
+    # Clear both the data keys we are about to overwrite and the widget keys that
+    # would otherwise shadow them.
+    for k in list(st.session_state.keys()):
+        if k in _SCENARIO_EXTRA_DATA_KEYS or _ADS_DATA_RE.match(k) or any(
+            k.startswith(p) for p in _SCENARIO_WIDGET_PREFIXES
+        ):
+            st.session_state.pop(k, None)
+    for k, v in state.items():
+        st.session_state[k] = copy.deepcopy(v)
+    # Invalidate stale outputs
+    st.session_state.simulation_result = None
+    st.session_state.simulation_config = None
+    st.session_state.trial_result = None
+
+
+def export_scenarios_json(scenarios: dict) -> str:
+    """Serialise the whole scenario library to a portable JSON string."""
+    return json.dumps(
+        {"schema_version": SCENARIO_SCHEMA_VERSION, "scenarios": scenarios},
+        indent=2,
+    )
+
+
+def import_scenarios_json(text: str) -> dict:
+    """Parse an exported library; returns the {name: scenario} mapping.
+
+    Tolerates both the wrapped ({"scenarios": {...}}) and bare ({name: ...})
+    forms. Raises ValueError on malformed input.
+    """
+    data = json.loads(text)
+    if isinstance(data, dict) and "scenarios" in data:
+        scenarios = data["scenarios"]
+    else:
+        scenarios = data
+    if not isinstance(scenarios, dict):
+        raise ValueError("Not a scenario library (expected a JSON object).")
+    for name, sc in scenarios.items():
+        if not isinstance(sc, dict) or "state" not in sc:
+            raise ValueError(f"Scenario '{name}' is missing its 'state'.")
+    return scenarios
+
+
+# Minimal sensible starting configuration (one WT strain + one phage, Monod
+# nutrients). Used to populate a fresh session and the "Reset" action. Kept in the
+# app (not tied to the pbisim tutorials, which may change independently).
+DEFAULT_SCENARIO = {
+    "t_end": 48.0,
+    "dt": 0.25,
+    "extinction_threshold": 1.0,
+    "solver_method": "BDF",
+    "track_nutrients": True,
+    "initial_S": 1.0,
+    "monod_constant": 0.3,
+    "recycle_fraction": 0.0,
+    "s_in": 0.0,
+    "s_out": 0.0,
+    "immunity_enabled": False,
+    "debris_enabled": False,
+    "strains": [
+        {
+            "name": "Strain 0 (WT)",
+            "initial_B": 1e7,
+            "growth_rate": 1.2,
+            "bacteria_to_resource_ratio": 1e9,
+            "death_rate_B": 0.0,
+            "dormancy_enabled": False,
+        }
+    ],
+    "phages": [
+        {
+            "name": "Phage 0",
+            "initial_P": 1e6,
+            "adsorption_rates": 1e-8,
+            "adsorption_rates_dormant": 0.0,
+            "burst_sizes": 50.0,
+            "latent_periods": 0.5,
+            "phage_decay_rates": 0.1,
+            "pk_mode": "None",
+        }
+    ],
+    "antibiotics": [],
+    "doses": [],
+}
+
+
 if "int_strains" not in st.session_state:
-    load_preset_to_state(TUTORIALS[0]["parameters"])
+    load_preset_to_state(DEFAULT_SCENARIO)
 
 
 def build_nominal_config_from_gui():
@@ -1510,13 +1653,19 @@ def generate_reproduction_code() -> str:
 with st.sidebar:
     st.title("🦠 pbisim App")
 
+    # Apply any pending programmatic navigation (from Load buttons, etc.) BEFORE
+    # the radio is instantiated — a keyed widget's value can only be set prior to
+    # its creation, and once set it overrides the `index=` default.
+    _pending_nav = st.session_state.pop("_nav_to", None)
+    if _pending_nav:
+        st.session_state.current_page_radio = _pending_nav
+
+    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Scenarios"]
     st.session_state.current_page = st.radio(
         "Navigation",
-        ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Presets & Tutorials"],
+        _pages,
         key="current_page_radio",
-        index=["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Presets & Tutorials"].index(
-            st.session_state.current_page
-        ),
+        index=_pages.index(st.session_state.current_page),
     )
     st.session_state.current_page = st.session_state.current_page_radio
 
@@ -1628,61 +1777,95 @@ with st.sidebar:
         st.session_state.simulation_result = None
         st.session_state.simulation_config = None
         st.session_state.trial_result = None
-        load_preset_to_state(TUTORIALS[0]["parameters"])
+        load_preset_to_state(DEFAULT_SCENARIO)
         st.rerun()
 
 
-# ── Presets Catalog Page ──────────────────────────────────────────────────────
-if st.session_state.current_page == "Presets & Tutorials":
-    st.title("📚 Presets & Tutorials Catalog")
-    st.caption("Learn about the library and load configurations directly.")
-    
+# ── Scenario Library Page ─────────────────────────────────────────────────────
+if st.session_state.current_page == "Scenarios":
+    st.title("💾 Scenario Library")
+    st.caption("Save, load, and export/import complete simulation configurations.")
+
     st.markdown(
-        "<div class='info-banner'>💡 Loading a tutorial preset configures the <b>Interactive Simulator</b> tab. "
-        "You can load parameters, tweak values, and run the simulation. Custom scripts run standalone.</div>",
+        "<div class='info-banner'>💡 A scenario captures your <b>entire</b> configuration. "
+        "Loading one configures the <b>Interactive Simulator</b> and applies across all pages "
+        "(sweeps, clinical trials). Export to JSON to keep a portable personal library.</div>",
         unsafe_allow_html=True,
     )
 
-    cols = st.columns(2)
-    for i, t in enumerate(TUTORIALS):
-        col = cols[i % 2]
-        with col:
-            st.markdown(
-                f"""
-                <div class="card">
-                    <h3>{t['name']}</h3>
-                    <p>{t['description']}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
+    # ── My Scenarios (save / load / export / import full configurations) ──────
+    st.markdown("## 💾 My Scenarios")
+    st.caption(
+        "Save the **entire current configuration** (builder mode, strains/phages/"
+        "antibiotics, dosing, nutrient, immune, solver, prerun, and trial design) as a "
+        "reusable scenario. Scenarios live in this browser session — **export to JSON to "
+        "keep them** (your portable personal library) and re-import any time."
+    )
+    _scenarios = st.session_state.user_scenarios
+
+    sc_save, sc_io = st.columns(2)
+    with sc_save:
+        with st.expander("➕ Save current configuration", expanded=not _scenarios):
+            _sc_name = st.text_input("Scenario name", value=f"Scenario {len(_scenarios) + 1}", key="sc_save_name")
+            _sc_note = st.text_area(
+                "Annotation (optional)", key="sc_save_note",
+                placeholder="e.g. PA high-persister + fast-adsorbing phage, immunocompromised host",
             )
-
-            # Actions
-            if t["type"] == "single":
-                if st.button("Load into Simulator ➡️", key=f"load_pres_{t['id']}"):
-                    load_preset_to_state(t["parameters"])
-                    st.session_state.current_page = "Interactive Simulator"
-                    st.success(f"Loaded '{t['name']}' parameters!")
+            if st.button("💾 Save scenario", key="sc_save_btn", use_container_width=True):
+                _name = (_sc_name or "").strip()
+                if not _name:
+                    st.error("Please enter a scenario name.")
+                else:
+                    _scenarios[_name] = {
+                        "annotation": _sc_note or "",
+                        "schema_version": SCENARIO_SCHEMA_VERSION,
+                        "state": dump_state_to_scenario(),
+                    }
+                    st.session_state.user_scenarios = _scenarios
+                    st.success(f"Saved '{_name}'.")
                     st.rerun()
-            else:
-                # Custom script execution
-                if st.button("Run Tutorial Script 🚀", key=f"run_scr_{t['id']}"):
-                    with st.spinner("Running tutorial script..."):
-                        exec_res = execute_code(t["script_code"])
+    with sc_io:
+        with st.expander("📤 Export / 📥 Import library", expanded=False):
+            st.download_button(
+                "📤 Export all scenarios (JSON)",
+                data=export_scenarios_json(_scenarios),
+                file_name="pbisim_scenarios.json",
+                mime="application/json",
+                use_container_width=True,
+                disabled=not _scenarios,
+            )
+            _up = st.file_uploader("📥 Import scenarios (JSON)", type=["json"], key="sc_import")
+            if _up is not None and st.button("Merge imported scenarios", key="sc_import_btn"):
+                try:
+                    imported = import_scenarios_json(_up.getvalue().decode("utf-8"))
+                    _scenarios.update(imported)
+                    st.session_state.user_scenarios = _scenarios
+                    st.success(f"Imported {len(imported)} scenario(s).")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Import failed: {e}")
 
-                    if exec_res.success:
-                        st.success("Execution completed successfully!")
-                        for fig in exec_res.figures:
-                            st.pyplot(fig)
-                            plt.close(fig)
-                        if exec_res.stdout:
-                            with st.expander("📄 Console output"):
-                                st.text(exec_res.stdout)
-                    else:
-                        st.error("Script execution failed:")
-                        st.code(exec_res.error, language="text")
-
-            st.markdown("<br>", unsafe_allow_html=True)
+    if _scenarios:
+        st.markdown("#### Saved scenarios")
+        for _name in list(_scenarios.keys()):
+            _sc = _scenarios[_name]
+            c_info, c_load, c_del = st.columns([6, 1, 1])
+            with c_info:
+                _note = _sc.get("annotation", "")
+                st.markdown(f"**{_name}**" + (f" — {_note}" if _note else ""))
+            with c_load:
+                if st.button("Load", key=f"sc_load_{_name}"):
+                    load_scenario_to_state(_sc["state"])
+                    st.session_state._nav_to = "Interactive Simulator"
+                    st.success(f"Loaded '{_name}'.")
+                    st.rerun()
+            with c_del:
+                if st.button("🗑️", key=f"sc_del_{_name}"):
+                    _scenarios.pop(_name, None)
+                    st.session_state.user_scenarios = _scenarios
+                    st.rerun()
+    else:
+        st.info("No saved scenarios yet — configure a simulation, then save it above.")
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────

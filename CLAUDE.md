@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **58 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **48 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -35,8 +35,6 @@ pbisim-app/
 │   │                        AgentResponse, _parse_response() (regex extraction).
 │   ├── executor.py(~155)    execute_code(): sandboxed namespace, exec()s
 │   │                        generated code, captures stdout + matplotlib figures.
-│   ├── presets.py (~1185)   All 13 pbisim tutorials as structured parameter dicts
-│   │                        + reference script_code strings.
 │   ├── sweep_helper.py      ModelConfig mutation helpers for 1D/2D parameter sweeps
 │   │                        and dose-response sweeps; vector padding for MOI sweeps.
 │   └── trial_helper.py      IIV distribution factory, ClinicalTrial orchestration,
@@ -48,11 +46,11 @@ pbisim-app/
 ├── tests/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
-│   ├── test_presets.py      12 tests — preset structure and parameter validity
 │   ├── test_builder_modes.py 8 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
 │   ├── test_sweeps.py       4 tests — sweep_helper parameter application
 │   ├── test_self_healing.py 2 tests — self-healing loop and history rollback
-│   └── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
+│   ├── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
+│   └── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -68,7 +66,7 @@ pbisim-app/
 | Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
 | Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
-| Presets & Tutorials | Browser for all 13 tutorials. type="single" → load into simulator; type="script" → execute via executor. |
+| Scenarios | Save / load / delete full-config **scenarios**; export/import the library as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — owner's call; they tracked the pbisim tutorials, which change independently.) |
 
 ---
 
@@ -132,13 +130,12 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 58 passed
+# Full suite — expected: 48 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
-python -m pytest tests/test_presets.py -q         # 12 tests
 python -m pytest tests/test_builder_modes.py -q   # 8 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
 python -m pytest tests/test_sweeps.py -q          # 4 tests
 python -m pytest tests/test_self_healing.py -q    # 2 tests
@@ -362,7 +359,7 @@ Six owner-requested feature updates (all UI-verified via streamlit AppTest: ever
    shown at the top of the trial outputs.
 
 Regression tests in new `tests/test_trial_features.py` (regimen builder, distribution
-metrics, PK/PD trajectory plots). **58 tests passing.**
+metrics, PK/PD trajectory plots). **48 tests passing.**
 
 **Note:** the Clinical Trials page no longer reads the simulator's Environment & Dosing
 `int_doses` — trial doses come solely from the new Trial Dosing editor.
@@ -384,7 +381,52 @@ metrics, PK/PD trajectory plots). **58 tests passing.**
   defaults) with help text noting it drives the equilibrium IC. The engine already wired
   `fitness_cost` correctly (fc=0 → resistant neutral → resistant-dominated equilibrium;
   fc=0.05 → WT-dominated `[1e7, 20]`); the input existed but defaulted to 0, which
-  produced the fully-resistant equilibrium the owner observed. **58 tests passing.**
+  produced the fully-resistant equilibrium the owner observed. **48 tests passing.**
 
 **Note:** the old fixed-arm checkboxes (`run_control`/`run_phage`/`run_abx`/`run_combo`)
 and the single Trial Dosing editor are gone — replaced by the Treatment Arms builder.
+
+## Done this session (2026-07-10) — bugfixes + Tier-1 scenario library
+
+Bugfixes (each committed separately, all verified via streamlit AppTest):
+- **OD/debris crash (Direct mode):** the app passed debris params to
+  `builder.build(**extra_kwargs)`, but `ModelBuilder.build()` takes no kwargs →
+  `TypeError` whenever "Track Bacteriolytic Cell Debris" was enabled. Fixed to use
+  `builder.with_od_debris(u, v, kdis, od_to_cfu_conversion_factor)`. BRG/StrainSet
+  were fine (their `to_config` accepts `**extra_config_kwargs`).
+- **Number-input precision:** Streamlit infers `"%.2f"` from the step, so 0.001 was
+  rounded to 0.00 on entry. Global wrapper injects `format="%g"` for any float
+  `st.number_input` without an explicit format (auto-skips ints / scientific).
+- **BRG + StrainSet phage PK/advanced:** those two modes lacked the Advanced Phage
+  Kinetics (`phage_decay_Km`) + Phage PK (`pk_mode`/Vc/k_elim/k_in/k_out/Vi/Km_elim)
+  widgets Direct had (build paths already read them; UI was missing). Added widgets +
+  `phage_decay_Km` forwarding for both.
+
+**Tier-1 Scenario library (presets rework):** a "scenario" = the *entire* input
+configuration (builder mode, strains/phages/antibiotics, pairwise adsorption, dosing,
+nutrient, immune, debris, solver, prerun, trial arms/IIV). Implemented as a **session
+snapshot** (`dump_state_to_scenario` captures all `int_*` + `ads_<s>_<p>` +
+`direct_phg_res_rates` + `trial_*` keys; `load_scenario_to_state` clears widget keys
+then restores) rather than an inverse of `load_preset_to_state` — so new params are
+captured automatically and every builder mode is covered. UI in the **Presets &
+Tutorials** page: Save current config, list/Load/Delete, and **Export/Import the whole
+library as versioned JSON** (`schema_version=1`) — the portable "personal DB" that works
+on the stateless deploy. Also fixed a **pre-existing navigation bug**: the keyed nav
+radio overrode `current_page`, so Load buttons (scenario *and* tutorial) didn't switch
+pages — now routed through a pending-`_nav_to` hop applied before the radio instantiates.
+Round-trip verified (config + adsorption + builder mode restored, navigates, re-runs).
+Tests: `tests/test_scenarios.py` (AppTest round-trip + JSON export).
+- **Tutorial presets REMOVED** (owner's call): deleted `pbisim_app/presets.py` +
+  `tests/test_presets.py`, dropped the tutorial-card browser, and renamed the page
+  **"Presets & Tutorials" → "Scenarios"** (nav string + routing). A new inline
+  `DEFAULT_SCENARIO` constant in `app.py` replaces `TUTORIALS[0]` as the fresh-session /
+  Reset startup config, so the app no longer depends on the pbisim tutorials.
+  **48 tests passing** (was 60; −12 removed preset tests).
+
+**Design direction (agreed with owner):** presets are a two-tier model — **Tier 1 =
+Scenarios (full-config snapshots, DONE)**; **Tier 2 = a composable Parts library**
+(bacteria / phages / antibiotics). Phage kinetics (burst/latent/adsorption) are NOT
+phage-intrinsic — they're phage×host pair properties — so Tier-2 phage parts will carry
+a **reference-host tag** + soft "verify for this strain" flag, and map directly onto a
+future `pbisim-fit` "fit → save part" pipeline. Persistence stays JSON export/import
+(a real per-user DB needs auth+storage, deferred).
