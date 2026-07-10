@@ -987,6 +987,12 @@ def build_nominal_config_from_gui():
                 [p.get("attenuation_rate", 0.0) for p in phages]
             )
 
+        # Per-phage nonlinear (Michaelis-Menten) phage decay saturation.
+        if phages and any(p.get("phage_decay_Km", 0.0) > 0 for p in phages):
+            extra_kwargs["phage_decay_Km"] = np.array(
+                [p.get("phage_decay_Km", 0.0) if p.get("phage_decay_Km", 0.0) > 0 else np.inf for p in phages]
+            )
+
         config = brg.to_config(
             n_latent=n_latent,
             n_depth=max_depth,
@@ -1129,7 +1135,13 @@ def build_nominal_config_from_gui():
         # Dose schedule
         if schedule:
             extra_kwargs["dose_schedule"] = schedule
-            
+
+        # Per-phage nonlinear (Michaelis-Menten) phage decay saturation.
+        if phages and any(p.get("phage_decay_Km", 0.0) > 0 for p in phages):
+            extra_kwargs["phage_decay_Km"] = np.array(
+                [p.get("phage_decay_Km", 0.0) if p.get("phage_decay_Km", 0.0) > 0 else np.inf for p in phages]
+            )
+
         # Immunity defaults
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
 
@@ -3090,6 +3102,40 @@ elif st.session_state.current_page == "Interactive Simulator":
                             help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
                         )
 
+                        st.markdown("**Advanced Phage Kinetics**")
+                        phages[idx]["phage_decay_Km"] = st.number_input(
+                            "Decay Km (Michaelis-Menten)",
+                            value=float(phages[idx].get("phage_decay_Km", 0.0)),
+                            format="%.1e",
+                            key=f"brg_phg_decay_km_{idx}",
+                            help="Phage decay saturation. Set to 0 to disable.",
+                        )
+
+                        st.markdown("**Pharmacokinetics (PK)**")
+                        phages[idx]["pk_mode"] = st.selectbox(
+                            "Phage PK Mode",
+                            ["None", "Effect Compartment", "Mass-Conserving"],
+                            index=["None", "Effect Compartment", "Mass-Conserving"].index(phages[idx].get("pk_mode", "None")),
+                            key=f"brg_phg_pkmode_{idx}",
+                        )
+                        if phages[idx]["pk_mode"] != "None":
+                            bpk1, bpk2 = st.columns(2)
+                            with bpk1:
+                                phages[idx]["Vc"] = st.number_input("Central volume (Vc mL)", value=float(phages[idx].get("Vc", 5000.0)), key=f"brg_phg_vc_{idx}")
+                                phages[idx]["k_elim"] = st.number_input("Elimination rate (k_elim h^-1)", value=float(phages[idx].get("k_elim", 0.2)), key=f"brg_phg_kelim_{idx}")
+                            with bpk2:
+                                phages[idx]["k_in"] = st.number_input("Inflow rate (k_in h^-1)", value=float(phages[idx].get("k_in", 0.1)), key=f"brg_phg_kin_{idx}")
+                                phages[idx]["k_out"] = st.number_input("Outflow rate (k_out h^-1)", value=float(phages[idx].get("k_out", 0.05)), key=f"brg_phg_kout_{idx}")
+                            phages[idx]["Km_elim"] = st.number_input(
+                                "Elimination Km",
+                                value=float(phages[idx].get("Km_elim", 0.0)),
+                                format="%.1e",
+                                key=f"brg_phg_km_elim_{idx}",
+                                help="Central elimination saturation. Set to 0 to disable.",
+                            )
+                            if phages[idx]["pk_mode"] == "Mass-Conserving":
+                                phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"brg_phg_vi_{idx}")
+
             with col2:
                 st.markdown("### 🧮 Auto-generated Genotypes")
                 # Show list of 2^(m+a) genotypes and initial conditions inputs
@@ -3242,6 +3288,40 @@ elif st.session_state.current_page == "Interactive Simulator":
                             min_value=0.0, step=0.1, key=f"ss_phg_atten_{idx}",
                             help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
                         )
+
+                        st.markdown("**Advanced Phage Kinetics**")
+                        phages[idx]["phage_decay_Km"] = st.number_input(
+                            "Decay Km (Michaelis-Menten)",
+                            value=float(phages[idx].get("phage_decay_Km", 0.0)),
+                            format="%.1e",
+                            key=f"ss_phg_decay_km_{idx}",
+                            help="Phage decay saturation. Set to 0 to disable.",
+                        )
+
+                        st.markdown("**Pharmacokinetics (PK)**")
+                        phages[idx]["pk_mode"] = st.selectbox(
+                            "Phage PK Mode",
+                            ["None", "Effect Compartment", "Mass-Conserving"],
+                            index=["None", "Effect Compartment", "Mass-Conserving"].index(phages[idx].get("pk_mode", "None")),
+                            key=f"ss_phg_pkmode_{idx}",
+                        )
+                        if phages[idx]["pk_mode"] != "None":
+                            spk1, spk2 = st.columns(2)
+                            with spk1:
+                                phages[idx]["Vc"] = st.number_input("Central volume (Vc mL)", value=float(phages[idx].get("Vc", 5000.0)), key=f"ss_phg_vc_{idx}")
+                                phages[idx]["k_elim"] = st.number_input("Elimination rate (k_elim h^-1)", value=float(phages[idx].get("k_elim", 0.2)), key=f"ss_phg_kelim_{idx}")
+                            with spk2:
+                                phages[idx]["k_in"] = st.number_input("Inflow rate (k_in h^-1)", value=float(phages[idx].get("k_in", 0.1)), key=f"ss_phg_kin_{idx}")
+                                phages[idx]["k_out"] = st.number_input("Outflow rate (k_out h^-1)", value=float(phages[idx].get("k_out", 0.05)), key=f"ss_phg_kout_{idx}")
+                            phages[idx]["Km_elim"] = st.number_input(
+                                "Elimination Km",
+                                value=float(phages[idx].get("Km_elim", 0.0)),
+                                format="%.1e",
+                                key=f"ss_phg_km_elim_{idx}",
+                                help="Central elimination saturation. Set to 0 to disable.",
+                            )
+                            if phages[idx]["pk_mode"] == "Mass-Conserving":
+                                phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"ss_phg_vi_{idx}")
 
     # ──── Tab 2: Antibiotics & Immunity ───────────────────────────────────────
     with config_tabs[1]:
