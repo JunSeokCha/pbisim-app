@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **48 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **50 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -50,7 +50,8 @@ pbisim-app/
 │   ├── test_sweeps.py       4 tests — sweep_helper parameter application
 │   ├── test_self_healing.py 2 tests — self-healing loop and history rollback
 │   ├── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
-│   └── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
+│   ├── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
+│   └── test_parts.py         2 tests — parts save/load/export, host-tag (AppTest)
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -66,7 +67,7 @@ pbisim-app/
 | Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
 | Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
-| Scenarios | Save / load / delete full-config **scenarios**; export/import the library as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — owner's call; they tracked the pbisim tutorials, which change independently.) |
+| Library | Two sections: **💾 Scenarios** (save/load full-config snapshots) and **🧬 Parts** (composable bacteria/phages/antibiotics — save a current entity, load into config, host-tagged phages); each export/import as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — they tracked the pbisim tutorials, which change independently.) |
 
 ---
 
@@ -130,7 +131,7 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 48 passed
+# Full suite — expected: 50 passed
 python -m pytest tests/ -q
 
 # By file:
@@ -359,7 +360,7 @@ Six owner-requested feature updates (all UI-verified via streamlit AppTest: ever
    shown at the top of the trial outputs.
 
 Regression tests in new `tests/test_trial_features.py` (regimen builder, distribution
-metrics, PK/PD trajectory plots). **48 tests passing.**
+metrics, PK/PD trajectory plots). **50 tests passing.**
 
 **Note:** the Clinical Trials page no longer reads the simulator's Environment & Dosing
 `int_doses` — trial doses come solely from the new Trial Dosing editor.
@@ -381,7 +382,7 @@ metrics, PK/PD trajectory plots). **48 tests passing.**
   defaults) with help text noting it drives the equilibrium IC. The engine already wired
   `fitness_cost` correctly (fc=0 → resistant neutral → resistant-dominated equilibrium;
   fc=0.05 → WT-dominated `[1e7, 20]`); the input existed but defaulted to 0, which
-  produced the fully-resistant equilibrium the owner observed. **48 tests passing.**
+  produced the fully-resistant equilibrium the owner observed. **50 tests passing.**
 
 **Note:** the old fixed-arm checkboxes (`run_control`/`run_phage`/`run_abx`/`run_combo`)
 and the single Trial Dosing editor are gone — replaced by the Treatment Arms builder.
@@ -430,3 +431,32 @@ phage-intrinsic — they're phage×host pair properties — so Tier-2 phage part
 a **reference-host tag** + soft "verify for this strain" flag, and map directly onto a
 future `pbisim-fit` "fit → save part" pipeline. Persistence stays JSON export/import
 (a real per-user DB needs auth+storage, deferred).
+
+## Done this session (2026-07-13) — Tier-2 Parts library
+
+- **Parts library** (composable building blocks) added to the **Library** page
+  (renamed from "Scenarios"; now has two sections: 💾 Scenarios + 🧬 Parts).
+  A part = one reusable entity (bacterium / phage / antibiotic) = its param dict +
+  provenance (`source`: educated guess | literature | pbisim-fit | experimental) +
+  annotation. Three tabs; each: **save a current entity as a part**, list with
+  **Load** (appends to the shared `int_strains`/`int_phages`/`int_antibiotics`, so it
+  composes across all pages, capped at the builder max) and **Delete**, plus
+  **Export/Import the whole library as versioned JSON** (`PARTS_SCHEMA_VERSION=1`).
+- **Host-tagged phages** (agreed design): phage kinetics (burst/latent/adsorption) are
+  phage×host properties, not phage-intrinsic — so phage parts carry a `reference_host`
+  (selected from current strains) and loading one whose host isn't among the current
+  strains raises a soft "verify kinetics for this host" flash. This maps directly onto
+  a future `pbisim-fit` "fit → save part" pipeline (fit output = host-tagged phage part).
+- Helpers in `app.py`: `PART_CATEGORIES` / `PART_SOURCES`, `export_parts_json` /
+  `import_parts_json`, `clear_entity_widgets` (pops entity widget keys so appended
+  entities re-read from data), and a cross-rerun `_flash` mechanism displayed after the
+  sidebar (used for part-load feedback + host warning + navigation).
+- Tests: `tests/test_parts.py` (save/load/append + host-tag + JSON export). **50 passing.**
+- Note: AppTest raises a spurious `KeyError('part_pick_bacteria')` if you do an *extra*
+  `.run()` after a part-load navigation — a harness artifact (leaving a page with a keyed
+  widget). The real app is fine (the load render itself is 0-exception); tests avoid the
+  post-nav extra run.
+
+**Design status:** both preset tiers now DONE — **Tier 1 Scenarios** + **Tier 2 Parts**.
+Future: `pbisim-fit` → save-part pipeline; a real per-user DB (needs auth+storage) if the
+JSON export/import backbone is outgrown.

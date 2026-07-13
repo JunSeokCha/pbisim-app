@@ -429,6 +429,9 @@ def _init_app_state():
     if "user_scenarios" not in st.session_state:
         # name -> {"annotation": str, "schema_version": int, "state": {...}}
         st.session_state.user_scenarios = {}
+    if "parts_library" not in st.session_state:
+        # {category: {name: {"source","annotation","reference_host?","params"}}}
+        st.session_state.parts_library = {"bacteria": {}, "phages": {}, "antibiotics": {}}
 
 
 _init_app_state()
@@ -707,6 +710,68 @@ def import_scenarios_json(text: str) -> dict:
         if not isinstance(sc, dict) or "state" not in sc:
             raise ValueError(f"Scenario '{name}' is missing its 'state'.")
     return scenarios
+
+
+# ── Parts library (Tier 2: composable bacteria / phages / antibiotics) ─────────
+# A "part" is one reusable entity (a bacterium, a phage, or an antibiotic) — its
+# parameter dict plus provenance metadata. Parts compose into scenarios: loading a
+# part appends its dict to the shared entity list every module reads
+# (int_strains / int_phages / int_antibiotics). Phage kinetics (burst/latent/
+# adsorption) are phage×host properties, not phage-intrinsic, so phage parts carry
+# a `reference_host` tag and a soft "verify for this strain" flag on mismatch.
+PARTS_SCHEMA_VERSION = 1
+
+# category -> (shared session entity-list key, max count in the UI, human label)
+PART_CATEGORIES = {
+    "bacteria":    {"key": "int_strains",     "max": 4, "label": "Bacteria"},
+    "phages":      {"key": "int_phages",      "max": 3, "label": "Phages"},
+    "antibiotics": {"key": "int_antibiotics", "max": 2, "label": "Antibiotics"},
+}
+PART_SOURCES = ["educated guess", "literature", "pbisim-fit", "experimental"]
+
+
+def empty_parts_library() -> dict:
+    return {cat: {} for cat in PART_CATEGORIES}
+
+
+def export_parts_json(library: dict) -> str:
+    return json.dumps(
+        {"schema_version": PARTS_SCHEMA_VERSION, "parts": _json_safe(library)},
+        indent=2,
+    )
+
+
+def import_parts_json(text: str) -> dict:
+    """Parse an exported parts library into the {category: {name: part}} mapping."""
+    data = json.loads(text)
+    parts = data.get("parts", data) if isinstance(data, dict) else None
+    if not isinstance(parts, dict):
+        raise ValueError("Not a parts library (expected a JSON object).")
+    out = empty_parts_library()
+    for cat, entries in parts.items():
+        if cat not in PART_CATEGORIES:
+            continue  # ignore unknown categories rather than fail the whole import
+        if not isinstance(entries, dict):
+            raise ValueError(f"Parts category '{cat}' must be an object.")
+        for name, part in entries.items():
+            if not isinstance(part, dict) or "params" not in part:
+                raise ValueError(f"Part '{cat}/{name}' is missing its 'params'.")
+            out[cat][name] = part
+    return out
+
+
+# Entity-widget key prefixes (NOT data keys). Cleared when a part is appended so the
+# strain/phage/antibiotic widgets re-read from the (updated) int_* data lists rather
+# than shadowing them with stale per-index widget values.
+_ENTITY_WIDGET_PREFIXES = (
+    "str_", "phg_", "ss_", "brg_", "abx_", "ads_input_", "ads_dorm_input_",
+)
+
+
+def clear_entity_widgets() -> None:
+    for k in list(st.session_state.keys()):
+        if any(k.startswith(p) for p in _ENTITY_WIDGET_PREFIXES):
+            st.session_state.pop(k, None)
 
 
 # Minimal sensible starting configuration (one WT strain + one phage, Monod
@@ -1660,7 +1725,7 @@ with st.sidebar:
     if _pending_nav:
         st.session_state.current_page_radio = _pending_nav
 
-    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Scenarios"]
+    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Library"]
     st.session_state.current_page = st.radio(
         "Navigation",
         _pages,
@@ -1781,11 +1846,19 @@ with st.sidebar:
         st.rerun()
 
 
-# ── Scenario Library Page ─────────────────────────────────────────────────────
-if st.session_state.current_page == "Scenarios":
-    st.title("💾 Scenario Library")
-    st.caption("Save, load, and export/import complete simulation configurations.")
+# Flash message carried across a rerun/navigation (e.g. after loading a part).
+_flash = st.session_state.pop("_flash", None)
+if _flash:
+    (st.warning if _flash.get("kind") == "warning" else st.success)(_flash["msg"])
 
+
+# ── Library Page (Scenarios + Parts) ──────────────────────────────────────────
+if st.session_state.current_page == "Library":
+    st.title("📚 Library")
+    st.caption("Reusable building blocks. **Scenarios** = whole configurations; "
+               "**Parts** = individual bacteria / phages / antibiotics you compose.")
+
+    st.markdown("## 💾 Scenarios")
     st.markdown(
         "<div class='info-banner'>💡 A scenario captures your <b>entire</b> configuration. "
         "Loading one configures the <b>Interactive Simulator</b> and applies across all pages "
@@ -1794,7 +1867,6 @@ if st.session_state.current_page == "Scenarios":
     )
 
     # ── My Scenarios (save / load / export / import full configurations) ──────
-    st.markdown("## 💾 My Scenarios")
     st.caption(
         "Save the **entire current configuration** (builder mode, strains/phages/"
         "antibiotics, dosing, nutrient, immune, solver, prerun, and trial design) as a "
@@ -1866,6 +1938,122 @@ if st.session_state.current_page == "Scenarios":
                     st.rerun()
     else:
         st.info("No saved scenarios yet — configure a simulation, then save it above.")
+
+    # ── 🧬 Parts (composable building blocks) ────────────────────────────────
+    st.markdown("---")
+    st.markdown("## 🧬 Parts")
+    st.caption(
+        "Save individual **bacteria / phages / antibiotics** as reusable parts and compose "
+        "them into any configuration. Loading a part adds it to the current strains / phages "
+        "/ antibiotics (shared across all pages). Phage kinetics (burst / latent / adsorption) "
+        "depend on the host, so phage parts record the **reference host** they were "
+        "characterised against and warn if you reuse them elsewhere."
+    )
+    _lib = st.session_state.parts_library
+
+    with st.expander("📤 Export / 📥 Import parts library (JSON)"):
+        _has_parts = any(_lib[c] for c in PART_CATEGORIES)
+        st.download_button(
+            "📤 Export parts (JSON)", data=export_parts_json(_lib),
+            file_name="pbisim_parts.json", mime="application/json",
+            use_container_width=True, disabled=not _has_parts,
+        )
+        _pup = st.file_uploader("📥 Import parts (JSON)", type=["json"], key="parts_import")
+        if _pup is not None and st.button("Merge imported parts", key="parts_import_btn"):
+            try:
+                _imported = import_parts_json(_pup.getvalue().decode("utf-8"))
+                for _c in PART_CATEGORIES:
+                    _lib[_c].update(_imported.get(_c, {}))
+                st.session_state.parts_library = _lib
+                st.success("Parts imported.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+    _part_tabs = st.tabs([PART_CATEGORIES[c]["label"] for c in PART_CATEGORIES])
+    for _tab, _cat in zip(_part_tabs, PART_CATEGORIES):
+        with _tab:
+            _meta = PART_CATEGORIES[_cat]
+            _singular = _meta["label"][:-1].lower() if _meta["label"].endswith("s") else _meta["label"].lower()
+            _entities = st.session_state.get(_meta["key"], [])
+            _store = _lib[_cat]
+
+            with st.expander(f"➕ Save a current {_singular} as a part", expanded=not _store):
+                if not _entities:
+                    st.info(f"No {_meta['label'].lower()} configured yet — set one up in the Interactive Simulator first.")
+                else:
+                    _names = [f"{i}: {e.get('name', _singular)}" for i, e in enumerate(_entities)]
+                    _pick_label = st.selectbox(f"Which {_singular}?", _names, key=f"part_pick_{_cat}")
+                    _pick = _names.index(_pick_label) if _pick_label in _names else 0
+                    _pname = st.text_input("Part name", value=_entities[_pick].get("name", _singular), key=f"part_name_{_cat}")
+                    _psrc = st.selectbox("Source (provenance)", PART_SOURCES, key=f"part_src_{_cat}")
+                    _pnote = st.text_area(
+                        "Annotation", key=f"part_note_{_cat}",
+                        placeholder="e.g. PA clinical isolate; high persister fraction",
+                    )
+                    _pref = ""
+                    if _cat == "phages":
+                        _sn = [s.get("name", "") for s in st.session_state.get("int_strains", [])]
+                        _pref = st.selectbox(
+                            "Reference host (bacterium it was characterised against)",
+                            _sn + ["(unspecified)"], key=f"part_refhost_{_cat}",
+                            help="Burst/latent/adsorption are phage×host properties — record the host so reuse elsewhere is flagged.",
+                        )
+                        _pref = "" if _pref == "(unspecified)" else _pref
+                    if st.button("💾 Save part", key=f"part_save_{_cat}", use_container_width=True):
+                        _nm = (_pname or "").strip()
+                        if not _nm:
+                            st.error("Please enter a part name.")
+                        else:
+                            _entry = {
+                                "source": _psrc,
+                                "annotation": _pnote or "",
+                                "params": _json_safe(copy.deepcopy(_entities[_pick])),
+                            }
+                            if _cat == "phages":
+                                _entry["reference_host"] = _pref
+                            _store[_nm] = _entry
+                            st.session_state.parts_library = _lib
+                            st.success(f"Saved {_singular} part '{_nm}'.")
+                            st.rerun()
+
+            if not _store:
+                st.caption("No saved parts yet.")
+            for _pn in list(_store.keys()):
+                _p = _store[_pn]
+                _ci, _cl, _cd = st.columns([6, 1, 1])
+                with _ci:
+                    _bits = [f"**{_pn}**", f"`{_p.get('source', '?')}`"]
+                    if _cat == "phages" and _p.get("reference_host"):
+                        _bits.append(f"· host *{_p['reference_host']}*")
+                    if _p.get("annotation"):
+                        _bits.append("— " + _p["annotation"])
+                    st.markdown(" ".join(_bits))
+                with _cl:
+                    if st.button("Load", key=f"part_load_{_cat}_{_pn}"):
+                        _cur = list(st.session_state.get(_meta["key"], []))
+                        if len(_cur) >= _meta["max"]:
+                            st.warning(f"At most {_meta['max']} {_meta['label'].lower()} are supported — remove one first.")
+                        else:
+                            _cur.append(copy.deepcopy(_p["params"]))
+                            st.session_state[_meta["key"]] = _cur
+                            clear_entity_widgets()
+                            _kind, _msg = "success", f"Added '{_pn}' to the configuration."
+                            if _cat == "phages" and _p.get("reference_host"):
+                                _sn = [s.get("name", "") for s in st.session_state.get("int_strains", [])]
+                                if _p["reference_host"] not in _sn:
+                                    _kind = "warning"
+                                    _msg = (f"Added '{_pn}', but it was characterised against "
+                                            f"'{_p['reference_host']}', which isn't among your current "
+                                            "strains — verify burst/latent/adsorption for your host.")
+                            st.session_state._flash = {"kind": _kind, "msg": _msg}
+                            st.session_state._nav_to = "Interactive Simulator"
+                            st.rerun()
+                with _cd:
+                    if st.button("🗑️", key=f"part_del_{_cat}_{_pn}"):
+                        _store.pop(_pn, None)
+                        st.session_state.parts_library = _lib
+                        st.rerun()
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────

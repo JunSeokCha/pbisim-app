@@ -21,7 +21,7 @@ def test_scenario_save_load_roundtrip_restores_full_config():
     at.session_state["int_t_end"] = 99.0
     at.session_state["ads_0_0"] = 4.2e-8
     at.session_state["sc_save_name"] = "RT"
-    at.session_state["current_page_radio"] = "Scenarios"
+    at.session_state["current_page_radio"] = "Library"
     at.run()
 
     # Save the current configuration.
@@ -59,7 +59,7 @@ def test_scenario_export_import_helpers_are_available_and_round_trip():
     at = AppTest.from_file(APP, default_timeout=150)
     at.run()
     at.session_state["sc_save_name"] = "A"
-    at.session_state["current_page_radio"] = "Scenarios"
+    at.session_state["current_page_radio"] = "Library"
     at.run()
     [b for b in at.button if "Save scenario" in (b.label or "")][0].click().run()
 
