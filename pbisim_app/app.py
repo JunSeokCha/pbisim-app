@@ -2169,6 +2169,23 @@ elif st.session_state.current_page == "Calibration":
         "manual-tuning panel and the pbisim-fit hand-off come next."
     )
 
+    # Re-seed the Calibration widgets from a persistent config BEFORE they render.
+    # Streamlit drops a widget's key from session_state whenever the widget isn't
+    # rendered on a rerun, so navigating to the Simulator (to change the model) and
+    # back would otherwise reset the filters / grouping / statistics. `fit_config`
+    # is a plain (non-widget) key, so it survives.
+    # Buttons and the file-uploader can't be re-seeded via session_state, so they
+    # are never persisted; everything else (filters/grouping/statistics/overlay
+    # selections) is.
+    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear"}
+    _fcfg = st.session_state.setdefault("fit_config", {})
+    for _wk, _wv in list(_fcfg.items()):
+        if _wk not in st.session_state:
+            try:
+                st.session_state[_wk] = _wv
+            except Exception:
+                pass  # widget type refuses assignment (e.g. a button) — skip it
+
     # ── 1. Upload + column mapping ───────────────────────────────────────────
     st.markdown("### 1 · Upload data")
     _up = st.file_uploader("Experimental data (CSV)", type=["csv"], key="fit_csv")
@@ -2332,7 +2349,14 @@ elif st.session_state.current_page == "Calibration":
 
         if st.button("🗑️ Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None
+            st.session_state.fit_config = {}
             st.rerun()
+
+    # Save the current Calibration widget selections to the persistent config so they
+    # survive navigation (see the re-seed block at the top of this page).
+    for _wk in list(st.session_state.keys()):
+        if _wk.startswith("fit_") and _wk not in _FIT_NOPERSIST:
+            st.session_state.fit_config[_wk] = st.session_state[_wk]
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────
