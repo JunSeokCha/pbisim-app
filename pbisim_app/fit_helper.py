@@ -9,8 +9,6 @@ feeds pbisim-fit directly when that integration lands.
 
 from __future__ import annotations
 
-import dataclasses
-
 import numpy as np
 import pandas as pd
 
@@ -128,58 +126,34 @@ def aggregate_observations(long_df, stat="raw", band=None):
 
 
 # ── Manual parameter tuning (Phase B) ───────────────────────────────────────────
-# Each knob is a multiplicative factor applied uniformly to one ModelConfig array
-# field (for the live overlay) and to the matching per-entity GUI keys (when the
-# tuning is baked back into the model). Keeping the map here — free of Streamlit —
-# lets the overlay math and the "apply to model" step share one source of truth.
-TUNING_KNOBS = [
-    {"key": "growth",     "label": "Growth rate",   "field": "growth_rates",      "scope": "bacteria", "gui_keys": ("growth_rate",)},
-    {"key": "adsorption", "label": "Adsorption",    "field": "adsorption_rates",  "scope": "phages",   "gui_keys": ("adsorption_s",)},
-    {"key": "burst",      "label": "Burst size",    "field": "burst_sizes",       "scope": "phages",   "gui_keys": ("burst_sizes",)},
-    {"key": "latent",     "label": "Latent period", "field": "latent_periods",    "scope": "phages",   "gui_keys": ("latent_periods",)},
-    {"key": "decay",      "label": "Phage decay",   "field": "phage_decay_rates", "scope": "phages",   "gui_keys": ("phage_decay_rates",)},
+# The tuning panel edits the model's *actual* parameter values (like the Interactive
+# Simulator), so each knob names the GUI-dict key it edits per entity. Adsorption is
+# handled separately in the UI because its storage is builder-mode specific (Direct
+# and Custom-Strains keep it in the pairwise ``ads_{strain}_{phage}`` session keys;
+# Binary-Genotypes keeps it on the phage dict as ``adsorption_s``).
+STRAIN_TUNABLES = [
+    {"key": "growth_rate", "label": "Growth rate (1/h)",  "fmt": "%g",   "default": 1.2},
+    {"key": "initial_B",   "label": "Initial density B₀", "fmt": "%.3e", "default": 1e7},
 ]
+PHAGE_TUNABLES = [
+    {"key": "burst_sizes",       "label": "Burst size",        "fmt": "%g", "default": 50.0},
+    {"key": "latent_periods",    "label": "Latent period (h)", "fmt": "%g", "default": 0.5},
+    {"key": "phage_decay_rates", "label": "Phage decay (1/h)", "fmt": "%g", "default": 0.1},
+]
+# adsorption_s is the phage-dict key used in Binary-Genotypes mode.
+ADSORPTION_PHAGE_KEYS = ("adsorption_s", "adsorption_rates")
 
 
-def apply_tuning_to_config(config, multipliers):
-    """Return a copy of *config* with each tunable array field scaled by its factor.
+def entity_param_key(entity, candidate_keys):
+    """Return the key an entity actually stores a parameter under (first match).
 
-    ``multipliers`` maps knob key -> factor. Factors of 1.0 (or missing knobs, or
-    absent config fields) are no-ops, so the original config is returned unchanged
-    when nothing is tuned.
+    Falls back to the first candidate so a fresh number-input seeds/writes a valid
+    key even on an entity that doesn't have it yet.
     """
-    changes = {}
-    for knob in TUNING_KNOBS:
-        factor = float(multipliers.get(knob["key"], 1.0))
-        if factor == 1.0:
-            continue
-        arr = getattr(config, knob["field"], None)
-        if arr is None:
-            continue
-        changes[knob["field"]] = np.asarray(arr, dtype=float) * factor
-    return dataclasses.replace(config, **changes) if changes else config
-
-
-def bake_tuning_into_entities(strains, phages, multipliers):
-    """Scale the per-entity GUI dicts by the tuning factors, in place.
-
-    Mirrors :func:`apply_tuning_to_config` at the GUI-dict level so a tuned overlay
-    can be committed to the actual model (and then saved as reusable Parts). Only
-    keys that already exist on an entity are scaled. Returns the number of scalar
-    values changed.
-    """
-    changed = 0
-    for knob in TUNING_KNOBS:
-        factor = float(multipliers.get(knob["key"], 1.0))
-        if factor == 1.0:
-            continue
-        entities = strains if knob["scope"] == "bacteria" else phages
-        for ent in entities or []:
-            for gk in knob["gui_keys"]:
-                if gk in ent and isinstance(ent[gk], (int, float)):
-                    ent[gk] = float(ent[gk]) * factor
-                    changed += 1
-    return changed
+    for k in candidate_keys:
+        if k in entity:
+            return k
+    return candidate_keys[0]
 
 
 def fit_residual(model_time, model_signal, data_time, data_value, log_scale):

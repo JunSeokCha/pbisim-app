@@ -215,20 +215,24 @@ python -m streamlit run pbisim_app/app.py
   `fit_config` session key (survives) and re-seed the widgets from it at the top of
   the page, before they render. Buttons + the file-uploader are excluded from the
   shadow (they can't be re-seeded). Regression test `tests/test_calibration.py`.
-- **Phase B — manual parameter tuning** on the Calibration page:
-  - `fit_helper.TUNING_KNOBS` + `apply_tuning_to_config()` (scales ModelConfig
-    array fields `growth_rates`/`adsorption_rates`/`burst_sizes`/`latent_periods`/
-    `phage_decay_rates`) + `bake_tuning_into_entities()` (scales the matching GUI
-    dict keys `growth_rate`/`adsorption_s`/`burst_sizes`/`latent_periods`/
-    `phage_decay_rates` in place). Pure/no-Streamlit → unit-tested.
-  - Overlay section 5: a "🎛 Manual parameter tuning" expander with a ×multiplier
-    per knob (uniform across strains/phages). Overlay applies them on top of the
-    nominal GUI config, so the fit updates without leaving the page. The link factor
-    (od_to_cfu / rlu_per_cell) is keyed per-observable (`fit_link_{obs}`).
-  - **↺ Reset tuning** clears the multipliers; **📌 Apply tuning to model** bakes
-    them into `int_strains`/`int_phages` (→ savable as Parts in the Library), clears
-    the multipliers, and invalidates the cached simulation result.
-  - Tests: `test_fit_helper.py` (+2), `test_calibration.py` (+1). **60 tests pass.**
+- **Phase B — manual parameter tuning** on the Calibration page (section 5, a
+  "🎛 Manual parameter tuning" expander). Edits the model's **actual absolute
+  parameter values** (like the ModelBuilder), *not* multipliers — the widgets read
+  from / write to the live `int_strains`/`int_phages` dicts and session keys, so an
+  edit **is** the model (no separate apply step) and is savable as a Part.
+  - Exposed: global K / Ks; per strain growth_rate + initial_B; per phage burst /
+    latent / decay; and **adsorption**, which is builder-mode specific — Direct &
+    Custom-Strains store it in the pairwise `ads_{i}_{j}` session keys (edited per
+    strain×phage pair), Binary-Genotypes on the phage dict `adsorption_s`. The link
+    factor (od_to_cfu / rlu_per_cell) is keyed per-observable (`fit_link_{obs}`).
+  - `fit_helper.STRAIN_TUNABLES`/`PHAGE_TUNABLES`/`ADSORPTION_PHAGE_KEYS` +
+    `entity_param_key()` (mode-aware key resolution). Pure/no-Streamlit → unit-tested.
+  - `fit_edit_*` widgets are excluded from the `fit_config` shadow (the dicts are
+    authoritative + already persistent; re-seeding a stale copy would clobber edits).
+  - Tests: `test_fit_helper.py`, `test_calibration.py`. **60 tests pass.** (Earlier
+    in this session an initial ×multiplier version shipped, then was replaced per
+    owner feedback: multipliers were inconvenient and silently missed Direct-mode
+    adsorption, which lives in `adsorption_rates`/`ads_{i}_{j}`, not `adsorption_s`.)
 
 **Known gaps / still open after this session:**
 - CS/CR (26 `cr_*` fields on `PhageStrain`/`BacterialStrain`) not exposed in BRG UI —

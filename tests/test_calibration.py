@@ -58,8 +58,8 @@ def test_calibration_config_survives_navigation():
     assert len(at.exception) == 0
 
 
-def test_manual_tuning_applies_to_model():
-    """Phase B: a tuning multiplier bakes into the live model's GUI dicts."""
+def test_manual_tuning_edits_model_directly():
+    """Phase B: editing an absolute parameter value updates the live model dict."""
     at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     at.session_state["fit_dataset"] = {
@@ -69,12 +69,14 @@ def test_manual_tuning_applies_to_model():
     at.session_state["current_page_radio"] = "Calibration"
     at.run()
 
-    before = at.session_state["int_phages"][0]["burst_sizes"]
-    at.session_state["fit_tune_burst"] = 3.0
+    # set an absolute burst size on the phage tuning input, exactly like ModelBuilder
+    at.session_state["fit_edit_p_burst_sizes_0"] = 137.0
     at.run()
-    [b for b in at.button if b.key == "fit_tune_apply"][0].click().run()
+    # the live model dict reflects the edit directly — no separate apply step
+    assert at.session_state["int_phages"][0]["burst_sizes"] == 137.0
+    # and it is NOT shadowed into fit_config (dict stays authoritative)
+    assert "fit_edit_p_burst_sizes_0" not in at.session_state["fit_config"]
 
-    # the multiplier is baked into the model, then cleared back to unity
-    assert at.session_state["int_phages"][0]["burst_sizes"] == before * 3.0
-    assert "fit_tune_burst" not in at.session_state or at.session_state["fit_tune_burst"] == 1.0
+    # the overlay runs against the edited model
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
     assert len(at.exception) == 0

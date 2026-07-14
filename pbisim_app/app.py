@@ -69,9 +69,10 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
-    TUNING_KNOBS,
-    apply_tuning_to_config,
-    bake_tuning_into_entities,
+    STRAIN_TUNABLES,
+    PHAGE_TUNABLES,
+    ADSORPTION_PHAGE_KEYS,
+    entity_param_key,
 )
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,
@@ -2180,8 +2181,7 @@ elif st.session_state.current_page == "Calibration":
     # Buttons and the file-uploader can't be re-seeded via session_state, so they
     # are never persisted; everything else (filters/grouping/statistics/overlay
     # selections) is.
-    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
-                      "fit_load", "fit_tune_reset", "fit_tune_apply"}
+    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear", "fit_load"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk not in st.session_state:
@@ -2305,48 +2305,76 @@ elif st.session_state.current_page == "Calibration":
                 _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
             # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
-            # Multipliers applied uniformly on top of the current model, so the
-            # overlay updates without leaving this page. "Apply" bakes them into
-            # the model (then savable as Parts in the Library); "Reset" clears them.
-            _tune = {k["key"]: float(st.session_state.get(f"fit_tune_{k['key']}", 1.0)) for k in TUNING_KNOBS}
-            _n_tuned = sum(1 for v in _tune.values() if v != 1.0)
-            with st.expander(f"🎛 Manual parameter tuning{f' · {_n_tuned} active' if _n_tuned else ''}", expanded=_n_tuned > 0):
-                st.caption("Scale fit-relevant parameters (× the current model value) and re-overlay to match. "
-                           "Uniform across all strains/phages — for the link factor use the box above.")
-                _tcols = st.columns(len(TUNING_KNOBS))
-                for _kc, _knob in zip(_tcols, TUNING_KNOBS):
-                    with _kc:
-                        _tune[_knob["key"]] = st.number_input(
-                            f"{_knob['label']} ×", min_value=0.0, value=_tune[_knob["key"]],
-                            step=0.1, format="%g", key=f"fit_tune_{_knob['key']}")
-                _bt1, _bt2 = st.columns(2)
-                with _bt1:
-                    if st.button("↺ Reset tuning", key="fit_tune_reset", use_container_width=True):
-                        for _knob in TUNING_KNOBS:
-                            st.session_state.pop(f"fit_tune_{_knob['key']}", None)
-                            st.session_state.fit_config.pop(f"fit_tune_{_knob['key']}", None)
-                        st.rerun()
-                with _bt2:
-                    if st.button("📌 Apply tuning to model", key="fit_tune_apply", use_container_width=True,
-                                 disabled=_n_tuned == 0,
-                                 help="Bake the multipliers into the current strains/phages so they become the "
-                                      "live model (then savable as reusable Parts in the Library)."):
-                        _changed = bake_tuning_into_entities(
-                            st.session_state.get("int_strains", []),
-                            st.session_state.get("int_phages", []), _tune)
-                        for _knob in TUNING_KNOBS:
-                            st.session_state.pop(f"fit_tune_{_knob['key']}", None)
-                            st.session_state.fit_config.pop(f"fit_tune_{_knob['key']}", None)
-                        st.session_state.simulation_result = None
-                        st.session_state._flash = {"kind": "success",
-                                                   "msg": f"Baked tuning into the model ({_changed} value(s) scaled). "
-                                                          "Save the tuned strains/phages as Parts in the Library."}
-                        st.rerun()
+            # Edit the model's ACTUAL parameter values (absolute, per entity — like
+            # the Interactive Simulator), not multipliers. These widgets read from
+            # and write to the shared int_strains / int_phages dicts, so edits ARE
+            # the live model: no separate "apply" step, and they're savable as Parts.
+            # The widgets are seeded from the dict each render (value=), so they stay
+            # in sync with edits made on the Simulator page.
+            _tstrains = st.session_state.get("int_strains", [])
+            _tphages = st.session_state.get("int_phages", [])
+            with st.expander("🎛 Manual parameter tuning", expanded=False):
+                st.caption("Edit the model's real parameter values, then re-overlay. Changes update the live "
+                           "model directly (no separate apply step) and can be saved as Parts in the Library.")
+
+                gk1, gk2 = st.columns(2)
+                with gk1:
+                    st.session_state["int_carrying_capacity"] = st.number_input(
+                        "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                        format="%.3e", key="fit_edit_K")
+                with gk2:
+                    st.session_state["int_monod_constant"] = st.number_input(
+                        "Monod constant (Ks)", value=float(st.session_state.get("int_monod_constant", 0.3)),
+                        format="%g", key="fit_edit_Ks")
+
+                if _tstrains:
+                    st.markdown("**Bacterial strains**")
+                for _si, _s in enumerate(_tstrains):
+                    st.markdown(f"*{_s.get('name', f'Strain {_si}')}*")
+                    _scols = st.columns(len(STRAIN_TUNABLES))
+                    for _sc, _knob in zip(_scols, STRAIN_TUNABLES):
+                        with _sc:
+                            _s[_knob["key"]] = st.number_input(
+                                _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
+                                format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
+
+                # Adsorption is a strain×phage property; its storage is builder-mode
+                # specific. Direct / Custom-Strains keep it in the pairwise
+                # ads_{strain}_{phage} session keys (edited per pair here); Binary-
+                # Genotypes keeps it on the phage dict as adsorption_s.
+                _ads_pairwise = not st.session_state.get("int_builder_mode", "").startswith("Binary")
+
+                if _tphages:
+                    st.markdown("**Phages**")
+                for _pj, _p in enumerate(_tphages):
+                    st.markdown(f"*{_p.get('name', f'Phage {_pj}')}*")
+                    _pcols = st.columns(len(PHAGE_TUNABLES))
+                    for _pc, _knob in zip(_pcols, PHAGE_TUNABLES):
+                        with _pc:
+                            _p[_knob["key"]] = st.number_input(
+                                _knob["label"], value=float(_p.get(_knob["key"], _knob["default"]) or 0.0),
+                                format=_knob["fmt"], key=f"fit_edit_p_{_knob['key']}_{_pj}")
+                    # adsorption inputs (per strain in pairwise modes)
+                    if _ads_pairwise and _tstrains:
+                        _acols = st.columns(len(_tstrains))
+                        for _si, _s in enumerate(_tstrains):
+                            _adk = f"ads_{_si}_{_pj}"
+                            with _acols[_si]:
+                                st.session_state[_adk] = st.number_input(
+                                    f"Adsorption → {_s.get('name', f'Strain {_si}')}",
+                                    value=float(st.session_state.get(_adk, 1e-8 if _si == 0 else 0.0)),
+                                    format="%.3e", key=f"fit_edit_ads_{_si}_{_pj}")
+                    elif not _ads_pairwise:
+                        _adk = entity_param_key(_p, ADSORPTION_PHAGE_KEYS)
+                        _p[_adk] = st.number_input(
+                            "Adsorption (adsorption_s)", value=float(_p.get(_adk, 5e-8) or 0.0),
+                            format="%.3e", key=f"fit_edit_adss_{_pj}")
+                st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some builder "
+                           "modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
 
             if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
-                    _config = apply_tuning_to_config(_config, _tune)
                     _B0 = float(np.sum(_iB))
                     _method = st.session_state.get("int_solver_method", "BDF")
                     _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
@@ -2399,9 +2427,13 @@ elif st.session_state.current_page == "Calibration":
             st.rerun()
 
     # Save the current Calibration widget selections to the persistent config so they
-    # survive navigation (see the re-seed block at the top of this page).
+    # survive navigation (see the re-seed block at the top of this page). The
+    # parameter-tuning widgets (fit_edit_*) are excluded: they mirror the live
+    # int_strains/int_phages dicts (authoritative + already persistent), so caching
+    # and re-seeding them would let a stale copy override edits made elsewhere.
     for _wk in list(st.session_state.keys()):
-        if _wk.startswith("fit_") and _wk not in _FIT_NOPERSIST:
+        if (_wk.startswith("fit_") and _wk not in _FIT_NOPERSIST
+                and not _wk.startswith("fit_edit_")):
             st.session_state.fit_config[_wk] = st.session_state[_wk]
 
 

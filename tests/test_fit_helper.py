@@ -5,8 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-import dataclasses
-
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -14,20 +12,11 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
-    TUNING_KNOBS,
-    apply_tuning_to_config,
-    bake_tuning_into_entities,
+    STRAIN_TUNABLES,
+    PHAGE_TUNABLES,
+    ADSORPTION_PHAGE_KEYS,
+    entity_param_key,
 )
-
-
-@dataclasses.dataclass
-class _FakeConfig:
-    """Minimal stand-in for a pbisim ModelConfig (only the tunable fields)."""
-    growth_rates: object = None
-    adsorption_rates: object = None
-    burst_sizes: object = None
-    latent_periods: object = None
-    phage_decay_rates: object = None
 
 
 class _FakeResult:
@@ -109,37 +98,21 @@ def test_aggregate_observations_mean_median_band():
     assert md["lo"].notna().all() and (md["hi"] >= md["lo"]).all()
 
 
-def test_apply_tuning_to_config_scales_only_nonunit_knobs():
-    cfg = _FakeConfig(
-        growth_rates=np.array([1.0, 2.0]),
-        adsorption_rates=np.array([[1e-8]]),
-        burst_sizes=np.array([[50.0]]),
-        latent_periods=np.array([[0.5]]),
-        phage_decay_rates=np.array([0.1]),
-    )
-    tuned = apply_tuning_to_config(cfg, {"growth": 2.0, "decay": 0.5})
-    assert np.allclose(tuned.growth_rates, [2.0, 4.0])   # scaled ×2
-    assert np.allclose(tuned.phage_decay_rates, [0.05])  # scaled ×0.5
-    # untouched knobs are unchanged
-    assert np.allclose(tuned.burst_sizes, [[50.0]])
-    # original is not mutated
-    assert np.allclose(cfg.growth_rates, [1.0, 2.0])
-    # a no-op tuning returns the config unchanged (same object)
-    assert apply_tuning_to_config(cfg, {"growth": 1.0}) is cfg
+def test_entity_param_key_is_builder_mode_aware():
+    # adsorption is stored under different phage-dict keys per builder mode
+    brg_phage = {"adsorption_s": 5e-8, "burst_sizes": 50.0}
+    legacy_phage = {"adsorption_rates": 1e-8, "burst_sizes": 50.0}
+    assert entity_param_key(brg_phage, ADSORPTION_PHAGE_KEYS) == "adsorption_s"
+    assert entity_param_key(legacy_phage, ADSORPTION_PHAGE_KEYS) == "adsorption_rates"
+    # falls back to the first candidate when the entity has neither yet
+    assert entity_param_key({}, ADSORPTION_PHAGE_KEYS) == ADSORPTION_PHAGE_KEYS[0]
 
 
-def test_bake_tuning_into_entities_scales_gui_dicts_in_place():
-    strains = [{"name": "PA", "growth_rate": 1.2}]
-    phages = [{"name": "phi", "adsorption_s": 1e-8, "burst_sizes": 50.0,
-               "latent_periods": 0.5, "phage_decay_rates": 0.1}]
-    n = bake_tuning_into_entities(strains, phages,
-                                  {"growth": 2.0, "adsorption": 10.0, "burst": 1.0})
-    assert n == 2  # growth_rate + adsorption_s changed; burst unchanged
-    assert strains[0]["growth_rate"] == 2.4
-    assert phages[0]["adsorption_s"] == 1e-7
-    assert phages[0]["burst_sizes"] == 50.0  # ×1.0 no-op
-    # every knob key resolves to a real scope
-    assert {k["scope"] for k in TUNING_KNOBS} == {"bacteria", "phages"}
+def test_tunable_registries_cover_the_fit_parameters():
+    assert {k["key"] for k in STRAIN_TUNABLES} == {"growth_rate", "initial_B"}
+    # burst / latent / decay tuned per phage; adsorption is handled separately
+    assert {k["key"] for k in PHAGE_TUNABLES} == {"burst_sizes", "latent_periods", "phage_decay_rates"}
+    assert "adsorption_s" in ADSORPTION_PHAGE_KEYS
 
 
 def test_fit_residual_zero_and_positive():
