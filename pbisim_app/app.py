@@ -128,6 +128,60 @@ def render_regimen_config(prefix, items, target, default_amount, unit_label,
             "interval": float(interval), "n": int(n_doses)}
 
 
+def render_mutation_graph_editor(strains, key_prefix):
+    """Edit the named mutation-transition graph (shared `int_transitions`).
+
+    Each entry is {"from": strain_name, "to": strain_name, "rate": mu}. Works for
+    any number of strains, so it lifts the 2^m restriction of the per-locus shortcut.
+    """
+    transitions = st.session_state.get("int_transitions", [])
+    names = [s["name"] for s in strains]
+    for idx, tr in enumerate(list(transitions)):
+        c1, c2, c3, c4 = st.columns([3, 3, 3, 1])
+        with c1:
+            tr["from"] = st.selectbox("From", names,
+                                      index=names.index(tr["from"]) if tr.get("from") in names else 0,
+                                      key=f"{key_prefix}_src_{idx}")
+        with c2:
+            tr["to"] = st.selectbox("To", names,
+                                    index=names.index(tr["to"]) if tr.get("to") in names else 0,
+                                    key=f"{key_prefix}_dest_{idx}")
+        with c3:
+            tr["rate"] = st.number_input("Rate (mu)", value=float(tr.get("rate", 1e-7)),
+                                         format="%.2e", key=f"{key_prefix}_rate_{idx}")
+        with c4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️", key=f"{key_prefix}_del_{idx}"):
+                transitions.pop(idx)
+                st.session_state.int_transitions = transitions
+                st.rerun()
+    if st.button("➕ Add transition", key=f"{key_prefix}_add"):
+        transitions.append({"from": names[0] if names else "", "to": names[0] if names else "", "rate": 1e-7})
+        st.session_state.int_transitions = transitions
+        st.rerun()
+
+
+def mutation_matrix_from_transitions(transitions, strains):
+    """Build the (n,n) mass-conserving mutation matrix from a named transition graph.
+
+    Convention (matches pbisim): M[dest, origin] = rate origin→dest; the diagonal
+    M[o, o] = -(sum of outflows from o). Returns None if there are no valid edges.
+    """
+    n = len(strains)
+    name_to_idx = {s["name"]: i for i, s in enumerate(strains)}
+    M = np.zeros((n, n))
+    any_edge = False
+    for tr in transitions:
+        o = name_to_idx.get(tr.get("from"))
+        d = name_to_idx.get(tr.get("to"))
+        r = float(tr.get("rate", 0.0))
+        if o is not None and d is not None and o != d and r > 0:
+            M[d, o] += r
+            M[o, o] -= r
+            any_edge = True
+    return M if any_edge else None
+
+
 def arm_dose_events(arm):
     """Build the DoseEvent list for a treatment-arm config from its regimens."""
     doses = []
@@ -996,8 +1050,13 @@ def build_nominal_config_from_gui():
                         res_rates[1:, p_idx] = p.get("lytic_resumption_rate_r", 0.0)
                 builder = builder.with_pseudolysogeny(hibernation_rate=hib_rates, lytic_resumption_rate=res_rates)
                 
-        # Mutations
-        if n_phages > 0 and n_bacteria == 2**n_phages:
+        # Mutations. A custom mutation-network graph (any n_bacteria) takes
+        # precedence; otherwise fall back to the per-phage-locus shortcut, which
+        # pbisim only supports when n_bacteria == 2**n_phages.
+        _mut_M = mutation_matrix_from_transitions(st.session_state.get("int_transitions", []), strains)
+        if _mut_M is not None:
+            builder = builder.with_mutations(mutation_rates=_mut_M)
+        elif n_phages > 0 and n_bacteria == 2**n_phages:
             phg_res_rates = st.session_state.get("direct_phg_res_rates", [1e-7] * n_phages)
             builder = builder.with_mutations(phage_resistance_rates=phg_res_rates)
             
@@ -1504,8 +1563,11 @@ def generate_reproduction_code() -> str:
             code.append(f"    f_lyse={abx['f_lyse']}, inoculum_effect_constant={abx['inoculum_effect_constant'] or None}")
             code.append(f")")
 
-        # mutations
-        if phages and len(strains) == 2**len(phages):
+        # mutations — custom graph takes precedence over the per-locus shortcut
+        _repro_M = mutation_matrix_from_transitions(st.session_state.get("int_transitions", []), strains)
+        if _repro_M is not None:
+            code.append(f"builder = builder.with_mutations(mutation_rates=np.array({_repro_M.tolist()}))")
+        elif phages and len(strains) == 2**len(phages):
             phg_res_rates = st.session_state.get("direct_phg_res_rates", [1e-7] * len(phages))
             code.append(f"builder = builder.with_mutations(phage_resistance_rates={phg_res_rates})")
 
@@ -3386,7 +3448,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     st.markdown("---")
                     st.markdown("### 🧬 Bacterial Mutations (WT → R)")
                     if n_strains == 2**n_phages:
-                        st.caption("Bacterial mutation rates can be configured for each phage locus:")
+                        st.caption("Per-phage-locus shortcut (binary-genotype layout, n_strains = 2^n_phages):")
                         phg_res_rates = []
                         for j in range(n_phages):
                             res_rate = st.number_input(
@@ -3397,8 +3459,15 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                             phg_res_rates.append(res_rate)
                         st.session_state["direct_phg_res_rates"] = phg_res_rates
-                    else:
-                        st.info("💡 For mutation matrices to be auto-generated in Direct mode, the number of strains must equal 2^(number of phages). Otherwise, mutation rates default to 0.")
+
+                    with st.expander("🔄 Custom mutation network (any number of strains)",
+                                     expanded=(n_strains != 2**n_phages)):
+                        st.caption(
+                            "Define arbitrary strain→strain mutation transitions. Works for any "
+                            "strain count (lifts the 2^n_phages requirement). **If any transition "
+                            "is added here it overrides the per-locus shortcut above.**"
+                        )
+                        render_mutation_graph_editor(strains, key_prefix="dir_trans")
 
         # ── BINARY RESISTANCE GENOTYPES (BRG) ──
         elif builder_mode == "Binary Genotypes (BRG)":
