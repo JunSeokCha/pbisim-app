@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **50 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **54 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -37,8 +37,10 @@ pbisim-app/
 │   │                        generated code, captures stdout + matplotlib figures.
 │   ├── sweep_helper.py      ModelConfig mutation helpers for 1D/2D parameter sweeps
 │   │                        and dose-response sweeps; vector padding for MOI sweeps.
-│   └── trial_helper.py      IIV distribution factory, ClinicalTrial orchestration,
-│                            Plotly KM + box plots, metric dataframe helpers.
+│   ├── trial_helper.py      IIV distribution factory, ClinicalTrial orchestration,
+│   │                        Plotly KM + box plots, metric dataframe helpers.
+│   └── fit_helper.py        Calibration/Phase-A: observable registry (CFU/PFU/OD/lum),
+│                            data ingestion (normalize→pbisim-fit long format), overlay/RMSE.
 ├── prompts/
 │   └── system_prompt.md     ~400-line hand-maintained pbisim API reference for the
 │                            AI assistant. Sections 1–11 original; §12–17 added
@@ -51,7 +53,8 @@ pbisim-app/
 │   ├── test_self_healing.py 2 tests — self-healing loop and history rollback
 │   ├── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
 │   ├── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
-│   └── test_parts.py         2 tests — parts save/load/export, host-tag (AppTest)
+│   ├── test_parts.py         2 tests — parts save/load/export, host-tag (AppTest)
+│   └── test_fit_helper.py    4 tests — observable registry, ingestion, overlay/RMSE
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -66,6 +69,7 @@ pbisim-app/
 | Dose-Response Sweeps | Log/Lin dose range per agent, MOI scaling, vector padding warnings, color-coded trajectories. |
 | Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
 | Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
+| Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → overlay the current model's prediction vs observations (arm multiselect) with live RMSE. Extensible observable registry (CFU/PFU/OD/luminescence). Phase A of the pbisim-fit integration. |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
 | Library | Two sections: **💾 Scenarios** (save/load full-config snapshots) and **🧬 Parts** (composable bacteria/phages/antibiotics — save a current entity, load into config, host-tagged phages); each export/import as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — they tracked the pbisim tutorials, which change independently.) |
 
@@ -131,7 +135,7 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 50 passed
+# Full suite — expected: 54 passed
 python -m pytest tests/ -q
 
 # By file:
@@ -360,7 +364,7 @@ Six owner-requested feature updates (all UI-verified via streamlit AppTest: ever
    shown at the top of the trial outputs.
 
 Regression tests in new `tests/test_trial_features.py` (regimen builder, distribution
-metrics, PK/PD trajectory plots). **50 tests passing.**
+metrics, PK/PD trajectory plots). **54 tests passing.**
 
 **Note:** the Clinical Trials page no longer reads the simulator's Environment & Dosing
 `int_doses` — trial doses come solely from the new Trial Dosing editor.
@@ -382,7 +386,7 @@ metrics, PK/PD trajectory plots). **50 tests passing.**
   defaults) with help text noting it drives the equilibrium IC. The engine already wired
   `fitness_cost` correctly (fc=0 → resistant neutral → resistant-dominated equilibrium;
   fc=0.05 → WT-dominated `[1e7, 20]`); the input existed but defaulted to 0, which
-  produced the fully-resistant equilibrium the owner observed. **50 tests passing.**
+  produced the fully-resistant equilibrium the owner observed. **54 tests passing.**
 
 **Note:** the old fixed-arm checkboxes (`run_control`/`run_phage`/`run_abx`/`run_combo`)
 and the single Trial Dosing editor are gone — replaced by the Treatment Arms builder.
@@ -460,3 +464,39 @@ future `pbisim-fit` "fit → save part" pipeline. Persistence stays JSON export/
 **Design status:** both preset tiers now DONE — **Tier 1 Scenarios** + **Tier 2 Parts**.
 Future: `pbisim-fit` → save-part pipeline; a real per-user DB (needs auth+storage) if the
 JSON export/import backbone is outgrown.
+
+## Done this session (2026-07-14) — mutation-graph fix, segfault hardening, Calibration (Phase A)
+
+- **Direct-mode custom mutation network**: the 2^m-strains rule was a pbisim-app
+  limitation (only used `with_mutations(phage_resistance_rates=...)`); added a
+  strain→strain→rate graph editor (shared `int_transitions`) → builds the (n,n)
+  mass-conserving matrix (`mutation_matrix_from_transitions`) → `with_mutations(
+  mutation_rates=...)`. Any strain count now supports mutation.
+- **SIGSEGV (exit 139) hardening** for Render: forced `matplotlib.use("Agg")` before
+  pyplot (GUI backend from Streamlit's thread segfaults headless); Dockerfile
+  `MPLBACKEND=Agg` + `OMP/OPENBLAS/MKL/NUMEXPR_NUM_THREADS=1` (OpenBLAS reads the host
+  core count and over-spawns threads in the container → classic segfault); clinical-
+  trial `n_jobs` default 4→1 (joblib loky forking); enabled `faulthandler`. Root cause
+  was environmental (host placement / thread over-subscription), exposed by frequent
+  auto-deploys — the thread cap fixes it deterministically. Crashes stopped.
+- **Calibration page (Phase A of pbisim-fit integration)** — `pbisim_app/fit_helper.py`:
+  - **Observable registry** (`OBSERVABLES`): CFU / PFU / OD / **luminescence**, each
+    declaring the model compartments it reflects + a **link** (None | ÷param | ×param).
+    OD = biomass ÷ `od_to_cfu`; luminescence = *active* biomass (`B` only) × `rlu_per_cell`.
+    Adding a signal = one entry (extensible, per owner's bioluminescence use case).
+  - **Ingestion** (`normalize_fit_dataframe`): any CSV → canonical **pbisim-fit long
+    format** (`time, arm, observable, value` + per-arm MOI conditions). Auto-detects the
+    pbisim-fit format; a column-mapping UI handles Monolix (`ID,TIME,DV,MOI,PHAGE,EXPERI`,
+    DV=OD, PHAGE×MOI=arm). Validated against the real `monophage_data`/`ck_data` (33 arms).
+  - **Overlay**: arm **multiselect** → simulate the current model per arm (`initial_P =
+    MOI × B0`) → overlay predicted vs observed + per-arm **RMSE** (log for CFU/PFU).
+  - The app does NOT import pbisim_fit yet (kept out of the deploy); it mirrors the schema
+    so the ingested dataset feeds pbisim-fit directly when wired.
+  - Tests: `tests/test_fit_helper.py` (registry, links, Monolix ingestion, RMSE). **54 passing.**
+
+**Design plan (agreed):** Phase A DONE. **Phase B** = manual parameter tuning (focused
+sliders + the link factors `od_to_cfu`/`rlu_per_cell`, re-overlay, save tuned params as a
+Part). **Phase C** = pbisim-fit hand-off (manual tune → `NLSRefiner` warm-start → NPE
+posterior → host-tagged Part → posterior→IIV for trials). Manual tuning is kept as the
+human-in-the-loop / warm-start front-end, not deleted. Luminescence fitting later needs
+pbisim-fit to add the observable (cross-package coordination item).

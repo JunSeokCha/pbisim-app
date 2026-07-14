@@ -62,6 +62,12 @@ from pbisim.trial.clinical import TreatmentArm
 
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
+from pbisim_app.fit_helper import (
+    OBSERVABLES,
+    predicted_observable,
+    normalize_fit_dataframe,
+    fit_residual,
+)
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,
     run_trial_simulation,
@@ -497,6 +503,9 @@ def _init_app_state():
     if "parts_library" not in st.session_state:
         # {category: {name: {"source","annotation","reference_host?","params"}}}
         st.session_state.parts_library = {"bacteria": {}, "phages": {}, "antibiotics": {}}
+    if "fit_dataset" not in st.session_state:
+        # {"long": DataFrame[time,arm,observable,value], "conditions": {arm: {"moi": float}}}
+        st.session_state.fit_dataset = None
 
 
 _init_app_state()
@@ -1798,7 +1807,7 @@ with st.sidebar:
     if _pending_nav:
         st.session_state.current_page_radio = _pending_nav
 
-    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "AI Assistant", "Library"]
+    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "Calibration", "AI Assistant", "Library"]
     st.session_state.current_page = st.radio(
         "Navigation",
         _pages,
@@ -2127,6 +2136,140 @@ if st.session_state.current_page == "Library":
                         _store.pop(_pn, None)
                         st.session_state.parts_library = _lib
                         st.rerun()
+
+
+# ── Calibration Page (Phase A: data upload + overlay + fit metric) ────────────
+elif st.session_state.current_page == "Calibration":
+    st.title("📐 Calibration — data overlay")
+    st.caption(
+        "Upload experimental data and overlay the **current model's** prediction (configured in "
+        "the Interactive Simulator) on the observations. Tune parameters there to match; a "
+        "manual-tuning panel and the pbisim-fit hand-off come next."
+    )
+
+    # ── 1. Upload + column mapping ───────────────────────────────────────────
+    st.markdown("### 1 · Upload data")
+    _up = st.file_uploader("Experimental data (CSV)", type=["csv"], key="fit_csv")
+    if _up is not None:
+        try:
+            _raw = pd.read_csv(_up)
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
+            _raw = None
+        if _raw is not None:
+            st.dataframe(_raw.head(8), use_container_width=True)
+            _cols = list(_raw.columns)
+            _low = [c.lower() for c in _cols]
+
+            def _guess(cands, default=0):
+                for c in cands:
+                    if c in _low:
+                        return _low.index(c)
+                return default
+
+            _canonical = all(k in _low for k in ("time", "arm", "observable", "value"))
+            if _canonical:
+                st.success("Detected pbisim-fit long format (time, arm, observable, value).")
+            with st.expander("🔧 Column mapping", expanded=not _canonical):
+                _tc = st.selectbox("Time column", _cols, index=_guess(["time"]))
+                _vc = st.selectbox("Value (measurement) column", _cols, index=_guess(["value", "dv"]))
+                _obs_from_col = st.checkbox("Observable is in a column", value=("observable" in _low))
+                if _obs_from_col:
+                    _obs = st.selectbox("Observable column", _cols, index=_guess(["observable"]))
+                else:
+                    _obs = st.selectbox("Observable type (fixed for all rows)", list(OBSERVABLES),
+                                        format_func=lambda k: OBSERVABLES[k]["label"])
+                _default_arms = [c for c in _cols if c.lower() in ("phage", "moi", "arm", "experi", "experi_num")]
+                _ac = st.multiselect("Arm-defining column(s)", _cols, default=_default_arms or ([_cols[0]] if _cols else []))
+                _mc = st.selectbox("Phage-dose / MOI column (optional — drives the simulated dose per arm)",
+                                   ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
+                _mc = None if _mc == "(none)" else _mc
+            if st.button("📥 Load dataset", key="fit_load", use_container_width=True):
+                try:
+                    _long, _conds = normalize_fit_dataframe(_raw, _tc, _vc, _obs, _ac, _mc)
+                    st.session_state.fit_dataset = {"long": _long, "conditions": _conds}
+                    st.success(f"Loaded {len(_long)} points across {_long['arm'].nunique()} arms "
+                               f"({_long['observable'].nunique()} observable(s)).")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not normalise: {e}")
+
+    # ── 2. Overlay model vs data ─────────────────────────────────────────────
+    _ds = st.session_state.get("fit_dataset")
+    if not _ds:
+        st.info("Upload a dataset above to begin.")
+    else:
+        _long = _ds["long"]
+        _conds = _ds["conditions"]
+        _arms = sorted(_long["arm"].unique())
+        _obs_keys = sorted(_long["observable"].unique())
+        st.markdown("### 2 · Overlay")
+        st.caption(f"{len(_arms)} arms · pick which to overlay against the current model.")
+
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            _sel_arms = st.multiselect("Arms to overlay", _arms, default=_arms[:min(4, len(_arms))], key="fit_arms")
+        with oc2:
+            _obs_key = st.selectbox("Observable", _obs_keys,
+                                    format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs")
+        _spec = OBSERVABLES.get(_obs_key, {"log": True, "link": None, "label": _obs_key, "prefixes": ("B", "D", "I", "H")})
+        _link_val = None
+        lc1, lc2 = st.columns(2)
+        if _spec.get("link"):
+            _pname, _op, _default = _spec["link"]
+            with lc1:
+                _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
+                                            help=("Scales the model state to the measured signal "
+                                                  "(OD = biomass / od_to_cfu; luminescence = active biomass × rlu_per_cell). "
+                                                  "A Phase-B tunable and future fit parameter."))
+        with lc2:
+            _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
+
+        if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
+            try:
+                _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
+                _B0 = float(np.sum(_iB))
+                _method = st.session_state.get("int_solver_method", "BDF")
+                _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
+                _fig, _ax = plt.subplots(figsize=(10, 5))
+                _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+                _metrics = []
+                for _i, _arm in enumerate(_sel_arms):
+                    _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
+                    if len(_iP):
+                        _armP = np.zeros(len(_iP)); _armP[0] = _moi * _B0
+                    else:
+                        _armP = np.zeros(0)
+                    _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
+                    _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
+                    _pred = predicted_observable(_r, _obs_key, _link_val)
+                    _color = _palette[_i % len(_palette)]
+                    _ax.plot(_r.time, np.maximum(_pred, 1e-30) if _spec.get("log") else _pred,
+                             color=_color, lw=2, label=f"{_arm} (model)")
+                    _d = _long[(_long["arm"] == _arm) & (_long["observable"] == _obs_key)]
+                    _ax.scatter(_d["time"], _d["value"], color=_color, s=14, alpha=0.45)
+                    _metrics.append({"arm": _arm, "MOI": _moi, "n_obs": len(_d),
+                                     "RMSE": fit_residual(_r.time, _pred, _d["time"].values, _d["value"].values, _spec.get("log", False))})
+                if _spec.get("log"):
+                    _ax.set_yscale("log")
+                _ax.set_xlabel("Time (h)")
+                _ax.set_ylabel(_spec.get("label", _obs_key))
+                _ax.legend(fontsize=8, ncol=2)
+                _ax.set_title("Model (lines) vs observations (points)")
+                _ax.grid(True, alpha=0.15)
+                st.pyplot(_fig)
+                plt.close(_fig)
+                st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _spec.get("log") else "") + ")")
+                st.dataframe(pd.DataFrame(_metrics), use_container_width=True, hide_index=True)
+                st.caption("Adjust parameters in the Interactive Simulator (or the link parameter above) and re-overlay to improve the fit.")
+            except Exception as e:
+                st.error(f"Overlay failed: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+        if st.button("🗑️ Clear dataset", key="fit_clear"):
+            st.session_state.fit_dataset = None
+            st.rerun()
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────
