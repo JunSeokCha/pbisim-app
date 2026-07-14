@@ -45,7 +45,15 @@ RUN find /opt/venv -name direct_url.json -delete || true
 FROM python:3.11-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:$PATH" \
+    # headless matplotlib backend (belt-and-suspenders with matplotlib.use in app.py)
+    MPLBACKEND=Agg \
+    # cap native (BLAS/OMP) thread pools — multi-threaded BLAS forked by joblib on a
+    # small shared instance is a common SIGSEGV (exit 139) source
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1
 
 RUN useradd --create-home --uid 10001 appuser
 

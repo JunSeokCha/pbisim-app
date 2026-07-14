@@ -6,11 +6,22 @@ an AI assistant, and a clinical trials cohort simulator.
 
 from __future__ import annotations
 
+# Dump a Python traceback to stderr on a native crash (SIGSEGV/SIGABRT) so segfaults
+# surface in the server logs as an actionable stack, not a bare "exited with status 139".
+import faulthandler
+faulthandler.enable()
+
 import copy
 import io
 import json
 import os
 import re
+
+# Force the non-interactive backend BEFORE importing pyplot. On a headless server
+# (e.g. the Render container) a GUI backend used from Streamlit's script thread
+# segfaults (exit 139); Agg is thread-safe and display-free.
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -2181,7 +2192,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
         trial_seed = st.number_input("Cohort RNG Seed", value=42)
         trial_t_end = st.number_input("Trial Duration (hours)", min_value=12.0, max_value=336.0, value=72.0, step=12.0)
         trial_dt = st.number_input("Solver output step (dt)", min_value=0.05, max_value=1.0, value=0.25, step=0.05)
-        trial_n_jobs = st.slider("Parallel workers (n_jobs)", min_value=1, max_value=16, value=4, help="Select number of threads")
+        trial_n_jobs = st.slider("Parallel workers (n_jobs)", min_value=1, max_value=16, value=1, help="Parallel patient simulation via joblib (loky). Keep at 1 on small/shared hosts (e.g. the free Render tier) — forked worker processes can segfault or OOM there; raise it on a beefier machine.")
         
         st.markdown("### 💉 Treatment Arms")
         st.caption("Define any number of arms (e.g. low-dose vs high-dose), each with its own phage / antibiotic regimen. The Control arm never receives doses.")
