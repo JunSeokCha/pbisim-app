@@ -190,6 +190,26 @@ def mutation_matrix_from_transitions(transitions, strains):
     return M if any_edge else None
 
 
+# ── Cached calibration data processing ────────────────────────────────────────
+# The Calibration page re-runs on every widget interaction; without caching it would
+# re-parse the CSV and re-filter/normalise/aggregate the whole dataset each time.
+# @st.cache_data memoises by content, so these recompute only when inputs change.
+@st.cache_data(show_spinner=False)
+def read_uploaded_csv(file):
+    return pd.read_csv(file)
+
+
+@st.cache_data(show_spinner=False)
+def calibration_processed(raw, filters_key, time_col, value_col, observable,
+                          group_cols, moi_col, stat, band):
+    """Filter → normalise → aggregate, cached. Keys must be hashable (tuples)."""
+    filtered = apply_row_filters(raw, {c: list(v) for c, v in filters_key})
+    long, conds = normalize_fit_dataframe(filtered, time_col, value_col, observable,
+                                          list(group_cols), moi_col)
+    agg = aggregate_observations(long, stat=stat, band=band)
+    return filtered, long, conds, agg
+
+
 def arm_dose_events(arm):
     """Build the DoseEvent list for a treatment-arm config from its regimens."""
     doses = []
@@ -2154,7 +2174,7 @@ elif st.session_state.current_page == "Calibration":
     _up = st.file_uploader("Experimental data (CSV)", type=["csv"], key="fit_csv")
     if _up is not None:
         try:
-            _raw = pd.read_csv(_up)
+            _raw = read_uploaded_csv(_up)
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
             _raw = None
@@ -2213,8 +2233,6 @@ elif st.session_state.current_page == "Calibration":
         for _fc in _filter_cols:
             _uniques = sorted(_raw[_fc].dropna().astype(str).unique().tolist())
             _filters[_fc] = st.multiselect(f"Include {_fc} =", _uniques, default=[], key=f"fit_filter_{_fc}")
-        _filtered = apply_row_filters(_raw, _filters)
-        st.caption(f"{len(_filtered)} / {len(_raw)} rows after filtering.")
 
         # -- Grouping + statistic -------------------------------------------
         st.markdown("### 3 · Grouping & statistics")
@@ -2230,15 +2248,17 @@ elif st.session_state.current_page == "Calibration":
         _stat_key = {"Raw points": "raw", "Mean": "mean", "Median": "median"}[_stat]
         _band = None if (_band_choice == "None" or _stat_key == "raw") else tuple(int(x) for x in _band_choice.split("–"))
 
-        # Build the long form on the filtered data with the chosen grouping
+        # Filter → normalise → aggregate (cached; recomputes only when inputs change)
         try:
-            _long, _conds = normalize_fit_dataframe(_filtered, _tc, _vc, _obs, _group_cols, _mc)
+            _filters_key = tuple((c, tuple(v)) for c, v in _filters.items())
+            _filtered, _long, _conds, _agg = calibration_processed(
+                _raw, _filters_key, _tc, _vc, _obs, tuple(_group_cols), _mc, _stat_key, _band)
         except Exception as e:
             st.error(f"Could not build the grouped dataset: {e}")
-            _long = None
+            _filtered, _long, _agg = _raw, None, None
+        st.caption(f"{len(_filtered)} / {len(_raw)} rows after filtering.")
 
         if _long is not None and len(_long):
-            _agg = aggregate_observations(_long, stat=_stat_key, band=_band)
             _arms = sorted(_long["arm"].unique())
             _obs_keys = sorted(_long["observable"].unique())
 

@@ -44,6 +44,16 @@ def predicted_observable(result, obs_key, link_value=None):
     return qty / lv if op == "div" else qty * lv
 
 
+def _join_columns(df, cols):
+    """Vectorised ' | '-join of the string form of *cols* (fast; avoids row-wise agg)."""
+    if not cols:
+        return pd.Series(["all"] * len(df), index=df.index)
+    series = df[cols[0]].astype(str)
+    for c in cols[1:]:
+        series = series + " | " + df[c].astype(str)
+    return series
+
+
 def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_col=None):
     """Normalise an uploaded dataframe to the canonical long format.
 
@@ -51,27 +61,23 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
     ``observable`` is either a registry key (fixed for all rows) or a column name.
     ``arm`` is the ``" | "``-joined combination of *arm_cols* (e.g. ``"MXP1001 | 0.1"``).
     """
-    out = pd.DataFrame()
-    out["time"] = pd.to_numeric(df[time_col], errors="coerce")
-    out["value"] = pd.to_numeric(df[value_col], errors="coerce")
-    if arm_cols:
-        out["arm"] = df[arm_cols].astype(str).agg(" | ".join, axis=1)
-    else:
-        out["arm"] = "all"
-    if observable in OBSERVABLES:
-        out["observable"] = observable
-    else:
-        out["observable"] = df[observable].astype(str).str.lower()
+    arm = _join_columns(df, arm_cols)  # computed once, reused for conditions
+    out = pd.DataFrame({
+        "time": pd.to_numeric(df[time_col], errors="coerce"),
+        "value": pd.to_numeric(df[value_col], errors="coerce"),
+        "arm": arm.values,
+        "observable": (observable if observable in OBSERVABLES
+                       else df[observable].astype(str).str.lower().values),
+    })
     out = out.dropna(subset=["time", "value"]).reset_index(drop=True)
 
-    conditions = {arm: {"moi": 0.0} for arm in out["arm"].unique()}
+    conditions = {a: {"moi": 0.0} for a in out["arm"].unique()}
     if moi_col and moi_col in df.columns:
-        arm_series = df[arm_cols].astype(str).agg(" | ".join, axis=1) if arm_cols else pd.Series(["all"] * len(df))
         moi = pd.to_numeric(df[moi_col], errors="coerce")
-        for arm, g in moi.groupby(arm_series):
-            vals = g.dropna()
-            if len(vals):
-                conditions[arm] = {"moi": float(vals.iloc[0])}
+        first = moi.groupby(arm).first()
+        for a, v in first.items():
+            if pd.notna(v):
+                conditions[a] = {"moi": float(v)}
     return out, conditions
 
 
