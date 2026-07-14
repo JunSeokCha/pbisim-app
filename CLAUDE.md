@@ -206,6 +206,30 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-14) — Calibration Phase B + config persistence
+
+- **Calibration config now survives navigation** (commit `07315d1`): Streamlit
+  drops a widget's key from `session_state` when the widget isn't rendered on a
+  rerun, so leaving Calibration to change the model reset all the filter/grouping/
+  statistic selections. Fix: shadow the `fit_*` widget selections into a plain
+  `fit_config` session key (survives) and re-seed the widgets from it at the top of
+  the page, before they render. Buttons + the file-uploader are excluded from the
+  shadow (they can't be re-seeded). Regression test `tests/test_calibration.py`.
+- **Phase B — manual parameter tuning** on the Calibration page:
+  - `fit_helper.TUNING_KNOBS` + `apply_tuning_to_config()` (scales ModelConfig
+    array fields `growth_rates`/`adsorption_rates`/`burst_sizes`/`latent_periods`/
+    `phage_decay_rates`) + `bake_tuning_into_entities()` (scales the matching GUI
+    dict keys `growth_rate`/`adsorption_s`/`burst_sizes`/`latent_periods`/
+    `phage_decay_rates` in place). Pure/no-Streamlit → unit-tested.
+  - Overlay section 5: a "🎛 Manual parameter tuning" expander with a ×multiplier
+    per knob (uniform across strains/phages). Overlay applies them on top of the
+    nominal GUI config, so the fit updates without leaving the page. The link factor
+    (od_to_cfu / rlu_per_cell) is keyed per-observable (`fit_link_{obs}`).
+  - **↺ Reset tuning** clears the multipliers; **📌 Apply tuning to model** bakes
+    them into `int_strains`/`int_phages` (→ savable as Parts in the Library), clears
+    the multipliers, and invalidates the cached simulation result.
+  - Tests: `test_fit_helper.py` (+2), `test_calibration.py` (+1). **60 tests pass.**
+
 **Known gaps / still open after this session:**
 - CS/CR (26 `cr_*` fields on `PhageStrain`/`BacterialStrain`) not exposed in BRG UI —
   complex feature, deferred. Document in USER_GUIDE as "advanced scripting only".

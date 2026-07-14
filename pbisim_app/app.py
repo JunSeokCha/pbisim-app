@@ -69,6 +69,9 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
+    TUNING_KNOBS,
+    apply_tuning_to_config,
+    bake_tuning_into_entities,
 )
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,
@@ -2177,7 +2180,8 @@ elif st.session_state.current_page == "Calibration":
     # Buttons and the file-uploader can't be re-seeded via session_state, so they
     # are never persisted; everything else (filters/grouping/statistics/overlay
     # selections) is.
-    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear"}
+    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
+                      "fit_load", "fit_tune_reset", "fit_tune_apply"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk not in st.session_state:
@@ -2294,14 +2298,55 @@ elif st.session_state.current_page == "Calibration":
                 _pname, _op, _default = _spec["link"]
                 with lc1:
                     _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
+                                                key=f"fit_link_{_obs_key}",
                                                 help="Scales model state → signal (OD = biomass / od_to_cfu; "
-                                                     "luminescence = active biomass × rlu_per_cell). Phase-B tunable / future fit param.")
+                                                     "luminescence = active biomass × rlu_per_cell). Tunable below / future fit param.")
             with lc2:
                 _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
+
+            # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
+            # Multipliers applied uniformly on top of the current model, so the
+            # overlay updates without leaving this page. "Apply" bakes them into
+            # the model (then savable as Parts in the Library); "Reset" clears them.
+            _tune = {k["key"]: float(st.session_state.get(f"fit_tune_{k['key']}", 1.0)) for k in TUNING_KNOBS}
+            _n_tuned = sum(1 for v in _tune.values() if v != 1.0)
+            with st.expander(f"🎛 Manual parameter tuning{f' · {_n_tuned} active' if _n_tuned else ''}", expanded=_n_tuned > 0):
+                st.caption("Scale fit-relevant parameters (× the current model value) and re-overlay to match. "
+                           "Uniform across all strains/phages — for the link factor use the box above.")
+                _tcols = st.columns(len(TUNING_KNOBS))
+                for _kc, _knob in zip(_tcols, TUNING_KNOBS):
+                    with _kc:
+                        _tune[_knob["key"]] = st.number_input(
+                            f"{_knob['label']} ×", min_value=0.0, value=_tune[_knob["key"]],
+                            step=0.1, format="%g", key=f"fit_tune_{_knob['key']}")
+                _bt1, _bt2 = st.columns(2)
+                with _bt1:
+                    if st.button("↺ Reset tuning", key="fit_tune_reset", use_container_width=True):
+                        for _knob in TUNING_KNOBS:
+                            st.session_state.pop(f"fit_tune_{_knob['key']}", None)
+                            st.session_state.fit_config.pop(f"fit_tune_{_knob['key']}", None)
+                        st.rerun()
+                with _bt2:
+                    if st.button("📌 Apply tuning to model", key="fit_tune_apply", use_container_width=True,
+                                 disabled=_n_tuned == 0,
+                                 help="Bake the multipliers into the current strains/phages so they become the "
+                                      "live model (then savable as reusable Parts in the Library)."):
+                        _changed = bake_tuning_into_entities(
+                            st.session_state.get("int_strains", []),
+                            st.session_state.get("int_phages", []), _tune)
+                        for _knob in TUNING_KNOBS:
+                            st.session_state.pop(f"fit_tune_{_knob['key']}", None)
+                            st.session_state.fit_config.pop(f"fit_tune_{_knob['key']}", None)
+                        st.session_state.simulation_result = None
+                        st.session_state._flash = {"kind": "success",
+                                                   "msg": f"Baked tuning into the model ({_changed} value(s) scaled). "
+                                                          "Save the tuned strains/phages as Parts in the Library."}
+                        st.rerun()
 
             if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
+                    _config = apply_tuning_to_config(_config, _tune)
                     _B0 = float(np.sum(_iB))
                     _method = st.session_state.get("int_solver_method", "BDF")
                     _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
@@ -2341,7 +2386,8 @@ elif st.session_state.current_page == "Calibration":
                     st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _spec.get("log") else "") +
                                 f", vs {_stat_label})")
                     st.dataframe(pd.DataFrame(_metrics), use_container_width=True, hide_index=True)
-                    st.caption("Adjust parameters in the Interactive Simulator (or the link parameter above) and re-overlay to improve the fit.")
+                    st.caption("Tune the multipliers (or link parameter) above and re-overlay to improve the fit; "
+                               "**📌 Apply tuning to model** commits the fit, then save it as a Part in the Library.")
                 except Exception as e:
                     st.error(f"Overlay failed: {e}")
                     import traceback

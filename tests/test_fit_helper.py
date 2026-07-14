@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+import dataclasses
+
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -12,7 +14,20 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
+    TUNING_KNOBS,
+    apply_tuning_to_config,
+    bake_tuning_into_entities,
 )
+
+
+@dataclasses.dataclass
+class _FakeConfig:
+    """Minimal stand-in for a pbisim ModelConfig (only the tunable fields)."""
+    growth_rates: object = None
+    adsorption_rates: object = None
+    burst_sizes: object = None
+    latent_periods: object = None
+    phage_decay_rates: object = None
 
 
 class _FakeResult:
@@ -92,6 +107,39 @@ def test_aggregate_observations_mean_median_band():
     md = aggregate_observations(long, stat="median", band=(25, 75)).sort_values("time")
     assert list(md["value"]) == [2.0, 20.0]
     assert md["lo"].notna().all() and (md["hi"] >= md["lo"]).all()
+
+
+def test_apply_tuning_to_config_scales_only_nonunit_knobs():
+    cfg = _FakeConfig(
+        growth_rates=np.array([1.0, 2.0]),
+        adsorption_rates=np.array([[1e-8]]),
+        burst_sizes=np.array([[50.0]]),
+        latent_periods=np.array([[0.5]]),
+        phage_decay_rates=np.array([0.1]),
+    )
+    tuned = apply_tuning_to_config(cfg, {"growth": 2.0, "decay": 0.5})
+    assert np.allclose(tuned.growth_rates, [2.0, 4.0])   # scaled ×2
+    assert np.allclose(tuned.phage_decay_rates, [0.05])  # scaled ×0.5
+    # untouched knobs are unchanged
+    assert np.allclose(tuned.burst_sizes, [[50.0]])
+    # original is not mutated
+    assert np.allclose(cfg.growth_rates, [1.0, 2.0])
+    # a no-op tuning returns the config unchanged (same object)
+    assert apply_tuning_to_config(cfg, {"growth": 1.0}) is cfg
+
+
+def test_bake_tuning_into_entities_scales_gui_dicts_in_place():
+    strains = [{"name": "PA", "growth_rate": 1.2}]
+    phages = [{"name": "phi", "adsorption_s": 1e-8, "burst_sizes": 50.0,
+               "latent_periods": 0.5, "phage_decay_rates": 0.1}]
+    n = bake_tuning_into_entities(strains, phages,
+                                  {"growth": 2.0, "adsorption": 10.0, "burst": 1.0})
+    assert n == 2  # growth_rate + adsorption_s changed; burst unchanged
+    assert strains[0]["growth_rate"] == 2.4
+    assert phages[0]["adsorption_s"] == 1e-7
+    assert phages[0]["burst_sizes"] == 50.0  # ×1.0 no-op
+    # every knob key resolves to a real scope
+    assert {k["scope"] for k in TUNING_KNOBS} == {"bacteria", "phages"}
 
 
 def test_fit_residual_zero_and_positive():

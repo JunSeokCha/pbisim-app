@@ -9,6 +9,8 @@ feeds pbisim-fit directly when that integration lands.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 
@@ -123,6 +125,61 @@ def aggregate_observations(long_df, stat="raw", band=None):
         central["lo"] = np.nan
         central["hi"] = np.nan
     return central
+
+
+# ── Manual parameter tuning (Phase B) ───────────────────────────────────────────
+# Each knob is a multiplicative factor applied uniformly to one ModelConfig array
+# field (for the live overlay) and to the matching per-entity GUI keys (when the
+# tuning is baked back into the model). Keeping the map here — free of Streamlit —
+# lets the overlay math and the "apply to model" step share one source of truth.
+TUNING_KNOBS = [
+    {"key": "growth",     "label": "Growth rate",   "field": "growth_rates",      "scope": "bacteria", "gui_keys": ("growth_rate",)},
+    {"key": "adsorption", "label": "Adsorption",    "field": "adsorption_rates",  "scope": "phages",   "gui_keys": ("adsorption_s",)},
+    {"key": "burst",      "label": "Burst size",    "field": "burst_sizes",       "scope": "phages",   "gui_keys": ("burst_sizes",)},
+    {"key": "latent",     "label": "Latent period", "field": "latent_periods",    "scope": "phages",   "gui_keys": ("latent_periods",)},
+    {"key": "decay",      "label": "Phage decay",   "field": "phage_decay_rates", "scope": "phages",   "gui_keys": ("phage_decay_rates",)},
+]
+
+
+def apply_tuning_to_config(config, multipliers):
+    """Return a copy of *config* with each tunable array field scaled by its factor.
+
+    ``multipliers`` maps knob key -> factor. Factors of 1.0 (or missing knobs, or
+    absent config fields) are no-ops, so the original config is returned unchanged
+    when nothing is tuned.
+    """
+    changes = {}
+    for knob in TUNING_KNOBS:
+        factor = float(multipliers.get(knob["key"], 1.0))
+        if factor == 1.0:
+            continue
+        arr = getattr(config, knob["field"], None)
+        if arr is None:
+            continue
+        changes[knob["field"]] = np.asarray(arr, dtype=float) * factor
+    return dataclasses.replace(config, **changes) if changes else config
+
+
+def bake_tuning_into_entities(strains, phages, multipliers):
+    """Scale the per-entity GUI dicts by the tuning factors, in place.
+
+    Mirrors :func:`apply_tuning_to_config` at the GUI-dict level so a tuned overlay
+    can be committed to the actual model (and then saved as reusable Parts). Only
+    keys that already exist on an entity are scaled. Returns the number of scalar
+    values changed.
+    """
+    changed = 0
+    for knob in TUNING_KNOBS:
+        factor = float(multipliers.get(knob["key"], 1.0))
+        if factor == 1.0:
+            continue
+        entities = strains if knob["scope"] == "bacteria" else phages
+        for ent in entities or []:
+            for gk in knob["gui_keys"]:
+                if gk in ent and isinstance(ent[gk], (int, float)):
+                    ent[gk] = float(ent[gk]) * factor
+                    changed += 1
+    return changed
 
 
 def fit_residual(model_time, model_signal, data_time, data_value, log_scale):
