@@ -2949,7 +2949,18 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 
                 # Save original doses
                 original_doses = list(st.session_state.get("int_doses", []))
-                
+
+                # When a phage's DOSE is swept, its baseline initial_P inoculum must not
+                # leak in: otherwise a swept value of 0 still starts with the configured
+                # P0 (default 1e6) and suppresses the bacteria. Zero the swept phages'
+                # initial_P for the duration of the sweep — the dose delivers the phage —
+                # and restore it afterwards. (Antibiotics have no such baseline: they are
+                # delivered purely via dose events.)
+                swept_phage_idx = [int(k.split("_")[1]) for k in padded if k.startswith("phage_")]
+                original_initial_P = {j: phages[j]["initial_P"] for j in swept_phage_idx if j < len(phages)}
+                for j in original_initial_P:
+                    phages[j]["initial_P"] = 0.0
+
                 runs_outcomes = []
                 trajectories = [] # list of (time, viable_b, label)
                 
@@ -3056,8 +3067,10 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                         
                     status_text.text("Sweep completed!")
                 finally:
-                    # Restore original doses
+                    # Restore original doses + swept phages' baseline inoculum
                     st.session_state.int_doses = original_doses
+                    for j, v in original_initial_P.items():
+                        phages[j]["initial_P"] = v
 
                 # Display Summary table
                 df_summary = pd.DataFrame(runs_outcomes)

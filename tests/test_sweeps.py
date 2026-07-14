@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from streamlit.testing.v1 import AppTest
 from pbisim import ModelBuilder
 from pbisim_app.sweep_helper import (
     get_sweep_parameters,
@@ -13,6 +14,8 @@ from pbisim_app.sweep_helper import (
     parse_comma_separated_series,
     pad_vectors,
 )
+
+APP = "pbisim_app/app.py"
 
 def test_parse_comma_separated_series():
     """Verify parsing handles spaces, scientific notation, and float values."""
@@ -99,3 +102,29 @@ def test_apply_sweep_parameter():
     # Total dormant cells should be conserved (2.2e6)
     assert np.allclose(np.sum(mk5["initial_D"]), 2.2e6)
 
+
+def test_dose_response_zero_phage_dose_does_not_suppress():
+    """A swept phage dose of 0 must mean no phage — the baseline initial_P
+    inoculum must not leak in and suppress the bacteria (regression)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    at.session_state["dr_sweep_phg_series_0"] = "0, 1e8"
+    at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
+    at.run()
+    [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
+
+    assert len(at.exception) == 0
+    df = [d.value for d in at.dataframe][0]
+    nadir = {row["Swept Doses"]: float(row["Nadir (cells/mL)"]) for _, row in df.iterrows()}
+    zero_nadir = nadir["phage_0: 0.0e+00"]
+    high_nadir = nadir["phage_0: 1.0e+08"]
+    # dose 0 leaves bacteria near their initial density; the big dose eradicates
+    assert zero_nadir > 1e6
+    assert high_nadir < zero_nadir
+
+    # the phage's baseline inoculum is restored after the sweep
+    assert at.session_state["int_phages"][0]["initial_P"] > 0

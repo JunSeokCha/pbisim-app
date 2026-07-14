@@ -206,6 +206,20 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-15) — dose-response zero-dose phage leak
+
+- **Dose-Response Sweeps: a swept phage dose of 0 still suppressed the bacteria.**
+  Same class of bug as the clinical-trial phage-leak fix: the model always seeds
+  phage from the phage config's `initial_P` (default 1e6) at t=0, independent of the
+  dose. The sweep overrides only the dose *events*, so `dose=0` still started with
+  1e6 PFU and crushed the culture. Fix (`app.py`, Dose-Response Sweeps page): for the
+  duration of the sweep, zero the swept phages' `initial_P` (saved/restored in the
+  `finally` alongside `int_doses`) so the swept dose fully controls phage exposure;
+  `dose=0` now means no phage. Antibiotics need no analog (no baseline inoculum — all
+  via dose events). Verified: `dose=0` nadir stays ~1e7, `dose=1e8` eradicates.
+  Regression test `tests/test_sweeps.py::test_dose_response_zero_phage_dose_does_not_suppress`.
+  **61 tests pass.**
+
 ## Done this session (2026-07-14) — Calibration Phase B + config persistence
 
 - **Calibration config now survives navigation** (commit `07315d1`): Streamlit
