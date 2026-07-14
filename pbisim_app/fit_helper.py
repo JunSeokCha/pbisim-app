@@ -75,6 +75,50 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
     return out, conditions
 
 
+def apply_row_filters(df, filters):
+    """Keep rows whose column values are in the allowed set for every filtered column.
+
+    ``filters`` maps ``column -> iterable of allowed values`` (compared as strings).
+    An empty/absent allow-list for a column means "no restriction" on that column.
+    """
+    mask = pd.Series(True, index=df.index)
+    for col, allowed in (filters or {}).items():
+        if allowed and col in df.columns:
+            mask &= df[col].astype(str).isin({str(v) for v in allowed})
+    return df[mask]
+
+
+def aggregate_observations(long_df, stat="raw", band=None):
+    """Aggregate replicate observations per (arm, observable, time).
+
+    Parameters
+    ----------
+    stat : "raw" | "mean" | "median"
+        ``"raw"`` returns every point unchanged; otherwise replicates are collapsed
+        to their mean or median per (arm, observable, time).
+    band : (lo_pct, hi_pct) or None
+        Percentile band (e.g. ``(25, 75)``) to compute alongside the central value.
+
+    Returns a DataFrame with columns ``arm, observable, time, value, lo, hi`` where
+    ``lo``/``hi`` are NaN when no band is requested (or stat="raw").
+    """
+    if stat == "raw":
+        out = long_df[["arm", "observable", "time", "value"]].copy()
+        out["lo"] = np.nan
+        out["hi"] = np.nan
+        return out
+    grp = long_df.groupby(["arm", "observable", "time"])["value"]
+    central = (grp.mean() if stat == "mean" else grp.median()).rename("value").reset_index()
+    if band:
+        lo = grp.quantile(band[0] / 100.0).rename("lo").reset_index()
+        hi = grp.quantile(band[1] / 100.0).rename("hi").reset_index()
+        central = central.merge(lo, on=["arm", "observable", "time"]).merge(hi, on=["arm", "observable", "time"])
+    else:
+        central["lo"] = np.nan
+        central["hi"] = np.nan
+    return central
+
+
 def fit_residual(model_time, model_signal, data_time, data_value, log_scale):
     """RMSE between the model (interpolated to the data times) and observations.
 

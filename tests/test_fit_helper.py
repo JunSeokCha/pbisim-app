@@ -9,6 +9,8 @@ from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
     normalize_fit_dataframe,
+    apply_row_filters,
+    aggregate_observations,
     fit_residual,
 )
 
@@ -59,6 +61,37 @@ def test_normalize_monolix_format():
     assert (long["observable"] == "od").all()
     assert conds["MXP1001 | 1.0"]["moi"] == 1.0
     assert conds["MXP1001 | 0.0"]["moi"] == 0.0
+
+
+def test_apply_row_filters_include_only():
+    df = pd.DataFrame({"PHAGE": ["A", "A", "B", "C"], "v": [1, 2, 3, 4]})
+    # empty allow-list on a column = no restriction
+    assert len(apply_row_filters(df, {"PHAGE": []})) == 4
+    # restrict to A and B
+    out = apply_row_filters(df, {"PHAGE": ["A", "B"]})
+    assert set(out["PHAGE"]) == {"A", "B"} and len(out) == 3
+    # numeric-as-string comparison works
+    df2 = pd.DataFrame({"MOI": [0.0, 1.0, 1.0], "v": [1, 2, 3]})
+    assert len(apply_row_filters(df2, {"MOI": ["1.0"]})) == 2
+
+
+def test_aggregate_observations_mean_median_band():
+    # two replicates per (arm, time) for arm 'X', observable 'od'
+    long = pd.DataFrame({
+        "arm": ["X", "X", "X", "X"],
+        "observable": ["od", "od", "od", "od"],
+        "time": [0, 0, 1, 1],
+        "value": [1.0, 3.0, 10.0, 30.0],
+    })
+    # raw returns every point
+    assert len(aggregate_observations(long, stat="raw")) == 4
+    # mean collapses replicates per (arm, time)
+    m = aggregate_observations(long, stat="mean").sort_values("time")
+    assert list(m["value"]) == [2.0, 20.0]
+    # median with a percentile band
+    md = aggregate_observations(long, stat="median", band=(25, 75)).sort_values("time")
+    assert list(md["value"]) == [2.0, 20.0]
+    assert md["lo"].notna().all() and (md["hi"] >= md["lo"]).all()
 
 
 def test_fit_residual_zero_and_positive():

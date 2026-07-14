@@ -66,6 +66,8 @@ from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
     normalize_fit_dataframe,
+    apply_row_filters,
+    aggregate_observations,
     fit_residual,
 )
 from pbisim_app.trial_helper import (
@@ -2185,87 +2187,128 @@ elif st.session_state.current_page == "Calibration":
                                    ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
                 _mc = None if _mc == "(none)" else _mc
             if st.button("📥 Load dataset", key="fit_load", use_container_width=True):
-                try:
-                    _long, _conds = normalize_fit_dataframe(_raw, _tc, _vc, _obs, _ac, _mc)
-                    st.session_state.fit_dataset = {"long": _long, "conditions": _conds}
-                    st.success(f"Loaded {len(_long)} points across {_long['arm'].nunique()} arms "
-                               f"({_long['observable'].nunique()} observable(s)).")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Could not normalise: {e}")
+                st.session_state.fit_dataset = {
+                    "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
+                    "arm_cols": _ac, "moi": _mc,
+                }
+                st.success(f"Loaded {len(_raw)} rows. Configure grouping / filters / statistics below.")
+                st.rerun()
 
-    # ── 2. Overlay model vs data ─────────────────────────────────────────────
+    # ── 2. Filter · group · statistics · overlay ─────────────────────────────
     _ds = st.session_state.get("fit_dataset")
     if not _ds:
         st.info("Upload a dataset above to begin.")
     else:
-        _long = _ds["long"]
-        _conds = _ds["conditions"]
-        _arms = sorted(_long["arm"].unique())
-        _obs_keys = sorted(_long["observable"].unique())
-        st.markdown("### 2 · Overlay")
-        st.caption(f"{len(_arms)} arms · pick which to overlay against the current model.")
+        _raw = _ds["raw"]
+        _cols = list(_raw.columns)
+        _tc, _vc, _obs, _mc = _ds["time"], _ds["value"], _ds["observable"], _ds["moi"]
 
-        oc1, oc2 = st.columns(2)
-        with oc1:
-            _sel_arms = st.multiselect("Arms to overlay", _arms, default=_arms[:min(4, len(_arms))], key="fit_arms")
-        with oc2:
-            _obs_key = st.selectbox("Observable", _obs_keys,
-                                    format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs")
-        _spec = OBSERVABLES.get(_obs_key, {"log": True, "link": None, "label": _obs_key, "prefixes": ("B", "D", "I", "H")})
-        _link_val = None
-        lc1, lc2 = st.columns(2)
-        if _spec.get("link"):
-            _pname, _op, _default = _spec["link"]
-            with lc1:
-                _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
-                                            help=("Scales the model state to the measured signal "
-                                                  "(OD = biomass / od_to_cfu; luminescence = active biomass × rlu_per_cell). "
-                                                  "A Phase-B tunable and future fit parameter."))
-        with lc2:
-            _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
+        # -- Filters --------------------------------------------------------
+        st.markdown("### 2 · Filter rows")
+        _filter_cols = st.multiselect(
+            "Filter on column(s) (leave a value list empty = include all)", _cols,
+            default=[], key="fit_filter_cols",
+        )
+        _filters = {}
+        for _fc in _filter_cols:
+            _uniques = sorted(_raw[_fc].dropna().astype(str).unique().tolist())
+            _filters[_fc] = st.multiselect(f"Include {_fc} =", _uniques, default=[], key=f"fit_filter_{_fc}")
+        _filtered = apply_row_filters(_raw, _filters)
+        st.caption(f"{len(_filtered)} / {len(_raw)} rows after filtering.")
 
-        if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
-            try:
-                _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
-                _B0 = float(np.sum(_iB))
-                _method = st.session_state.get("int_solver_method", "BDF")
-                _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
-                _fig, _ax = plt.subplots(figsize=(10, 5))
-                _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-                _metrics = []
-                for _i, _arm in enumerate(_sel_arms):
-                    _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
-                    if len(_iP):
-                        _armP = np.zeros(len(_iP)); _armP[0] = _moi * _B0
-                    else:
-                        _armP = np.zeros(0)
-                    _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
-                    _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
-                    _pred = predicted_observable(_r, _obs_key, _link_val)
-                    _color = _palette[_i % len(_palette)]
-                    _ax.plot(_r.time, np.maximum(_pred, 1e-30) if _spec.get("log") else _pred,
-                             color=_color, lw=2, label=f"{_arm} (model)")
-                    _d = _long[(_long["arm"] == _arm) & (_long["observable"] == _obs_key)]
-                    _ax.scatter(_d["time"], _d["value"], color=_color, s=14, alpha=0.45)
-                    _metrics.append({"arm": _arm, "MOI": _moi, "n_obs": len(_d),
-                                     "RMSE": fit_residual(_r.time, _pred, _d["time"].values, _d["value"].values, _spec.get("log", False))})
-                if _spec.get("log"):
-                    _ax.set_yscale("log")
-                _ax.set_xlabel("Time (h)")
-                _ax.set_ylabel(_spec.get("label", _obs_key))
-                _ax.legend(fontsize=8, ncol=2)
-                _ax.set_title("Model (lines) vs observations (points)")
-                _ax.grid(True, alpha=0.15)
-                st.pyplot(_fig)
-                plt.close(_fig)
-                st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _spec.get("log") else "") + ")")
-                st.dataframe(pd.DataFrame(_metrics), use_container_width=True, hide_index=True)
-                st.caption("Adjust parameters in the Interactive Simulator (or the link parameter above) and re-overlay to improve the fit.")
-            except Exception as e:
-                st.error(f"Overlay failed: {e}")
-                import traceback
-                st.code(traceback.format_exc())
+        # -- Grouping + statistic -------------------------------------------
+        st.markdown("### 3 · Grouping & statistics")
+        gc1, gc2, gc3 = st.columns(3)
+        with gc1:
+            _group_cols = st.multiselect("Grouping variables (define the curves/arms)", _cols,
+                                         default=_ds["arm_cols"], key="fit_group_cols")
+        with gc2:
+            _stat = st.selectbox("Statistic over replicates", ["Raw points", "Mean", "Median"], key="fit_stat")
+        with gc3:
+            _band_choice = st.selectbox("Percentile band", ["None", "10–90", "25–75", "5–95"],
+                                        index=0, disabled=(_stat == "Raw points"), key="fit_band")
+        _stat_key = {"Raw points": "raw", "Mean": "mean", "Median": "median"}[_stat]
+        _band = None if (_band_choice == "None" or _stat_key == "raw") else tuple(int(x) for x in _band_choice.split("–"))
+
+        # Build the long form on the filtered data with the chosen grouping
+        try:
+            _long, _conds = normalize_fit_dataframe(_filtered, _tc, _vc, _obs, _group_cols, _mc)
+        except Exception as e:
+            st.error(f"Could not build the grouped dataset: {e}")
+            _long = None
+
+        if _long is not None and len(_long):
+            _agg = aggregate_observations(_long, stat=_stat_key, band=_band)
+            _arms = sorted(_long["arm"].unique())
+            _obs_keys = sorted(_long["observable"].unique())
+
+            st.markdown("### 4 · Overlay")
+            st.caption(f"{len(_arms)} group(s) · pick which to overlay against the current model.")
+            oc1, oc2 = st.columns(2)
+            with oc1:
+                _sel_arms = st.multiselect("Groups to overlay", _arms, default=_arms[:min(4, len(_arms))], key="fit_arms")
+            with oc2:
+                _obs_key = st.selectbox("Observable", _obs_keys,
+                                        format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs")
+            _spec = OBSERVABLES.get(_obs_key, {"log": True, "link": None, "label": _obs_key, "prefixes": ("B", "D", "I", "H")})
+            _link_val = None
+            lc1, lc2 = st.columns(2)
+            if _spec.get("link"):
+                _pname, _op, _default = _spec["link"]
+                with lc1:
+                    _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
+                                                help="Scales model state → signal (OD = biomass / od_to_cfu; "
+                                                     "luminescence = active biomass × rlu_per_cell). Phase-B tunable / future fit param.")
+            with lc2:
+                _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
+
+            if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
+                try:
+                    _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
+                    _B0 = float(np.sum(_iB))
+                    _method = st.session_state.get("int_solver_method", "BDF")
+                    _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
+                    _fig, _ax = plt.subplots(figsize=(10, 5))
+                    _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+                    _metrics = []
+                    for _i, _arm in enumerate(_sel_arms):
+                        _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
+                        _armP = np.zeros(len(_iP))
+                        if len(_iP):
+                            _armP[0] = _moi * _B0
+                        _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
+                        _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
+                        _pred = predicted_observable(_r, _obs_key, _link_val)
+                        _color = _palette[_i % len(_palette)]
+                        _ax.plot(_r.time, np.maximum(_pred, 1e-30) if _spec.get("log") else _pred,
+                                 color=_color, lw=2, label=f"{_arm} (model)")
+                        _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _obs_key)].sort_values("time")
+                        if _stat_key == "raw":
+                            _ax.scatter(_d["time"], _d["value"], color=_color, s=14, alpha=0.45)
+                        else:
+                            _ax.scatter(_d["time"], _d["value"], color=_color, s=18, marker="o", edgecolor="k", linewidth=0.3, zorder=3)
+                            if _band is not None and _d["lo"].notna().any():
+                                _ax.fill_between(_d["time"], _d["lo"], _d["hi"], color=_color, alpha=0.18, linewidth=0)
+                        _metrics.append({"group": _arm, "MOI": _moi, "n_points": len(_d),
+                                         "RMSE": fit_residual(_r.time, _pred, _d["time"].values, _d["value"].values, _spec.get("log", False))})
+                    if _spec.get("log"):
+                        _ax.set_yscale("log")
+                    _ax.set_xlabel("Time (h)")
+                    _ax.set_ylabel(_spec.get("label", _obs_key))
+                    _ax.legend(fontsize=8, ncol=2)
+                    _stat_label = _stat if _stat_key != "raw" else "raw points"
+                    _ax.set_title(f"Model (lines) vs observations ({_stat_label}" + (f" + {_band_choice} band)" if _band else ")"))
+                    _ax.grid(True, alpha=0.15)
+                    st.pyplot(_fig)
+                    plt.close(_fig)
+                    st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _spec.get("log") else "") +
+                                f", vs {_stat_label})")
+                    st.dataframe(pd.DataFrame(_metrics), use_container_width=True, hide_index=True)
+                    st.caption("Adjust parameters in the Interactive Simulator (or the link parameter above) and re-overlay to improve the fit.")
+                except Exception as e:
+                    st.error(f"Overlay failed: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
 
         if st.button("🗑️ Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None

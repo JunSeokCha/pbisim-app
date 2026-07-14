@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **54 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **56 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -54,7 +54,7 @@ pbisim-app/
 │   ├── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
 │   ├── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
 │   ├── test_parts.py         2 tests — parts save/load/export, host-tag (AppTest)
-│   └── test_fit_helper.py    4 tests — observable registry, ingestion, overlay/RMSE
+│   └── test_fit_helper.py    6 tests — observable registry, ingestion, overlay/RMSE
 │   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
@@ -69,7 +69,7 @@ pbisim-app/
 | Dose-Response Sweeps | Log/Lin dose range per agent, MOI scaling, vector padding warnings, color-coded trajectories. |
 | Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
 | Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
-| Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → overlay the current model's prediction vs observations (arm multiselect) with live RMSE. Extensible observable registry (CFU/PFU/OD/luminescence). Phase A of the pbisim-fit integration. |
+| Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → **filter rows**, **regroup** by chosen variables, aggregate replicates (**raw / mean / median + percentile band**) → overlay the current model vs observations (group multiselect) with live RMSE. Extensible observable registry (CFU/PFU/OD/luminescence). Phase A of the pbisim-fit integration. |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
 | Library | Two sections: **💾 Scenarios** (save/load full-config snapshots) and **🧬 Parts** (composable bacteria/phages/antibiotics — save a current entity, load into config, host-tagged phages); each export/import as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — they tracked the pbisim tutorials, which change independently.) |
 
@@ -135,7 +135,7 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 54 passed
+# Full suite — expected: 56 passed
 python -m pytest tests/ -q
 
 # By file:
@@ -364,7 +364,7 @@ Six owner-requested feature updates (all UI-verified via streamlit AppTest: ever
    shown at the top of the trial outputs.
 
 Regression tests in new `tests/test_trial_features.py` (regimen builder, distribution
-metrics, PK/PD trajectory plots). **54 tests passing.**
+metrics, PK/PD trajectory plots). **56 tests passing.**
 
 **Note:** the Clinical Trials page no longer reads the simulator's Environment & Dosing
 `int_doses` — trial doses come solely from the new Trial Dosing editor.
@@ -386,7 +386,7 @@ metrics, PK/PD trajectory plots). **54 tests passing.**
   defaults) with help text noting it drives the equilibrium IC. The engine already wired
   `fitness_cost` correctly (fc=0 → resistant neutral → resistant-dominated equilibrium;
   fc=0.05 → WT-dominated `[1e7, 20]`); the input existed but defaulted to 0, which
-  produced the fully-resistant equilibrium the owner observed. **54 tests passing.**
+  produced the fully-resistant equilibrium the owner observed. **56 tests passing.**
 
 **Note:** the old fixed-arm checkboxes (`run_control`/`run_phage`/`run_abx`/`run_combo`)
 and the single Trial Dosing editor are gone — replaced by the Treatment Arms builder.
