@@ -206,6 +206,29 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-15) — OD-debris propagation, structural/global tuning, save-calibrated
+
+- **OD/debris now propagates into the Calibration overlay.** The overlay always
+  simulated *with* debris (build_nominal includes it), but the OD *observable* was
+  computed as biomass/link and ignored the debris state. `predicted_observable()`
+  gained `use_model_od`: when the OD/debris module is on, OD comes from the model's
+  debris-inclusive `result.get_od()` (uses `od_to_cfu_conversion_factor`) instead of
+  the simple biomass/link scaling. The overlay's link input is then replaced by a note
+  pointing to the OD/debris params in the tuning panel.
+- **Manual calibration now exposes global & structural parameters** (a "Global &
+  structural" block in the tuning panel): n_latent (latent compartments), K, Ks;
+  nutrient S₀ / recycle / s_in / s_out (when nutrient tracking is on); the OD/debris
+  params (od_to_cfu, u, v, k_dis) when the module is on; and per-strain dormancy depth
+  (Q) added to the dormancy row. All edit the live `int_*` session keys directly.
+- **Save the calibrated model** (section 6): edits are already live in the Interactive
+  Simulator (same dicts), so "apply to builder" is automatic; added a **💾 Save
+  calibrated config as Scenario** button (reuses `dump_state_to_scenario`) to persist
+  the whole config to the Library for reload. `fit_save_scenario` (a button) is in
+  `_FIT_NOPERSIST` — persisting a button key pre-sets it and makes `st.button` raise;
+  the fit_config re-seed loop now also scrubs stale non-persistable keys.
+- Tests: `test_fit_helper.py` (+1 debris-OD), `test_calibration.py` (+1 globals/debris/
+  save-scenario). **66 pass.**
+
 ## Done this session (2026-07-15) — overlay persistence, builder-mode param parity, fuller tuning
 
 - **Calibration overlay now survives navigation** (item 1): the overlay was drawn

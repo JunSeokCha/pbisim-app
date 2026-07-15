@@ -28,12 +28,19 @@ OBSERVABLES = {
 }
 
 
-def predicted_observable(result, obs_key, link_value=None):
+def predicted_observable(result, obs_key, link_value=None, use_model_od=False):
     """Predicted measured signal from a SimulationResult for the given observable.
 
     ``result`` only needs a ``sum_prefixes(*prefixes)`` method, so this works for any
     pbisim ``SimulationResult``.
+
+    When ``use_model_od`` is set and the observable is OD, the debris-inclusive OD
+    from the model (``result.get_od()``, which folds in lysed-cell debris and uses the
+    model's own ``od_to_cfu_conversion_factor``) is used instead of the simple
+    biomass/link scaling — so an enabled OD/debris module propagates into the overlay.
     """
+    if obs_key == "od" and use_model_od and hasattr(result, "get_od"):
+        return result.get_od()
     spec = OBSERVABLES[obs_key]
     qty = result.sum_prefixes(*spec["prefixes"])
     link = spec.get("link")

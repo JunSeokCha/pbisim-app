@@ -105,3 +105,35 @@ def test_overlay_persists_across_navigation():
     at.run()
     assert _fitq(at)
     assert len(at.exception) == 0
+
+
+def test_globals_and_debris_and_save_scenario():
+    """Calibration exposes global/structural + OD-debris params, uses the
+    debris-inclusive OD when the module is on, and can save the calibrated
+    config as a Scenario (items in the 2026-07-15 request)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["int_debris_enabled"] = True
+    at.session_state["int_od_to_cfu_conversion_factor"] = 1e9
+    at.session_state["fit_dataset"] = {
+        "raw": _synthetic_dataset(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["PHAGE", "MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+
+    keys = {n.key for n in at.number_input if n.key}
+    for k in ("fit_edit_n_latent", "fit_edit_S0", "fit_edit_recycle",
+              "fit_edit_od2cfu", "fit_edit_debris_u"):
+        assert k in keys
+    # with debris on, the simple biomass/link input is replaced by a note
+    assert any("debris module" in m.value for m in at.markdown)
+
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    assert at.session_state["calib_overlay_result"]
+
+    at.session_state["fit_save_name"] = "calib_test"
+    at.run()
+    [b for b in at.button if b.key == "fit_save_scenario"][0].click().run()
+    assert "calib_test" in at.session_state["user_scenarios"]
+    assert len(at.exception) == 0

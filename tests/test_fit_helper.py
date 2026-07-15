@@ -22,11 +22,15 @@ from pbisim_app.fit_helper import (
 
 class _FakeResult:
     """Minimal stand-in exposing sum_prefixes, like a pbisim SimulationResult."""
-    def __init__(self, series):
+    def __init__(self, series, od=None):
         self._series = series  # dict: prefix -> array
+        self._od = od
 
     def sum_prefixes(self, *prefixes):
         return sum(self._series[p] for p in prefixes)
+
+    def get_od(self):
+        return self._od
 
 
 def test_observable_registry_covers_the_four_signals():
@@ -97,6 +101,18 @@ def test_aggregate_observations_mean_median_band():
     md = aggregate_observations(long, stat="median", band=(25, 75)).sort_values("time")
     assert list(md["value"]) == [2.0, 20.0]
     assert md["lo"].notna().all() and (md["hi"] >= md["lo"]).all()
+
+
+def test_predicted_od_uses_model_debris_when_requested():
+    # simple OD = biomass / od_to_cfu; debris-aware OD comes from get_od()
+    r = _FakeResult({"B": np.array([1e8]), "D": np.array([0.0]),
+                     "I": np.array([0.0]), "H": np.array([0.0])},
+                    od=np.array([0.42]))
+    assert np.isclose(predicted_observable(r, "od", 1e9), 1e8 / 1e9)          # simple
+    assert np.isclose(predicted_observable(r, "od", 1e9, use_model_od=True), 0.42)  # debris-aware
+    # non-OD observables ignore the flag
+    r2 = _FakeResult({"P": np.array([1e9])}, od=np.array([9.9]))
+    assert predicted_observable(r2, "pfu", use_model_od=True) == 1e9
 
 
 def test_entity_param_key_is_builder_mode_aware():

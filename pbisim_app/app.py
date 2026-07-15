@@ -2182,9 +2182,16 @@ elif st.session_state.current_page == "Calibration":
     # Buttons and the file-uploader can't be re-seeded via session_state, so they
     # are never persisted; everything else (filters/grouping/statistics/overlay
     # selections) is.
-    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear", "fit_load"}
+    # Buttons + the file-uploader must never be shadowed into fit_config: re-seeding a
+    # button's value pre-sets it, which makes the later st.button() raise. (Text/number
+    # widgets are fine to persist.)
+    _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
+                      "fit_load", "fit_save_scenario"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
+        if _wk in _FIT_NOPERSIST:
+            _fcfg.pop(_wk, None)  # scrub any stale non-persistable key
+            continue
         if _wk not in st.session_state:
             try:
                 st.session_state[_wk] = _wv
@@ -2294,14 +2301,22 @@ elif st.session_state.current_page == "Calibration":
                                         format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs")
             _spec = OBSERVABLES.get(_obs_key, {"log": True, "link": None, "label": _obs_key, "prefixes": ("B", "D", "I", "H")})
             _link_val = None
+            # When the OD/debris module is on, OD comes from the model's debris-inclusive
+            # get_od() (using od_to_cfu_conversion_factor, edited in the tuning panel's
+            # Global & structural section) rather than the simple biomass/link scaling.
+            _use_model_od = _obs_key == "od" and st.session_state.get("int_debris_enabled", False)
             lc1, lc2 = st.columns(2)
-            if _spec.get("link"):
+            if _spec.get("link") and not _use_model_od:
                 _pname, _op, _default = _spec["link"]
                 with lc1:
                     _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
                                                 key=f"fit_link_{_obs_key}",
                                                 help="Scales model state → signal (OD = biomass / od_to_cfu; "
                                                      "luminescence = active biomass × rlu_per_cell). Tunable below / future fit param.")
+            elif _use_model_od:
+                with lc1:
+                    st.caption("OD uses the **debris module** (`get_od`, includes lysed-cell debris). "
+                               "Tune `od_to_cfu` and the debris rates in *Global & structural* below.")
             with lc2:
                 _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
@@ -2316,17 +2331,67 @@ elif st.session_state.current_page == "Calibration":
             _tphages = st.session_state.get("int_phages", [])
             with st.expander("🎛 Manual parameter tuning", expanded=False):
                 st.caption("Edit the model's real parameter values, then re-overlay. Changes update the live "
-                           "model directly (no separate apply step) and can be saved as Parts in the Library.")
+                           "Interactive-Simulator model directly (no separate apply step) and can be saved as "
+                           "a Scenario or as Parts in the Library.")
 
-                gk1, gk2 = st.columns(2)
+                # ── Global & structural parameters ───────────────────────────
+                st.markdown("**Global & structural**")
+                _track_nut = st.session_state.get("int_track_nutrients", True)
+                gk1, gk2, gk3 = st.columns(3)
                 with gk1:
+                    st.session_state["int_n_latent"] = int(st.number_input(
+                        "Latent compartments (L)", min_value=1, max_value=50,
+                        value=int(st.session_state.get("int_n_latent", 5)), step=1, key="fit_edit_n_latent",
+                        help="Number of phage latent (eclipse) stages — Erlang shape of the latent period."))
+                with gk2:
                     st.session_state["int_carrying_capacity"] = st.number_input(
                         "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                         format="%.3e", key="fit_edit_K")
-                with gk2:
+                with gk3:
                     st.session_state["int_monod_constant"] = st.number_input(
                         "Monod constant (Ks)", value=float(st.session_state.get("int_monod_constant", 0.3)),
                         format="%g", key="fit_edit_Ks")
+                if _track_nut:
+                    nk1, nk2, nk3, nk4 = st.columns(4)
+                    with nk1:
+                        st.session_state["int_initial_S"] = st.number_input(
+                            "Initial nutrient (S₀)", value=float(st.session_state.get("int_initial_S", 1.0)),
+                            format="%g", key="fit_edit_S0")
+                    with nk2:
+                        st.session_state["int_recycle_fraction"] = st.number_input(
+                            "Recycle fraction", value=float(st.session_state.get("int_recycle_fraction", 0.0)),
+                            format="%g", key="fit_edit_recycle")
+                    with nk3:
+                        st.session_state["int_s_in"] = st.number_input(
+                            "Nutrient inflow (s_in)", value=float(st.session_state.get("int_s_in", 0.0)),
+                            format="%g", key="fit_edit_s_in")
+                    with nk4:
+                        st.session_state["int_s_out"] = st.number_input(
+                            "Nutrient washout (s_out)", value=float(st.session_state.get("int_s_out", 0.0)),
+                            format="%g", key="fit_edit_s_out")
+                else:
+                    st.caption("Nutrient tracking is off (constant/logistic growth) — S₀/recycle/inflow/washout "
+                               "are inactive. Enable it in the Interactive Simulator to fit them.")
+                if st.session_state.get("int_debris_enabled", False):
+                    st.markdown("*OD / debris module*")
+                    dk1, dk2, dk3, dk4 = st.columns(4)
+                    with dk1:
+                        st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
+                            "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 1e9)),
+                            format="%.3e", key="fit_edit_od2cfu",
+                            help="CFU per OD unit: OD = (biomass + debris) / od_to_cfu.")
+                    with dk2:
+                        st.session_state["int_debris_u"] = st.number_input(
+                            "Debris yield · deaths (u)", value=float(st.session_state.get("int_debris_u", 1.0)),
+                            format="%g", key="fit_edit_debris_u")
+                    with dk3:
+                        st.session_state["int_debris_v"] = st.number_input(
+                            "Debris yield · lysis (v)", value=float(st.session_state.get("int_debris_v", 0.5)),
+                            format="%g", key="fit_edit_debris_v")
+                    with dk4:
+                        st.session_state["int_debris_kdis"] = st.number_input(
+                            "Debris dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.1)),
+                            format="%g", key="fit_edit_debris_kdis")
 
                 if _tstrains:
                     st.markdown("**Bacterial strains**")
@@ -2338,10 +2403,16 @@ elif st.session_state.current_page == "Calibration":
                             _s[_knob["key"]] = st.number_input(
                                 _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
                                 format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
-                    # dormancy kinetics — only meaningful (and shown) when enabled
+                    # dormancy kinetics + depth compartments — only when enabled
                     if _s.get("dormancy_enabled"):
-                        _dcols = st.columns(len(STRAIN_DORMANCY_TUNABLES))
-                        for _dc, _knob in zip(_dcols, STRAIN_DORMANCY_TUNABLES):
+                        _dcols = st.columns(len(STRAIN_DORMANCY_TUNABLES) + 1)
+                        with _dcols[0]:
+                            _s["dormancy_depth"] = int(st.number_input(
+                                "Depth layers (Q)", min_value=1, max_value=10,
+                                value=int(_s.get("dormancy_depth", 3)), step=1,
+                                key=f"fit_edit_s_dormancy_depth_{_si}",
+                                help="Number of dormancy-depth compartments (max across strains sets n_depth)."))
+                        for _dc, _knob in zip(_dcols[1:], STRAIN_DORMANCY_TUNABLES):
                             with _dc:
                                 _s[_knob["key"]] = st.number_input(
                                     _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
@@ -2399,7 +2470,7 @@ elif st.session_state.current_page == "Calibration":
                             _armP[0] = _moi * _B0
                         _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
                         _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
-                        _pred = predicted_observable(_r, _obs_key, _link_val)
+                        _pred = predicted_observable(_r, _obs_key, _link_val, use_model_od=_use_model_od)
                         _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _obs_key)].sort_values("time")
                         _has_band = _band is not None and _d["lo"].notna().any()
                         _series.append({
@@ -2460,6 +2531,32 @@ elif st.session_state.current_page == "Calibration":
                 st.dataframe(pd.DataFrame(_ovr["metrics"]), use_container_width=True, hide_index=True)
                 st.caption("Edit the parameter values above and re-overlay to improve the fit. "
                            "Edits update the live model directly and can be saved as Parts in the Library.")
+
+        # ── 6. Save the calibrated model ─────────────────────────────────────
+        if _ds:
+            st.markdown("### 6 · Save the calibrated model")
+            st.caption("Parameter edits in the tuning panel are **already applied** to the live "
+                       "Interactive-Simulator model. Save the whole calibrated configuration as a "
+                       "Scenario to reload it later (from the Library page), or save individual "
+                       "strains/phages as Parts in the Library.")
+            _cs1, _cs2 = st.columns([3, 2])
+            with _cs1:
+                _cal_name = st.text_input("Scenario name", value="calibrated", key="fit_save_name")
+            with _cs2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("💾 Save calibrated config as Scenario", key="fit_save_scenario", use_container_width=True):
+                    _nm = (_cal_name or "").strip()
+                    if not _nm:
+                        st.error("Enter a scenario name.")
+                    else:
+                        _scen = st.session_state.user_scenarios
+                        _scen[_nm] = {
+                            "annotation": "Saved from Calibration",
+                            "schema_version": SCENARIO_SCHEMA_VERSION,
+                            "state": dump_state_to_scenario(),
+                        }
+                        st.session_state.user_scenarios = _scen
+                        st.success(f"Saved scenario '{_nm}'. Reload it from the Library page.")
 
         if st.button("🗑️ Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None
