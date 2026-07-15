@@ -158,6 +158,13 @@ PHAGE_TUNABLES = [
     {"key": "phage_decay_Km",    "label": "Decay Km",           "fmt": "%.1e", "default": 0.0},
     {"key": "attenuation_rate",  "label": "Dormant attenuation","fmt": "%g",   "default": 0.0},
 ]
+# Shown per phage only when the entity actually carries the key — mutation rate and
+# resistance fitness cost live on the phage dict in Binary-Genotypes mode (in Direct
+# mode mutation is the strain→strain graph / per-locus rates, edited on the Simulator).
+PHAGE_OPTIONAL_TUNABLES = [
+    {"key": "mu",           "label": "Mutation rate (μ)", "fmt": "%.1e", "default": 1e-7},
+    {"key": "fitness_cost", "label": "Fitness cost",      "fmt": "%g",   "default": 0.05},
+]
 # adsorption_s is the phage-dict key used in Binary-Genotypes mode.
 ADSORPTION_PHAGE_KEYS = ("adsorption_s", "adsorption_rates")
 

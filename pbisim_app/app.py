@@ -72,6 +72,7 @@ from pbisim_app.fit_helper import (
     STRAIN_TUNABLES,
     STRAIN_DORMANCY_TUNABLES,
     PHAGE_TUNABLES,
+    PHAGE_OPTIONAL_TUNABLES,
     ADSORPTION_PHAGE_KEYS,
     entity_param_key,
 )
@@ -2393,9 +2394,42 @@ elif st.session_state.current_page == "Calibration":
                             "Debris dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.1)),
                             format="%g", key="fit_edit_debris_kdis")
 
-                if _tstrains:
+                # Bacterial parameters. IMPORTANT: in Binary-Genotypes (BRG) mode the
+                # strain kinetics live on `int_brg_base_*` session keys (a single WT base
+                # from which the genotypes are derived), NOT the per-strain dicts — and
+                # initial_B comes from the equilibrium IC / per-genotype table. So the
+                # per-strain-dict editors below (correct for Direct / Custom-Strains)
+                # would be silently ignored in BRG. Edit the right storage per mode.
+                _is_brg = st.session_state.get("int_builder_mode", "").startswith("Binary")
+                if _is_brg:
+                    st.markdown("**Base strain (WT) — genotypes derived**")
+                    _bc = st.columns(3)
+                    with _bc[0]:
+                        st.session_state["int_brg_base_growth"] = st.number_input(
+                            "Growth rate (1/h)", value=float(st.session_state.get("int_brg_base_growth", 1.2)),
+                            format="%g", key="fit_edit_brg_growth")
+                    with _bc[1]:
+                        st.session_state["int_brg_base_ratio"] = st.number_input(
+                            "Bacteria/resource", value=float(st.session_state.get("int_brg_base_ratio", 1e9)),
+                            format="%.2e", key="fit_edit_brg_ratio")
+                    with _bc[2]:
+                        st.session_state["int_brg_death_rate_B"] = st.number_input(
+                            "Natural death (1/h)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)),
+                            format="%g", key="fit_edit_brg_death")
+                    if st.session_state.get("int_brg_use_eq_ic", False):
+                        st.session_state["int_brg_eq_total_B"] = st.number_input(
+                            "Total bacteria (equilibrium IC)",
+                            value=float(st.session_state.get("int_brg_eq_total_B", 1e7)),
+                            format="%.3e", key="fit_edit_brg_eqtotal",
+                            help="With the equilibrium initial condition on, per-genotype B₀ is derived "
+                                 "from this total (and fitness cost) — individual strain B₀ is not used.")
+                    else:
+                        st.caption("Per-genotype initial counts are set in the BRG phage-loci table on the "
+                                   "Interactive Simulator.")
+                _tune_strains = [] if _is_brg else _tstrains
+                if _tune_strains:
                     st.markdown("**Bacterial strains**")
-                for _si, _s in enumerate(_tstrains):
+                for _si, _s in enumerate(_tune_strains):
                     st.markdown(f"*{_s.get('name', f'Strain {_si}')}*")
                     _scols = st.columns(len(STRAIN_TUNABLES))
                     for _sc, _knob in zip(_scols, STRAIN_TUNABLES):
@@ -2434,7 +2468,20 @@ elif st.session_state.current_page == "Calibration":
                             _p[_knob["key"]] = st.number_input(
                                 _knob["label"], value=float(_p.get(_knob["key"], _knob["default"]) or 0.0),
                                 format=_knob["fmt"], key=f"fit_edit_p_{_knob['key']}_{_pj}")
-                    # adsorption inputs (per strain in pairwise modes)
+                    # Mutation rate / fitness cost — only in Binary-Genotypes, the only
+                    # mode that reads them from the phage dict. (Direct-mode phage dicts
+                    # may carry a stale `mu`, but Direct/Custom-Strains take mutation from
+                    # the strain→strain graph edited on the Simulator, so editing it here
+                    # would be a silent no-op.)
+                    _opt = PHAGE_OPTIONAL_TUNABLES if _is_brg else []
+                    if _opt:
+                        _ocols = st.columns(len(_opt))
+                        for _oc, _knob in zip(_ocols, _opt):
+                            with _oc:
+                                _p[_knob["key"]] = st.number_input(
+                                    _knob["label"], value=float(_p.get(_knob["key"], _knob["default"]) or 0.0),
+                                    format=_knob["fmt"], key=f"fit_edit_p_{_knob['key']}_{_pj}")
+                    # adsorption inputs (per strain in pairwise modes: active + dormant)
                     if _ads_pairwise and _tstrains:
                         _acols = st.columns(len(_tstrains))
                         for _si, _s in enumerate(_tstrains):
@@ -2444,11 +2491,23 @@ elif st.session_state.current_page == "Calibration":
                                     f"Adsorption → {_s.get('name', f'Strain {_si}')}",
                                     value=float(st.session_state.get(_adk, 1e-8 if _si == 0 else 0.0)),
                                     format="%.3e", key=f"fit_edit_ads_{_si}_{_pj}")
+                            # dormant-cell adsorption for strains with dormancy on
+                            if _s.get("dormancy_enabled"):
+                                _addk = f"ads_dorm_{_si}_{_pj}"
+                                with _acols[_si]:
+                                    st.session_state[_addk] = st.number_input(
+                                        f"Dormant ads → {_s.get('name', f'Strain {_si}')}",
+                                        value=float(st.session_state.get(_addk, 0.0)),
+                                        format="%.3e", key=f"fit_edit_adsdorm_{_si}_{_pj}")
                     elif not _ads_pairwise:
                         _adk = entity_param_key(_p, ADSORPTION_PHAGE_KEYS)
                         _p[_adk] = st.number_input(
                             "Adsorption (adsorption_s)", value=float(_p.get(_adk, 5e-8) or 0.0),
                             format="%.3e", key=f"fit_edit_adss_{_pj}")
+                        if "adsorption_r" in _p:
+                            _p["adsorption_r"] = st.number_input(
+                                "Adsorption resistant (adsorption_r)", value=float(_p.get("adsorption_r", 0.0) or 0.0),
+                                format="%.3e", key=f"fit_edit_adsr_{_pj}")
                 st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some builder "
                            "modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
 
