@@ -2853,7 +2853,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
             if do_sweep:
                 series_str = st.text_input(
                     "Dose series (comma-separated)",
-                    value="1e6, 1e7, 1e8",
+                    value="1e3, 1e5, 1e7, 1e9",
                     key=f"dr_sweep_phg_series_{j}"
                 )
                 unit = st.selectbox(
@@ -2963,7 +2963,9 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 
                 runs_outcomes = []
                 trajectories = [] # list of (time, viable_b, label)
-                
+                od_trajectories = [] # list of (time, od, label) — only if OD/debris enabled
+                _od_enabled = st.session_state.get("int_debris_enabled", False)
+
                 # Progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -3063,6 +3065,11 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                         })
                         
                         trajectories.append((result.time, total_bacteria, f"Run {k_idx + 1}: {run_label}"))
+                        if _od_enabled:
+                            _od = (result.get_od() if hasattr(result, "get_od")
+                                   else (total_bacteria + result.get("Debris"))
+                                   / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                            od_trajectories.append((result.time, _od, f"Run {k_idx + 1}: {run_label}"))
                         progress_bar.progress((k_idx + 1) / M)
                         
                     status_text.text("Sweep completed!")
@@ -3103,6 +3110,24 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     template="plotly_white" if theme_mode == "Light" else "plotly_dark"
                 )
                 st.plotly_chart(fig_traj, use_container_width=True)
+
+                # OD trajectories (only when the OD/debris module is enabled)
+                if od_trajectories:
+                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
+                    fig_od = go.Figure()
+                    for t_arr, od_arr, legend_lbl in od_trajectories:
+                        fig_od.add_trace(go.Scatter(
+                            x=t_arr,
+                            y=od_arr,
+                            mode='lines',
+                            name=legend_lbl
+                        ))
+                    fig_od.update_layout(
+                        xaxis_title="Time (hours)",
+                        yaxis_title="Optical density (AU)",
+                        template="plotly_white" if theme_mode == "Light" else "plotly_dark"
+                    )
+                    st.plotly_chart(fig_od, use_container_width=True)
 
                 # Plot metrics
                 st.markdown("#### Outcome Metrics vs Run Index")

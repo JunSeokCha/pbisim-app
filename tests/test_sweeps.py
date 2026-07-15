@@ -128,3 +128,24 @@ def test_dose_response_zero_phage_dose_does_not_suppress():
 
     # the phage's baseline inoculum is restored after the sweep
     assert at.session_state["int_phages"][0]["initial_P"] > 0
+
+def test_dose_response_shows_od_trajectories_when_enabled():
+    """OD trajectories are plotted in the dose sweep only when the OD/debris
+    module is enabled; the default phage series is 1e3..1e9."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["int_debris_enabled"] = True
+    at.session_state["int_od_to_cfu_conversion_factor"] = 1e9
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    assert at.session_state["dr_sweep_phg_series_0"] == "1e3, 1e5, 1e7, 1e9"
+    at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
+    at.run()
+    [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
+
+    assert len(at.exception) == 0
+    headers = [m.value for m in at.markdown]
+    assert any("Viable Bacteria" in h for h in headers)   # CFU chart
+    assert any("Optical Density" in h for h in headers)   # OD chart
