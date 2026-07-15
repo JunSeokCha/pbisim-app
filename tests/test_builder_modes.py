@@ -377,3 +377,26 @@ def test_prerun_carries_dormant_reservoir():
     assert dropped.max() < 1e7, "dropping ic.D should lose most of the stationary culture"
     assert kept.max() > 1e8, "carrying ic.D must preserve the stationary population"
     assert kept.max() > 100 * dropped.max(), "fix must retain orders of magnitude more biomass"
+
+
+def test_bacteria_to_resource_ratio_editable_in_all_modes():
+    """bacteria_to_resource_ratio has an editable widget in Direct + StrainSet
+    (it was previously read-only there); pseudolysogeny is now editable in
+    BRG + StrainSet."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    keys = lambda a: {n.key for n in a.number_input if n.key}
+    assert "str_ratio_0" in keys(at)  # Direct
+
+    at.session_state["widget_builder_mode"] = "Custom Strains & Graph (StrainSet)"
+    at.run(); at.run()
+    k = keys(at)
+    assert "ss_str_ratio_0" in k
+    assert all(f"ss_phg_{s}_0" in k for s in ("hib_s", "hib_r", "res_s", "res_r"))
+
+    at.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"
+    at.run(); at.run()
+    k = keys(at)
+    assert all(f"brg_phg_{s}_0" in k for s in ("hib_s", "hib_r", "res_s", "res_r"))
+    assert len(at.exception) == 0

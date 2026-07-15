@@ -132,13 +132,24 @@ def aggregate_observations(long_df, stat="raw", band=None):
 # and Custom-Strains keep it in the pairwise ``ads_{strain}_{phage}`` session keys;
 # Binary-Genotypes keeps it on the phage dict as ``adsorption_s``).
 STRAIN_TUNABLES = [
-    {"key": "growth_rate", "label": "Growth rate (1/h)",  "fmt": "%g",   "default": 1.2},
-    {"key": "initial_B",   "label": "Initial density B₀", "fmt": "%.3e", "default": 1e7},
+    {"key": "growth_rate",                "label": "Growth rate (1/h)",   "fmt": "%g",   "default": 1.2},
+    {"key": "bacteria_to_resource_ratio", "label": "Bacteria/resource",   "fmt": "%.2e", "default": 1e9},
+    {"key": "death_rate_B",               "label": "Natural death (1/h)", "fmt": "%g",   "default": 0.0},
+    {"key": "initial_B",                  "label": "Initial density B₀",  "fmt": "%.3e", "default": 1e7},
+]
+# Shown only for a strain with dormancy enabled.
+STRAIN_DORMANCY_TUNABLES = [
+    {"key": "dormancy_rate",           "label": "Dormancy rate (1/h)",     "fmt": "%g", "default": 0.2},
+    {"key": "resuscitation_rate",      "label": "Resuscitation (1/h)",     "fmt": "%g", "default": 0.1},
+    {"key": "dormancy_diffusion_rate", "label": "Depth diffusion (1/h)",   "fmt": "%g", "default": 0.05},
+    {"key": "death_rate_D",            "label": "Dormant death (1/h)",     "fmt": "%g", "default": 0.0},
 ]
 PHAGE_TUNABLES = [
-    {"key": "burst_sizes",       "label": "Burst size",        "fmt": "%g", "default": 50.0},
-    {"key": "latent_periods",    "label": "Latent period (h)", "fmt": "%g", "default": 0.5},
-    {"key": "phage_decay_rates", "label": "Phage decay (1/h)", "fmt": "%g", "default": 0.1},
+    {"key": "burst_sizes",       "label": "Burst size",         "fmt": "%g",   "default": 50.0},
+    {"key": "latent_periods",    "label": "Latent period (h)",  "fmt": "%g",   "default": 0.5},
+    {"key": "phage_decay_rates", "label": "Phage decay (1/h)",  "fmt": "%g",   "default": 0.1},
+    {"key": "phage_decay_Km",    "label": "Decay Km",           "fmt": "%.1e", "default": 0.0},
+    {"key": "attenuation_rate",  "label": "Dormant attenuation","fmt": "%g",   "default": 0.0},
 ]
 # adsorption_s is the phage-dict key used in Binary-Genotypes mode.
 ADSORPTION_PHAGE_KEYS = ("adsorption_s", "adsorption_rates")

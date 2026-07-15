@@ -13,6 +13,7 @@ from pbisim_app.fit_helper import (
     aggregate_observations,
     fit_residual,
     STRAIN_TUNABLES,
+    STRAIN_DORMANCY_TUNABLES,
     PHAGE_TUNABLES,
     ADSORPTION_PHAGE_KEYS,
     entity_param_key,
@@ -109,9 +110,11 @@ def test_entity_param_key_is_builder_mode_aware():
 
 
 def test_tunable_registries_cover_the_fit_parameters():
-    assert {k["key"] for k in STRAIN_TUNABLES} == {"growth_rate", "initial_B"}
-    # burst / latent / decay tuned per phage; adsorption is handled separately
-    assert {k["key"] for k in PHAGE_TUNABLES} == {"burst_sizes", "latent_periods", "phage_decay_rates"}
+    strain_keys = {k["key"] for k in STRAIN_TUNABLES}
+    assert {"growth_rate", "bacteria_to_resource_ratio", "death_rate_B", "initial_B"} <= strain_keys
+    phage_keys = {k["key"] for k in PHAGE_TUNABLES}
+    assert {"burst_sizes", "latent_periods", "phage_decay_rates", "phage_decay_Km", "attenuation_rate"} <= phage_keys
+    # adsorption is handled separately (builder-mode specific storage)
     assert "adsorption_s" in ADSORPTION_PHAGE_KEYS
 
 

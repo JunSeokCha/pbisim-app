@@ -206,6 +206,29 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-15) — overlay persistence, builder-mode param parity, fuller tuning
+
+- **Calibration overlay now survives navigation** (item 1): the overlay was drawn
+  inside `if st.button(...)`, so leaving the page and returning (without re-clicking)
+  wiped the plot. Split compute-from-render: the button computes and stores the plot
+  data in `st.session_state.calib_overlay_result`; a separate block renders it on
+  every run while present. Stays alive until re-run or the dataset is cleared.
+- **Builder-mode parameter parity** (item 2): closed the "read-but-not-editable" gaps
+  found by auditing all three builder UIs vs `build_nominal_config_from_gui`:
+  - `bacteria_to_resource_ratio` — was read (default 1e9) but had no widget in
+    **Direct** (`str_ratio_{i}`) or **StrainSet** (`ss_str_ratio_{i}`); added to both
+    (BRG already had `int_brg_base_ratio`).
+  - Pseudolysogeny (`hibernation_rate_s/r`, `lytic_resumption_rate_s/r`) — read into
+    `PhageStrain` but no widgets in **BRG** (`brg_phg_{hib,res}_{s,r}_{idx}`) or
+    **StrainSet** (`ss_phg_...`); added to both (Direct already had them).
+- **Manual calibration exposes the fuller parameter set** (item 3): `STRAIN_TUNABLES`
+  now growth / bacteria_to_resource_ratio / death_rate_B / initial_B; a conditional
+  `STRAIN_DORMANCY_TUNABLES` row (dormancy/resuscitation/diffusion/dormant-death) shown
+  per strain when dormancy is on; `PHAGE_TUNABLES` adds phage_decay_Km + attenuation_rate
+  (on top of burst/latent/decay + the mode-aware adsorption editor).
+- Tests: `test_calibration.py` (+1 overlay persistence), `test_builder_modes.py`
+  (+1 all-mode ratio/pseudolysogeny), `test_fit_helper.py` registry update. **64 pass.**
+
 ## Done this session (2026-07-15) — dose-response zero-dose phage leak
 
 - **Dose-Response Sweeps: a swept phage dose of 0 still suppressed the bacteria.**

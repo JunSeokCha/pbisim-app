@@ -70,6 +70,7 @@ from pbisim_app.fit_helper import (
     aggregate_observations,
     fit_residual,
     STRAIN_TUNABLES,
+    STRAIN_DORMANCY_TUNABLES,
     PHAGE_TUNABLES,
     ADSORPTION_PHAGE_KEYS,
     entity_param_key,
@@ -2337,6 +2338,14 @@ elif st.session_state.current_page == "Calibration":
                             _s[_knob["key"]] = st.number_input(
                                 _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
                                 format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
+                    # dormancy kinetics — only meaningful (and shown) when enabled
+                    if _s.get("dormancy_enabled"):
+                        _dcols = st.columns(len(STRAIN_DORMANCY_TUNABLES))
+                        for _dc, _knob in zip(_dcols, STRAIN_DORMANCY_TUNABLES):
+                            with _dc:
+                                _s[_knob["key"]] = st.number_input(
+                                    _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
+                                    format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
 
                 # Adsorption is a strain×phage property; its storage is builder-mode
                 # specific. Direct / Custom-Strains keep it in the pairwise
@@ -2372,16 +2381,18 @@ elif st.session_state.current_page == "Calibration":
                 st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some builder "
                            "modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
 
+            # Compute the overlay only when the button is clicked; store the plot
+            # data in session_state so the visualization stays alive across page
+            # navigation (and reruns) until it is explicitly re-run or the dataset
+            # is cleared.
             if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
                     _B0 = float(np.sum(_iB))
                     _method = st.session_state.get("int_solver_method", "BDF")
                     _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
-                    _fig, _ax = plt.subplots(figsize=(10, 5))
-                    _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-                    _metrics = []
-                    for _i, _arm in enumerate(_sel_arms):
+                    _series, _metrics = [], []
+                    for _arm in _sel_arms:
                         _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
                         _armP = np.zeros(len(_iP))
                         if len(_iP):
@@ -2389,41 +2400,71 @@ elif st.session_state.current_page == "Calibration":
                         _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
                         _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
                         _pred = predicted_observable(_r, _obs_key, _link_val)
-                        _color = _palette[_i % len(_palette)]
-                        _ax.plot(_r.time, np.maximum(_pred, 1e-30) if _spec.get("log") else _pred,
-                                 color=_color, lw=2, label=f"{_arm} (model)")
                         _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _obs_key)].sort_values("time")
-                        if _stat_key == "raw":
-                            _ax.scatter(_d["time"], _d["value"], color=_color, s=14, alpha=0.45)
-                        else:
-                            _ax.scatter(_d["time"], _d["value"], color=_color, s=18, marker="o", edgecolor="k", linewidth=0.3, zorder=3)
-                            if _band is not None and _d["lo"].notna().any():
-                                _ax.fill_between(_d["time"], _d["lo"], _d["hi"], color=_color, alpha=0.18, linewidth=0)
+                        _has_band = _band is not None and _d["lo"].notna().any()
+                        _series.append({
+                            "label": _arm,
+                            "time": np.asarray(_r.time),
+                            "pred": np.asarray(_pred),
+                            "obs_time": _d["time"].to_numpy(),
+                            "obs_value": _d["value"].to_numpy(),
+                            "obs_lo": _d["lo"].to_numpy() if _has_band else None,
+                            "obs_hi": _d["hi"].to_numpy() if _has_band else None,
+                            "is_raw": _stat_key == "raw",
+                        })
                         _metrics.append({"group": _arm, "MOI": _moi, "n_points": len(_d),
                                          "RMSE": fit_residual(_r.time, _pred, _d["time"].values, _d["value"].values, _spec.get("log", False))})
-                    if _spec.get("log"):
-                        _ax.set_yscale("log")
-                    _ax.set_xlabel("Time (h)")
-                    _ax.set_ylabel(_spec.get("label", _obs_key))
-                    _ax.legend(fontsize=8, ncol=2)
                     _stat_label = _stat if _stat_key != "raw" else "raw points"
-                    _ax.set_title(f"Model (lines) vs observations ({_stat_label}" + (f" + {_band_choice} band)" if _band else ")"))
-                    _ax.grid(True, alpha=0.15)
-                    st.pyplot(_fig)
-                    plt.close(_fig)
-                    st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _spec.get("log") else "") +
-                                f", vs {_stat_label})")
-                    st.dataframe(pd.DataFrame(_metrics), use_container_width=True, hide_index=True)
-                    st.caption("Tune the multipliers (or link parameter) above and re-overlay to improve the fit; "
-                               "**📌 Apply tuning to model** commits the fit, then save it as a Part in the Library.")
+                    st.session_state["calib_overlay_result"] = {
+                        "series": _series,
+                        "metrics": _metrics,
+                        "log": bool(_spec.get("log")),
+                        "ylabel": _spec.get("label", _obs_key),
+                        "stat_label": _stat_label,
+                        "title": (f"Model (lines) vs observations ({_stat_label}"
+                                  + (f" + {_band_choice} band)" if _band else ")")),
+                    }
                 except Exception as e:
+                    st.session_state["calib_overlay_result"] = None
                     st.error(f"Overlay failed: {e}")
                     import traceback
                     st.code(traceback.format_exc())
 
+            # Render the (persisted) overlay result if one exists.
+            _ovr = st.session_state.get("calib_overlay_result")
+            if _ovr:
+                _fig, _ax = plt.subplots(figsize=(10, 5))
+                _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+                for _i, _s in enumerate(_ovr["series"]):
+                    _color = _palette[_i % len(_palette)]
+                    _yp = np.maximum(_s["pred"], 1e-30) if _ovr["log"] else _s["pred"]
+                    _ax.plot(_s["time"], _yp, color=_color, lw=2, label=f"{_s['label']} (model)")
+                    if _s["is_raw"]:
+                        _ax.scatter(_s["obs_time"], _s["obs_value"], color=_color, s=14, alpha=0.45)
+                    else:
+                        _ax.scatter(_s["obs_time"], _s["obs_value"], color=_color, s=18, marker="o",
+                                    edgecolor="k", linewidth=0.3, zorder=3)
+                        if _s["obs_lo"] is not None:
+                            _ax.fill_between(_s["obs_time"], _s["obs_lo"], _s["obs_hi"], color=_color, alpha=0.18, linewidth=0)
+                if _ovr["log"]:
+                    _ax.set_yscale("log")
+                _ax.set_xlabel("Time (h)")
+                _ax.set_ylabel(_ovr["ylabel"])
+                _ax.legend(fontsize=8, ncol=2)
+                _ax.set_title(_ovr["title"])
+                _ax.grid(True, alpha=0.15)
+                st.pyplot(_fig)
+                plt.close(_fig)
+                st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _ovr["log"] else "") +
+                            f", vs {_ovr['stat_label']})")
+                st.dataframe(pd.DataFrame(_ovr["metrics"]), use_container_width=True, hide_index=True)
+                st.caption("Edit the parameter values above and re-overlay to improve the fit. "
+                           "Edits update the live model directly and can be saved as Parts in the Library.")
+
         if st.button("🗑️ Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None
             st.session_state.fit_config = {}
+            st.session_state.calib_overlay_result = None
             st.rerun()
 
     # Save the current Calibration widget selections to the persistent config so they
@@ -3573,6 +3614,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 step=0.1,
                                 key=f"str_growth_{i}",
                             )
+                        strains[i]["bacteria_to_resource_ratio"] = st.number_input(
+                            "Bacteria-to-resource ratio",
+                            value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
+                            format="%.2e",
+                            key=f"str_ratio_{i}",
+                            help="Bacteria produced per unit resource consumed (yield). Governs how fast "
+                                 "growth depletes the substrate under nutrient-limited (Monod) growth.",
+                        )
                         strains[i]["death_rate_B"] = st.number_input(
                             "Natural death rate (dB)",
                             value=float(strains[i].get("death_rate_B", 0.0)),
@@ -3908,6 +3957,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                             help="Phage decay saturation. Set to 0 to disable.",
                         )
 
+                        st.markdown("**Pseudolysogeny & Hibernation**")
+                        phages[idx]["hibernation_rate_s"] = st.number_input("Susceptible I->H rate", value=float(phages[idx].get("hibernation_rate_s", 0.0)), step=0.05, key=f"brg_phg_hib_s_{idx}")
+                        phages[idx]["hibernation_rate_r"] = st.number_input("Resistant I->H rate", value=float(phages[idx].get("hibernation_rate_r", 0.0)), step=0.05, key=f"brg_phg_hib_r_{idx}")
+                        phages[idx]["lytic_resumption_rate_s"] = st.number_input("Susceptible extra H->I rate", value=float(phages[idx].get("lytic_resumption_rate_s", 0.0)), step=0.05, key=f"brg_phg_res_s_{idx}")
+                        phages[idx]["lytic_resumption_rate_r"] = st.number_input("Resistant extra H->I rate", value=float(phages[idx].get("lytic_resumption_rate_r", 0.0)), step=0.05, key=f"brg_phg_res_r_{idx}")
+
                         st.markdown("**Pharmacokinetics (PK)**")
                         phages[idx]["pk_mode"] = st.selectbox(
                             "Phage PK Mode",
@@ -4001,6 +4056,11 @@ elif st.session_state.current_page == "Interactive Simulator":
                         strains[i]["name"] = st.text_input("Strain name", value=strains[i]["name"], key=f"ss_str_name_{i}")
                         strains[i]["initial_B"] = st.number_input("Initial count (B0)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
                         strains[i]["growth_rate"] = st.number_input("Growth rate (r)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
+                        strains[i]["bacteria_to_resource_ratio"] = st.number_input(
+                            "Bacteria-to-resource ratio", value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
+                            format="%.2e", key=f"ss_str_ratio_{i}",
+                            help="Bacteria produced per unit resource consumed (yield). Governs how fast "
+                                 "growth depletes the substrate under nutrient-limited (Monod) growth.")
                         strains[i]["death_rate_B"] = st.number_input("Natural death rate (dB)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
@@ -4094,6 +4154,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                             key=f"ss_phg_decay_km_{idx}",
                             help="Phage decay saturation. Set to 0 to disable.",
                         )
+
+                        st.markdown("**Pseudolysogeny & Hibernation**")
+                        phages[idx]["hibernation_rate_s"] = st.number_input("Susceptible I->H rate", value=float(phages[idx].get("hibernation_rate_s", 0.0)), step=0.05, key=f"ss_phg_hib_s_{idx}")
+                        phages[idx]["hibernation_rate_r"] = st.number_input("Resistant I->H rate", value=float(phages[idx].get("hibernation_rate_r", 0.0)), step=0.05, key=f"ss_phg_hib_r_{idx}")
+                        phages[idx]["lytic_resumption_rate_s"] = st.number_input("Susceptible extra H->I rate", value=float(phages[idx].get("lytic_resumption_rate_s", 0.0)), step=0.05, key=f"ss_phg_res_s_{idx}")
+                        phages[idx]["lytic_resumption_rate_r"] = st.number_input("Resistant extra H->I rate", value=float(phages[idx].get("lytic_resumption_rate_r", 0.0)), step=0.05, key=f"ss_phg_res_r_{idx}")
 
                         st.markdown("**Pharmacokinetics (PK)**")
                         phages[idx]["pk_mode"] = st.selectbox(

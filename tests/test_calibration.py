@@ -80,3 +80,28 @@ def test_manual_tuning_edits_model_directly():
     # the overlay runs against the edited model
     [b for b in at.button if b.key == "fit_overlay"][0].click().run()
     assert len(at.exception) == 0
+
+
+def test_overlay_persists_across_navigation():
+    """The overlay visualization stays alive after navigating away and back,
+    until it is explicitly re-run (item 1)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _synthetic_dataset(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["PHAGE", "MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    assert "calib_overlay_result" in at.session_state and at.session_state["calib_overlay_result"]
+    _fitq = lambda a: any("Fit quality" in m.value for m in a.markdown)
+    assert _fitq(at)  # shown right after overlay
+
+    # leave and return without re-clicking — plot must still be there
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert _fitq(at)
+    assert len(at.exception) == 0
