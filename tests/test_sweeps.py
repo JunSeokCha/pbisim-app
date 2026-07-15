@@ -140,7 +140,7 @@ def test_dose_response_shows_od_trajectories_when_enabled():
     at.run()
     at.session_state["dr_sweep_phg_en_0"] = True
     at.run()
-    assert at.session_state["dr_sweep_phg_series_0"] == "1e3, 1e5, 1e7, 1e9"
+    assert at.session_state["dr_sweep_phg_series_0"] == "0, 1e3, 1e5, 1e7, 1e9"
     at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
     at.run()
     [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
@@ -202,4 +202,39 @@ def test_prerun_collapse_warning():
     at.run()
     [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
     assert any("pre-run leaves only" in w.value for w in at.warning)
+    assert len(at.exception) == 0
+
+
+def test_sweep_configs_survive_navigation():
+    """The sweep CONTROLS (not just results) survive navigation, and the
+    dose-response phage series defaults to include a zero-dose control."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    # dose-response: default series includes the 0 control
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    assert [t for t in at.text_input if t.key == "dr_sweep_phg_series_0"][0].value == "0, 1e3, 1e5, 1e7, 1e9"
+    at.session_state["dr_sweep_phg_series_0"] = "0, 5e6"
+    at.session_state["dr_sweep_phg_unit_0"] = "MOI (relative to B(0))"
+    at.run()
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    assert at.session_state["dr_sweep_phg_en_0"] is True
+    assert at.session_state["dr_sweep_phg_series_0"] == "0, 5e6"
+    assert at.session_state["dr_sweep_phg_unit_0"] == "MOI (relative to B(0))"
+
+    # parameter sweep: 1D/2D choice survives navigation
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    at.session_state["ps_sweep_type"] = "2D Sweep"
+    at.run()
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    assert at.session_state["ps_sweep_type"] == "2D Sweep"
     assert len(at.exception) == 0

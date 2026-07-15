@@ -206,6 +206,21 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-15) — sweep CONFIG persistence + zero-dose default
+
+- **Sweep controls now survive navigation** (previously only the *results* did). The
+  dose-response `dr_sweep_*` widgets and the parameter-sweep `p1_*`/`p2_*`/`ps_*`
+  widgets got dropped on navigation (Streamlit discards un-rendered widget keys).
+  Added reusable `reseed_widget_config()` / `save_widget_config()` (shadow the
+  selections into `dr_sweep_config` / `param_sweep_config` plain dicts, re-seed before
+  render). For the parameter sweep the previously-unkeyed `sweep_type` (radio) and the
+  1D `ps_1d_min/max/steps/spacing` inputs were keyed so they can persist; the 1D range
+  widgets re-autoscale when the swept parameter changes (`_ps_1d_last_param` guard pops
+  them so a persisted key doesn't pin a stale range).
+- **Dose-response default phage series now `0, 1e3, 1e5, 1e7, 1e9`** (adds the zero-dose
+  control). Test `test_dose_response_shows_od_trajectories_when_enabled` updated.
+- Test: `test_sweeps.py::test_sweep_configs_survive_navigation`. **69 pass.**
+
 ## Done this session (2026-07-15) — pre-run collapse, sweep persistence, BRG calibration clash
 
 - **Pre-run made CFU/OD scale very low (reported as a dose-response OD bug).** Root

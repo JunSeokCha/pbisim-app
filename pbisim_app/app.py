@@ -1563,6 +1563,33 @@ def warn_if_prerun_collapses(config, B0):
         )
 
 
+def reseed_widget_config(store_key, prefixes):
+    """Re-seed widget selections from a persistent store BEFORE the widgets render.
+
+    Streamlit drops a widget's key from session_state whenever the widget is not
+    rendered on a rerun, so leaving a page (e.g. a sweep page) and coming back would
+    otherwise reset all its controls. Shadowing the keys into a plain dict (which
+    survives) and re-seeding from it keeps the configuration alive across navigation.
+    """
+    store = st.session_state.setdefault(store_key, {})
+    for k, v in list(store.items()):
+        if any(k.startswith(p) for p in prefixes) and k not in st.session_state:
+            try:
+                st.session_state[k] = v
+            except Exception:
+                pass  # non-settable widget (e.g. a button) — skip
+
+
+def save_widget_config(store_key, prefixes, exclude=()):
+    """Shadow the current widget selections (keys matching *prefixes*) into the store."""
+    store = st.session_state.setdefault(store_key, {})
+    for k in list(st.session_state.keys()):
+        if k in exclude:
+            continue
+        if any(k.startswith(p) for p in prefixes):
+            store[k] = st.session_state[k]
+
+
 def generate_reproduction_code() -> str:
     """Generates complete Python script code corresponding to the current state."""
     builder_mode = st.session_state.get("int_builder_mode", "Direct (ModelBuilder)")
@@ -3057,6 +3084,9 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
     st.title("📈 Dose-Response Simulator")
     st.caption("Perform multi-drug dose-response sweeps with MOI scaling, vector padding, and raw time-series visualization.")
 
+    # Keep the sweep controls alive across navigation (re-seed before they render).
+    reseed_widget_config("dr_sweep_config", ("dr_sweep_",))
+
     strains = st.session_state.get("int_strains", [])
     phages = st.session_state.get("int_phages", [])
     antibiotics = st.session_state.get("int_antibiotics", [])
@@ -3085,7 +3115,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
             if do_sweep:
                 series_str = st.text_input(
                     "Dose series (comma-separated)",
-                    value="1e3, 1e5, 1e7, 1e9",
+                    value="0, 1e3, 1e5, 1e7, 1e9",
                     key=f"dr_sweep_phg_series_{j}"
                 )
                 unit = st.selectbox(
@@ -3370,10 +3400,16 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
         else:
             st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
 
+    # Persist the sweep controls so they survive navigation (see reseed above).
+    save_widget_config("dr_sweep_config", ("dr_sweep_",))
+
 # ── Parameter Sweeps Page ──────────────────────────────────────────────────────
 elif st.session_state.current_page == "Parameter Sweeps":
     st.title("📊 Model Parameter Sweeps")
     st.caption("Sweep any model parameter in 1D or 2D and visualize cellular trajectories and outcome heatmaps.")
+
+    # Keep the sweep controls alive across navigation (re-seed before they render).
+    reseed_widget_config("param_sweep_config", ("p1_", "p2_", "ps_"))
 
     # Build nominal configuration
     try:
@@ -3393,7 +3429,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
         unsafe_allow_html=True,
     )
 
-    sweep_type = st.radio("Sweep Dimension", ["1D Sweep", "2D Sweep"], horizontal=True)
+    sweep_type = st.radio("Sweep Dimension", ["1D Sweep", "2D Sweep"], horizontal=True, key="ps_sweep_type")
 
     sweep_params = get_sweep_parameters(nominal_config, strains_gui, phages_gui, antibiotics_gui)
     param_labels = sorted(list(sweep_params.keys()))
@@ -3406,7 +3442,14 @@ elif st.session_state.current_page == "Parameter Sweeps":
         if sweep_type == "1D Sweep":
             param1_label = st.selectbox("Select Parameter", param_labels, key="p1_sweep_label")
             meta1 = sweep_params[param1_label]
-            
+            # Re-autoscale the range widgets when the swept parameter changes (their
+            # value= default depends on the nominal value; a persisted key would pin it).
+            if st.session_state.get("_ps_1d_last_param") != param1_label:
+                for _k in ("ps_1d_min", "ps_1d_max", "ps_1d_steps", "ps_1d_spacing"):
+                    st.session_state.pop(_k, None)
+                    st.session_state.setdefault("param_sweep_config", {}).pop(_k, None)
+                st.session_state["_ps_1d_last_param"] = param1_label
+
             # Default values
             default_val = 1e-9
             if meta1["type"] == "scalar":
@@ -3436,13 +3479,13 @@ elif st.session_state.current_page == "Parameter Sweeps":
             
             c1, c2, c3 = st.columns(3)
             with c1:
-                min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e")
+                min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e", key="ps_1d_min")
             with c2:
-                max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e")
+                max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e", key="ps_1d_max")
             with c3:
-                steps = st.number_input("Steps", min_value=2, max_value=25, value=5)
+                steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
-            spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"])
+            spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
             run_sweep = st.button("🚀 Run 1D Sweep", use_container_width=True)
 
         else:
@@ -3675,6 +3718,9 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     st.plotly_chart(fig_nadir, use_container_width=True)
         else:
             st.info("Configure parameters and click **Run Sweep** to start the analysis.")
+
+    # Persist the sweep controls so they survive navigation (see reseed above).
+    save_widget_config("param_sweep_config", ("p1_", "p2_", "ps_"))
 
 # ── Interactive Simulator Page ────────────────────────────────────────────────
 elif st.session_state.current_page == "Interactive Simulator":
