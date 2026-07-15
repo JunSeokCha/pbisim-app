@@ -149,3 +149,38 @@ def test_dose_response_shows_od_trajectories_when_enabled():
     headers = [m.value for m in at.markdown]
     assert any("Viable Bacteria" in h for h in headers)   # CFU chart
     assert any("Optical Density" in h for h in headers)   # OD chart
+
+
+def test_sweep_results_survive_navigation():
+    """Dose-response and parameter sweep results persist across page navigation
+    (rendered from session_state, until re-run)."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    # dose-response
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    at.session_state["dr_sweep_phg_series_0"] = "1e3, 1e7"
+    at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
+    at.run()
+    [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
+    assert at.session_state["dr_sweep_result"]
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    assert any("Summary of Runs" in m.value for m in at.markdown)
+    assert len(at.exception) == 0
+
+    # parameter sweep (1D)
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    [b for b in at.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
+    assert at.session_state["param_sweep_result"]
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    assert any("Summary of Runs" in m.value for m in at.markdown)
+    assert len(at.exception) == 0

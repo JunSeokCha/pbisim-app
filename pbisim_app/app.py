@@ -3113,9 +3113,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 
     with col_run:
         st.markdown("### 📊 Sweep Results")
-        if not run_sweep:
-            st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
-        else:
+        if run_sweep:
             # Parse vectors
             parsed_vectors = {}
             for k, val_str in swept_inputs.items():
@@ -3276,69 +3274,62 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     for j, v in original_initial_P.items():
                         phages[j]["initial_P"] = v
 
-                # Display Summary table
-                df_summary = pd.DataFrame(runs_outcomes)
-                st.markdown("#### Summary of Runs")
-                st.dataframe(
-                    df_summary.style.format({
-                        "Nadir (cells/mL)": "{:.2e}",
-                        "AUC (cells·h/mL)": "{:.2e}",
-                        "Clearance Time (h)": "{:.1f}",
-                        "2-Log Red Time (h)": "{:.1f}"
-                    }),
-                    use_container_width=True
-                )
+                # Persist results so they survive navigation (rendered below, until
+                # the sweep is re-run).
+                st.session_state.dr_sweep_result = {
+                    "summary": runs_outcomes,
+                    "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
+                }
 
-                # Plot trajectories (color-differentiated with legends)
-                st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
-                import plotly.graph_objects as go
-                fig_traj = go.Figure()
-                for t_arr, b_arr, legend_lbl in trajectories:
-                    fig_traj.add_trace(go.Scatter(
-                        x=t_arr,
-                        y=np.maximum(b_arr, 1.0),
-                        mode='lines',
-                        name=legend_lbl
-                    ))
-                fig_traj.update_layout(
-                    xaxis_title="Time (hours)",
-                    yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log",
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                )
-                st.plotly_chart(fig_traj, use_container_width=True)
+        # Render the (persisted) sweep result if one exists.
+        _dr = st.session_state.get("dr_sweep_result")
+        if _dr:
+            import plotly.graph_objects as go
+            df_summary = pd.DataFrame(_dr["summary"])
+            st.markdown("#### Summary of Runs")
+            st.dataframe(
+                df_summary.style.format({
+                    "Nadir (cells/mL)": "{:.2e}",
+                    "AUC (cells·h/mL)": "{:.2e}",
+                    "Clearance Time (h)": "{:.1f}",
+                    "2-Log Red Time (h)": "{:.1f}"
+                }),
+                use_container_width=True
+            )
 
-                # OD trajectories (only when the OD/debris module is enabled)
-                if od_trajectories:
-                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
-                    fig_od = go.Figure()
-                    for t_arr, od_arr, legend_lbl in od_trajectories:
-                        fig_od.add_trace(go.Scatter(
-                            x=t_arr,
-                            y=od_arr,
-                            mode='lines',
-                            name=legend_lbl
-                        ))
-                    fig_od.update_layout(
-                        xaxis_title="Time (hours)",
-                        yaxis_title="Optical density (AU)",
-                        template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                    )
-                    st.plotly_chart(fig_od, use_container_width=True)
+            st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
+            fig_traj = go.Figure()
+            for t_arr, b_arr, legend_lbl in _dr["trajectories"]:
+                fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
+            fig_traj.update_layout(
+                xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
+                yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+            st.plotly_chart(fig_traj, use_container_width=True)
 
-                # Plot metrics
-                st.markdown("#### Outcome Metrics vs Run Index")
-                fig_metrics = go.Figure()
-                fig_metrics.add_trace(go.Scatter(x=df_summary["Run Index"], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
-                fig_metrics.add_trace(go.Scatter(x=df_summary["Run Index"], y=df_summary["Nadir (cells/mL)"], mode="lines+markers", name="Nadir", yaxis="y2"))
-                fig_metrics.update_layout(
-                    title="Bacterial Efficacy Metrics Across Sweep Runs",
-                    xaxis=dict(title="Run Index"),
-                    yaxis=dict(title="AUC (cells·h/mL)", type="log"),
-                    yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                )
-                st.plotly_chart(fig_metrics, use_container_width=True)
+            if _dr["od_trajectories"]:
+                st.markdown("#### Raw Simulation Trajectories (Optical Density)")
+                fig_od = go.Figure()
+                for t_arr, od_arr, legend_lbl in _dr["od_trajectories"]:
+                    fig_od.add_trace(go.Scatter(x=t_arr, y=od_arr, mode='lines', name=legend_lbl))
+                fig_od.update_layout(
+                    xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                st.plotly_chart(fig_od, use_container_width=True)
+
+            st.markdown("#### Outcome Metrics vs Run Index")
+            fig_metrics = go.Figure()
+            fig_metrics.add_trace(go.Scatter(x=df_summary["Run Index"], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
+            fig_metrics.add_trace(go.Scatter(x=df_summary["Run Index"], y=df_summary["Nadir (cells/mL)"], mode="lines+markers", name="Nadir", yaxis="y2"))
+            fig_metrics.update_layout(
+                title="Bacterial Efficacy Metrics Across Sweep Runs",
+                xaxis=dict(title="Run Index"),
+                yaxis=dict(title="AUC (cells·h/mL)", type="log"),
+                yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
+                template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+            st.plotly_chart(fig_metrics, use_container_width=True)
+        else:
+            st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
 
 # ── Parameter Sweeps Page ──────────────────────────────────────────────────────
 elif st.session_state.current_page == "Parameter Sweeps":
@@ -3445,9 +3436,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
     with col_run:
         st.markdown("### 📊 Sweep Results")
-        if not run_sweep:
-            st.info("Configure parameters and click **Run Sweep** to start the analysis.")
-        else:
+        if run_sweep:
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -3511,51 +3500,13 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     progress_bar.progress((idx + 1) / len(sweep_values))
 
                 status_text.text("Sweep completed!")
-                df_summary = pd.DataFrame(runs_outcomes)
-
-                st.markdown("#### Summary of Runs")
-                st.dataframe(
-                    df_summary.style.format({
-                        param1_label: "{:.2e}",
-                        "Nadir (cells/mL)": "{:.2e}",
-                        "AUC (cells·h/mL)": "{:.2e}",
-                        "Clearance Time (h)": "{:.1f}",
-                        "2-Log Red Time (h)": "{:.1f}"
-                    }),
-                    use_container_width=True
-                )
-
-                # Plot trajectories (color-differentiated with legends)
-                st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
-                import plotly.graph_objects as go
-                fig_traj = go.Figure()
-                for t_arr, b_arr, legend_lbl in trajectories:
-                    fig_traj.add_trace(go.Scatter(
-                        x=t_arr,
-                        y=np.maximum(b_arr, 1.0),
-                        mode='lines',
-                        name=legend_lbl
-                    ))
-                fig_traj.update_layout(
-                    xaxis_title="Time (hours)",
-                    yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log",
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                )
-                st.plotly_chart(fig_traj, use_container_width=True)
-
-                # Plot outcome metrics
-                st.markdown("#### Outcome Metrics vs Parameter Value")
-                fig_metric = go.Figure()
-                fig_metric.add_trace(go.Scatter(x=df_summary[param1_label], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
-                fig_metric.add_trace(go.Scatter(x=df_summary[param1_label], y=df_summary["Nadir (cells/mL)"], mode="lines+markers", name="Nadir", yaxis="y2"))
-                fig_metric.update_layout(
-                    xaxis=dict(title=param1_label, type="log" if spacing == "Logarithmic" else "linear"),
-                    yaxis=dict(title="AUC (cells·h/mL)", type="log"),
-                    yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                )
-                st.plotly_chart(fig_metric, use_container_width=True)
+                st.session_state.param_sweep_result = {
+                    "type": "1D",
+                    "param1_label": param1_label,
+                    "spacing": spacing,
+                    "summary": runs_outcomes,
+                    "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                }
 
             else:
                 # 2D Sweep
@@ -3627,43 +3578,62 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         progress_bar.progress(sim_idx / total_sims)
 
                 status_text.text("Sweep completed!")
+                st.session_state.param_sweep_result = {
+                    "type": "2D",
+                    "param1_label": param1_label, "param2_label": param2_label,
+                    "spacing": spacing, "spacing2": spacing2,
+                    "sweep_values1": np.asarray(sweep_values1), "sweep_values2": np.asarray(sweep_values2),
+                    "grid_auc": grid_auc, "grid_nadir": grid_nadir, "grid_clear": grid_clear,
+                }
 
-                # Render Contours/Heatmaps
-                import plotly.graph_objects as go
+        # Render the (persisted) parameter-sweep result if one exists.
+        _ps = st.session_state.get("param_sweep_result")
+        if _ps:
+            import plotly.graph_objects as go
+            if _ps["type"] == "1D":
+                _p1 = _ps["param1_label"]
+                df_summary = pd.DataFrame(_ps["summary"])
+                st.markdown("#### Summary of Runs")
+                st.dataframe(
+                    df_summary.style.format({
+                        _p1: "{:.2e}", "Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
+                        "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"
+                    }),
+                    use_container_width=True)
+                st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
+                fig_traj = go.Figure()
+                for t_arr, b_arr, legend_lbl in _ps["trajectories"]:
+                    fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
+                fig_traj.update_layout(
+                    xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
+                    yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                st.plotly_chart(fig_traj, use_container_width=True)
+                st.markdown("#### Outcome Metrics vs Parameter Value")
+                fig_metric = go.Figure()
+                fig_metric.add_trace(go.Scatter(x=df_summary[_p1], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
+                fig_metric.add_trace(go.Scatter(x=df_summary[_p1], y=df_summary["Nadir (cells/mL)"], mode="lines+markers", name="Nadir", yaxis="y2"))
+                fig_metric.update_layout(
+                    xaxis=dict(title=_p1, type="log" if _ps["spacing"] == "Logarithmic" else "linear"),
+                    yaxis=dict(title="AUC (cells·h/mL)", type="log"),
+                    yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                st.plotly_chart(fig_metric, use_container_width=True)
+            else:
+                _p1, _p2 = _ps["param1_label"], _ps["param2_label"]
+                _xt = "log" if _ps["spacing"] == "Logarithmic" else "linear"
+                _yt = "log" if _ps["spacing2"] == "Logarithmic" else "linear"
                 st.markdown("#### Outcome Heatmaps (2D Sweep)")
-
                 h1, h2 = st.columns(2)
                 with h1:
-                    fig_auc = go.Figure(data=go.Contour(
-                        z=grid_auc,
-                        x=sweep_values1,
-                        y=sweep_values2,
-                        colorscale="Viridis",
-                        colorbar=dict(title="AUC")
-                    ))
-                    fig_auc.update_layout(
-                        title="Bacterial AUC Heatmap",
-                        xaxis=dict(title=param1_label, type="log" if spacing == "Logarithmic" else "linear"),
-                        yaxis=dict(title=param2_label, type="log" if spacing2 == "Logarithmic" else "linear"),
-                        template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                    )
+                    fig_auc = go.Figure(data=go.Contour(z=_ps["grid_auc"], x=_ps["sweep_values1"], y=_ps["sweep_values2"], colorscale="Viridis", colorbar=dict(title="AUC")))
+                    fig_auc.update_layout(title="Bacterial AUC Heatmap", xaxis=dict(title=_p1, type=_xt), yaxis=dict(title=_p2, type=_yt), template="plotly_white" if theme_mode == "Light" else "plotly_dark")
                     st.plotly_chart(fig_auc, use_container_width=True)
-
                 with h2:
-                    fig_nadir = go.Figure(data=go.Contour(
-                        z=grid_nadir,
-                        x=sweep_values1,
-                        y=sweep_values2,
-                        colorscale="Magma",
-                        colorbar=dict(title="Nadir")
-                    ))
-                    fig_nadir.update_layout(
-                        title="Bacterial Nadir Heatmap",
-                        xaxis=dict(title=param1_label, type="log" if spacing == "Logarithmic" else "linear"),
-                        yaxis=dict(title=param2_label, type="log" if spacing2 == "Logarithmic" else "linear"),
-                        template="plotly_white" if theme_mode == "Light" else "plotly_dark"
-                    )
+                    fig_nadir = go.Figure(data=go.Contour(z=_ps["grid_nadir"], x=_ps["sweep_values1"], y=_ps["sweep_values2"], colorscale="Magma", colorbar=dict(title="Nadir")))
+                    fig_nadir.update_layout(title="Bacterial Nadir Heatmap", xaxis=dict(title=_p1, type=_xt), yaxis=dict(title=_p2, type=_yt), template="plotly_white" if theme_mode == "Light" else "plotly_dark")
                     st.plotly_chart(fig_nadir, use_container_width=True)
+        else:
+            st.info("Configure parameters and click **Run Sweep** to start the analysis.")
 
 # ── Interactive Simulator Page ────────────────────────────────────────────────
 elif st.session_state.current_page == "Interactive Simulator":
