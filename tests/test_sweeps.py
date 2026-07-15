@@ -184,3 +184,22 @@ def test_sweep_results_survive_navigation():
     at.run()
     assert any("Summary of Runs" in m.value for m in at.markdown)
     assert len(at.exception) == 0
+
+
+def test_prerun_collapse_warning():
+    """A pre-run with a death rate and no dormancy decimates the culture; the
+    sweep warns that the CFU/OD curves start very low (item: OD scales low)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["int_strains"][0]["death_rate_B"] = 0.5
+    at.session_state["int_t_prerun"] = 24.0
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    at.session_state["dr_sweep_phg_series_0"] = "0"
+    at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
+    at.run()
+    [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
+    assert any("pre-run leaves only" in w.value for w in at.warning)
+    assert len(at.exception) == 0

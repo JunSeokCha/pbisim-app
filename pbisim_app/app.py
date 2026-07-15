@@ -1528,6 +1528,41 @@ def run_sim_from_gui_params():
     return result, config
 
 
+def prerun_collapse_fraction(config, B0, t_prerun):
+    """Fraction of the inoculum surviving a stationary-phase pre-run (B + D total).
+
+    Returns ``None`` when there is no pre-run or the pre-run can't be evaluated.
+    A small value flags the trap where a natural death rate with no dormancy
+    decimates the culture during the pre-run (death keeps acting once nutrients
+    exhaust and growth stops), so the treatment — and its CFU/OD curve — starts
+    far below the inoculum.
+    """
+    if not t_prerun or t_prerun <= 0:
+        return None
+    try:
+        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=B0)
+    except Exception:
+        return None
+    total = float(np.sum(ic.B)) + (float(np.sum(ic.D)) if ic.D is not None else 0.0)
+    b0 = float(np.sum(B0))
+    return (total / b0) if b0 > 0 else None
+
+
+def warn_if_prerun_collapses(config, B0):
+    """Emit a Streamlit warning if the configured pre-run decimates the culture."""
+    t_prerun = st.session_state.get("int_t_prerun", 0.0)
+    frac = prerun_collapse_fraction(config, B0, t_prerun)
+    if frac is not None and frac < 0.1:
+        st.warning(
+            f"⚠️ The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
+            "(active + dormant) at treatment start, so the CFU/OD curves scale very low. "
+            "A natural death rate with no dormancy makes the culture decline during the "
+            "pre-run once nutrients exhaust (death keeps acting after growth stops). "
+            "Reduce the pre-run duration or the death rate, or enable dormancy so persisters "
+            "survive the pre-run."
+        )
+
+
 def generate_reproduction_code() -> str:
     """Generates complete Python script code corresponding to the current state."""
     builder_mode = st.session_state.get("int_builder_mode", "Direct (ModelBuilder)")
@@ -3142,6 +3177,10 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 # Baseline initial_B
                 sum_initial_B = sum(s["initial_B"] for s in strains)
 
+                # Warn once if the pre-run decimates the culture (death w/o dormancy).
+                _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
+                warn_if_prerun_collapses(_pc_cfg, _pc_B0)
+
                 # Save original doses
                 original_doses = list(st.session_state.get("int_doses", []))
 
@@ -3437,6 +3476,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
     with col_run:
         st.markdown("### 📊 Sweep Results")
         if run_sweep:
+            # Warn once if the pre-run decimates the culture (death w/o dormancy).
+            warn_if_prerun_collapses(nominal_config, initial_B)
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -4854,6 +4895,8 @@ elif st.session_state.current_page == "Interactive Simulator":
     if st.button("🚀 Run Simulation", use_container_width=True):
         with st.spinner("Assembling model equations & integrating..."):
             try:
+                _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
+                warn_if_prerun_collapses(_pc_cfg, _pc_B0)
                 result, config = run_sim_from_gui_params()
                 st.session_state.simulation_result = result
                 st.session_state.simulation_config = config

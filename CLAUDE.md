@@ -206,6 +206,28 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-15) — pre-run collapse, sweep persistence, BRG calibration clash
+
+- **Pre-run made CFU/OD scale very low (reported as a dose-response OD bug).** Root
+  cause: `stationary_phase_ic` applies `death_rate_B` throughout the pre-run, but once
+  nutrients exhaust growth stops — so with a death rate and no dormancy the culture
+  declines for the whole pre-run and the treatment starts from a decimated inoculum
+  (reproduced: death 0.5 → OD 1.16 no-prerun vs 0.03 after 24 h pre-run). It is the
+  engine's documented behavior, not an app bug, but was silent. Added
+  `prerun_collapse_fraction()` / `warn_if_prerun_collapses()` and surfaced the warning
+  in the main sim run, the dose-response sweep and the parameter sweep when the pre-run
+  leaves <10% of the inoculum (B+D). (Dormancy avoids it — persisters survive.)
+- **Dose-response + parameter sweep results now survive navigation.** Both drew results
+  inside the Run button's `if`, so navigating away wiped them. Split compute-from-render:
+  the button stores results in `dr_sweep_result` / `param_sweep_result`; a separate block
+  renders from the stored data every run (alive until re-run).
+- **Calibration BRG clash + missed params** (see the 2026-07-15 tuning entry below for
+  the panel details): BRG strain kinetics live on `int_brg_base_*` (not the per-strain
+  dicts), so BRG strain edits were silent no-ops — the panel is now mode-aware. Mutation
+  rate (μ) + fitness cost added per phage in BRG; dormant adsorption + adsorption_r added.
+- Tests: `test_sweeps.py` (+2 persistence, +1 collapse warning), plus the earlier
+  calibration/fit_helper additions. **68 pass.**
+
 ## Done this session (2026-07-15) — OD-debris propagation, structural/global tuning, save-calibrated
 
 - **OD/debris now propagates into the Calibration overlay.** The overlay always
