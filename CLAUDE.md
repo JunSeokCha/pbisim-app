@@ -206,6 +206,15 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-16) — OD trajectories in parameter sweep
+
+- **Parameter sweep now plots OD trajectories** when the OD/debris module is enabled
+  (previously only the dose-response sweep did). Added `od_trajectories` collection to
+  the 1D and Coupled compute loops (`result.get_od()`), stored in `param_sweep_result`,
+  and an "Optical Density" chart rendered after the CFU trajectories in both. Omitted
+  when debris is off; 2D (heatmaps only) is unaffected. Test in `test_sweeps.py`.
+  **73 tests pass.**
+
 ## Done this session (2026-07-16) — mutation-rate persistence + coupled/broadcast sweeps
 
 - **Direct-mode mutation rate reverted to 1e-7 on navigation.** The 2^m-shortcut

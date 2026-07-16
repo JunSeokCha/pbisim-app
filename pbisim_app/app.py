@@ -3559,6 +3559,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
                 runs_outcomes = []
                 trajectories = [] # (time, viable_b, label)
+                od_trajectories = [] # (time, od, label) — only if OD/debris enabled
+                _od_enabled = st.session_state.get("int_debris_enabled", False)
 
                 for idx, val in enumerate(sweep_values):
                     status_text.text(f"Running simulation {idx+1} of {len(sweep_values)} (Value: {val:.2e})...")
@@ -3603,7 +3605,13 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         "Clearance Time (h)": t_clear if t_clear is not None else np.nan,
                         "2-Log Red Time (h)": t_log_red if t_log_red is not None else np.nan
                     })
-                    trajectories.append((result.time, total_bacteria, f"{param1_label} = {val:.2e}"))
+                    _lbl = f"{param1_label} = {val:.2e}"
+                    trajectories.append((result.time, total_bacteria, _lbl))
+                    if _od_enabled:
+                        _od = (result.get_od() if hasattr(result, "get_od")
+                               else (total_bacteria + result.get("Debris"))
+                               / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                        od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((idx + 1) / len(sweep_values))
 
                 status_text.text("Sweep completed!")
@@ -3613,6 +3621,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     "spacing": spacing,
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
             elif sweep_type == "Coupled (linked)":
@@ -3635,6 +3644,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
                 runs_outcomes = []
                 trajectories = []
+                od_trajectories = []
+                _od_enabled = st.session_state.get("int_debris_enabled", False)
                 for k in range(M):
                     status_text.text(f"Running simulation {k+1} of {M}...")
                     c_k, ib_k, ip_k, is_k, mk_k = nominal_config, initial_B, initial_P, initial_S, model_kwargs
@@ -3664,7 +3675,13 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     })
                     runs_outcomes.append(_row)
                     _lbl_txt = ", ".join(f"{s.rsplit(' - ',1)[0].split('(')[0].strip()}={series[s][k]:.2g}" for s in labels)
-                    trajectories.append((result.time, total_bacteria, f"Step {k+1}: {_lbl_txt}"))
+                    _lbl = f"Step {k+1}: {_lbl_txt}"
+                    trajectories.append((result.time, total_bacteria, _lbl))
+                    if _od_enabled:
+                        _od = (result.get_od() if hasattr(result, "get_od")
+                               else (total_bacteria + result.get("Debris"))
+                               / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                        od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((k + 1) / M)
 
                 status_text.text("Sweep completed!")
@@ -3673,6 +3690,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     "labels": list(labels),
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
             else:
@@ -3775,6 +3793,15 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
                     yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
                 st.plotly_chart(fig_traj, use_container_width=True)
+                if _ps.get("od_trajectories"):
+                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
+                    fig_od = go.Figure()
+                    for t_arr, od_arr, legend_lbl in _ps["od_trajectories"]:
+                        fig_od.add_trace(go.Scatter(x=t_arr, y=od_arr, mode='lines', name=legend_lbl))
+                    fig_od.update_layout(
+                        xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
+                        template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    st.plotly_chart(fig_od, use_container_width=True)
                 st.markdown("#### Outcome Metrics vs Parameter Value")
                 fig_metric = go.Figure()
                 fig_metric.add_trace(go.Scatter(x=df_summary[_p1], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
@@ -3801,6 +3828,15 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
                     yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
                 st.plotly_chart(fig_traj, use_container_width=True)
+                if _ps.get("od_trajectories"):
+                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
+                    fig_od = go.Figure()
+                    for t_arr, od_arr, legend_lbl in _ps["od_trajectories"]:
+                        fig_od.add_trace(go.Scatter(x=t_arr, y=od_arr, mode='lines', name=legend_lbl))
+                    fig_od.update_layout(
+                        xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
+                        template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    st.plotly_chart(fig_od, use_container_width=True)
                 st.markdown("#### Outcome Metrics vs Step Index")
                 _step = list(range(1, len(df_summary) + 1))
                 fig_metric = go.Figure()

@@ -289,3 +289,38 @@ def test_coupled_sweep_runs_and_persists():
     at.session_state["current_page_radio"] = "Parameter Sweeps"
     at.run()
     assert at.session_state["ps_sweep_type"] == "Coupled (linked)"
+
+
+def test_parameter_sweep_shows_od_trajectories_when_enabled():
+    """The parameter sweep (1D + coupled) plots OD trajectories when the OD/debris
+    module is enabled, and omits them otherwise."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["int_debris_enabled"] = True
+    at.session_state["int_od_to_cfu_conversion_factor"] = 1e9
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    [b for b in at.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
+    assert any("Optical Density" in m.value for m in at.markdown)
+    assert len(at.exception) == 0
+
+    # coupled sweep also shows OD
+    at.session_state["ps_sweep_type"] = "Coupled (linked)"
+    at.run()
+    g = [o for o in [m for m in at.multiselect if m.key == "pc_labels"][0].options
+         if o.startswith("Growth Rate - ")][0]
+    at.session_state["pc_labels"] = [g]
+    at.run()
+    at.session_state["pc_series_0"] = "1.0, 1.2, 1.5"
+    at.run()
+    [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
+    assert any("Optical Density" in m.value for m in at.markdown)
+
+    # no OD chart when the module is off
+    at2 = AppTest.from_file(APP, default_timeout=220)
+    at2.run()
+    at2.session_state["current_page_radio"] = "Parameter Sweeps"
+    at2.run()
+    [b for b in at2.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
+    assert not any("Optical Density" in m.value for m in at2.markdown)
+    assert len(at2.exception) == 0
