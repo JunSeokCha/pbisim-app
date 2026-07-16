@@ -238,3 +238,54 @@ def test_sweep_configs_survive_navigation():
     at.run()
     assert at.session_state["ps_sweep_type"] == "2D Sweep"
     assert len(at.exception) == 0
+
+
+def test_broadcast_sweep_parameters_apply_to_all():
+    """`(ALL strains)` sweep parameters set the same value across every strain."""
+    import numpy as np
+    b = ModelBuilder(n_bacteria=2, n_phages=1, n_latent=5, n_depth=2).with_growth_rates([1.2, 1.1])
+    cfg = b.build()
+    params = get_sweep_parameters(cfg)
+    assert "Growth Rate (ALL strains)" in params
+    c2, ib2, *_ = apply_sweep_parameter(0.7, params["Growth Rate (ALL strains)"],
+                                        cfg, np.array([1e7, 1e7]), np.array([1e6]), 1.0, {})
+    assert list(c2.growth_rates) == [0.7, 0.7]
+    # broadcast initial B0
+    _, ib3, *_ = apply_sweep_parameter(5e6, params["Initial Density B0 (ALL strains)"],
+                                       cfg, np.array([1e7, 0.0]), np.array([1e6]), 1.0, {})
+    assert list(ib3) == [5e6, 5e6]
+
+
+def test_coupled_sweep_runs_and_persists():
+    """A coupled (linked) sweep applies several parameters together per step and
+    survives navigation."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    at.session_state["ps_sweep_type"] = "Coupled (linked)"
+    at.run()
+    opts = [m for m in at.multiselect if m.key == "pc_labels"][0].options
+    g = [o for o in opts if o.startswith("Growth Rate - ")][0]
+    d = [o for o in opts if o.startswith("Phage Decay Rate - ")][0]
+    at.session_state["pc_labels"] = [g, d]
+    at.run()
+    at.session_state["pc_series_0"] = "1.0, 1.2, 1.5"
+    at.session_state["pc_series_1"] = "0.1, 0.2, 0.3"
+    at.run()
+    [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
+    res = at.session_state["param_sweep_result"]
+    assert res["type"] == "coupled" and len(res["summary"]) == 3
+    assert len(at.exception) == 0
+    # mismatched lengths are rejected
+    at.session_state["pc_series_1"] = "0.1, 0.2"
+    at.run()
+    [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
+    assert any("same number of points" in e.value for e in at.error)
+
+    # persists across navigation
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    assert at.session_state["ps_sweep_type"] == "Coupled (linked)"

@@ -206,6 +206,28 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-16) — mutation-rate persistence + coupled/broadcast sweeps
+
+- **Direct-mode mutation rate reverted to 1e-7 on navigation.** The 2^m-shortcut
+  mutation widget (`direct_mu_{j}`) read its `value=` from `direct_phg_res_mu_{j}`
+  (sic — `direct_phg_mu_{j}`), a key that was NEVER written; the actual value lives in
+  `direct_phg_res_rates`. So when the widget key was dropped on navigation the input
+  re-defaulted to 1e-7 and overwrote a user's 0. Fixed to seed `value=` from the
+  persisted `direct_phg_res_rates` list. Regression test in `test_builder_modes.py`.
+- **Sweeping shared / linked parameters** (parameter-sweep feature):
+  - **Broadcast params** (`sweep_helper`): `get_sweep_parameters` now emits
+    `… (ALL strains)` / `(ALL phages)` entries (types `array1d_broadcast` /
+    `array1d_broadcast_or_none` / `initial_B_broadcast`) that apply one value to every
+    strain/phage — e.g. sweep a growth rate shared by WT + mutant with one control.
+  - **Coupled (linked) sweep**: a third `ps_sweep_type` mode. Pick several parameters
+    (multiselect `pc_labels`) and give each a value series of equal length
+    (`pc_series_{i}`); at step k, value[k] of every parameter is applied together —
+    e.g. (dormancy, resuscitation) = (0,1),(0.5,0.5),(1,0). Summary has a column per
+    parameter; trajectories labelled by the tuple; metrics vs step index. Controls +
+    result persist across navigation (added `pc_` to the persist prefixes).
+  - Tests: `test_sweeps.py` (broadcast unit + coupled AppTest + mismatch guard).
+- **72 tests pass.**
+
 ## Done this session (2026-07-15) — sweep CONFIG persistence + zero-dose default
 
 - **Sweep controls now survive navigation** (previously only the *results* did). The

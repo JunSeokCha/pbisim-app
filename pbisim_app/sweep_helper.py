@@ -234,6 +234,22 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         "type": "initial_S",
     }
 
+    # 6. Broadcast parameters — apply one value to ALL strains / phages at once.
+    # Useful when strains share a parameter (e.g. WT and mutant have the same growth
+    # rate) so the user sweeps a single control instead of one per strain.
+    if config.n_bacteria > 1:
+        for label, field, typ in [
+            ("Growth Rate (ALL strains)", "growth_rates", "array1d_broadcast"),
+            ("Bacteria-Resource Ratio (ALL strains)", "bacteria_to_resource_ratio", "array1d_broadcast"),
+            ("Dormancy Rate (ALL strains)", "dormancy_rate", "array1d_broadcast"),
+            ("Resuscitation Rate (ALL strains)", "resuscitation_rate", "array1d_broadcast"),
+            ("Natural Death Rate dB (ALL strains)", "death_rate_B", "array1d_broadcast_or_none"),
+            ("Initial Density B0 (ALL strains)", "growth_rates", "initial_B_broadcast"),
+        ]:
+            params[label] = {"type": typ, "field": field}
+    if config.n_phages > 1:
+        params["Phage Decay Rate (ALL phages)"] = {"type": "array1d_broadcast", "field": "phage_decay_rates"}
+
     return params
 
 
@@ -285,6 +301,21 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
             arr = np.copy(arr)
         arr[meta["index"]] = val
         setattr(config, meta["field"], arr)
+
+    elif param_type == "array1d_broadcast":
+        arr = np.copy(getattr(config, meta["field"]))
+        arr[:] = val  # same value for every strain / phage
+        setattr(config, meta["field"], arr)
+
+    elif param_type == "array1d_broadcast_or_none":
+        n = config.n_phages if meta["field"].startswith("phage") else config.n_bacteria
+        arr = getattr(config, meta["field"])
+        arr = np.full(n, val, dtype=float) if arr is None else np.copy(arr)
+        arr[:] = val
+        setattr(config, meta["field"], arr)
+
+    elif param_type == "initial_B_broadcast":
+        initial_B = np.full_like(initial_B, val)
 
     elif param_type == "array2d":
         arr = np.copy(getattr(config, meta["field"]))

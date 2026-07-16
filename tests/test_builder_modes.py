@@ -400,3 +400,28 @@ def test_bacteria_to_resource_ratio_editable_in_all_modes():
     k = keys(at)
     assert all(f"brg_phg_{s}_0" in k for s in ("hib_s", "hib_r", "res_s", "res_r"))
     assert len(at.exception) == 0
+
+
+def test_direct_mutation_rate_survives_navigation():
+    """A mutation rate of 0 in Direct mode must survive navigating to the parameter
+    sweep and back (the widget value= previously read an unwired key and reverted
+    to 1e-7)."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at.run()
+    # 2 strains, 1 phage -> the 2^m mutation shortcut renders direct_mu_0
+    wt = dict(at.session_state["int_strains"][0])
+    at.session_state["int_strains"] = [wt, {"name": "R", "initial_B": 0.0, "growth_rate": 1.2,
+                                            "bacteria_to_resource_ratio": 1e9, "death_rate_B": 0.0,
+                                            "dormancy_enabled": False}]
+    at.run()
+    at.session_state["direct_mu_0"] = 0.0
+    at.run()
+    assert at.session_state["direct_phg_res_rates"] == [0.0]
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    muw = [n for n in at.number_input if n.key == "direct_mu_0"]
+    assert muw and muw[0].value == 0.0
+    assert at.session_state["direct_phg_res_rates"] == [0.0]
