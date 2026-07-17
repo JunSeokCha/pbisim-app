@@ -999,17 +999,44 @@ def growth_nutrient_kwargs():
     return kw
 
 
-def dormancy_compat_kwargs():
-    """Nutrient-independent (constant) dormancy/resuscitation functions when the growth
-    signal freezes S. For BRG / StrainSet, which don't expose a dormancy-signal
-    selector and would otherwise keep the default nutrient functions (incompatible
-    with a frozen S). Returns ``{}`` for nutrient-tracking growth signals.
+def dormancy_signal_functions(dsig, rsig):
+    """Map dormancy/resuscitation signal strings to pbisim function objects.
+
+    BRG / StrainSet ``to_config`` take function objects (``dormancy_function`` /
+    ``resuscitation_function``) rather than the Direct builder's signal strings.
+    (Imported from the transitions module — ``nutrient_and_density_resuscitation``
+    isn't re-exported at the pbisim top level.)
     """
-    name = st.session_state.get("int_growth_function", "monod_growth")
-    if name in ("monod_growth", "monod_logistic_growth"):
-        return {}
-    from pbisim import constant_dormancy, constant_resuscitation
-    return {"dormancy_function": constant_dormancy, "resuscitation_function": constant_resuscitation}
+    from pbisim.dormancy.transitions import (
+        nutrient_dependent_dormancy, constant_dormancy, density_dependent_dormancy,
+        nutrient_and_density_dormancy, nutrient_dependent_resuscitation,
+        constant_resuscitation, density_dependent_resuscitation,
+        nutrient_and_density_resuscitation,
+    )
+    _D = {"constant": constant_dormancy, "nutrient": nutrient_dependent_dormancy,
+          "density": density_dependent_dormancy, "nutrient+density": nutrient_and_density_dormancy}
+    _R = {"constant": constant_resuscitation, "nutrient": nutrient_dependent_resuscitation,
+          "density": density_dependent_resuscitation, "nutrient+density": nutrient_and_density_resuscitation}
+    return _D.get(dsig, nutrient_dependent_dormancy), _R.get(rsig, nutrient_dependent_resuscitation)
+
+
+def mode_dormancy_kwargs(dsig="nutrient", rsig="nutrient", ks=0.0, kdorm=0.0):
+    """``to_config`` dormancy kwargs (function objects + Ks / K_dorm) for BRG / StrainSet
+    from the selected signal strings, applying the same compatibility coercion as Direct
+    mode (a nutrient signal needs nutrient-tracking growth; density needs a threshold).
+    Also covers the dormancy-disabled case — the coerced default is nutrient-independent
+    when the growth signal freezes S, so the engine's nutrient default can't crash it.
+    """
+    track = st.session_state.get("int_growth_function", "monod_growth") in ("monod_growth", "monod_logistic_growth")
+    ds, _ = compat_dormancy_signal(canonical_signal(dsig), track)
+    rs, _ = compat_dormancy_signal(canonical_signal(rsig), track)
+    dfn, rfn = dormancy_signal_functions(ds, rs)
+    kw = {"dormancy_function": dfn, "resuscitation_function": rfn}
+    if ks > 0 and any(s in ("nutrient", "nutrient+density") for s in (ds, rs)):
+        kw["dormancy_monod_constant"] = ks
+    if any(s in ("density", "nutrient+density") for s in (ds, rs)):
+        kw["dormancy_carrying_capacity"] = kdorm if kdorm > 0 else st.session_state.get("int_carrying_capacity", 1e9)
+    return kw
 
 
 def build_nominal_config_from_gui():
@@ -1364,10 +1391,16 @@ def build_nominal_config_from_gui():
             
         # Expose nonlinear clearances
         extra_kwargs["allow_superinfection"] = superinfection
-        
+
         # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
         extra_kwargs.update(growth_nutrient_kwargs())
-        extra_kwargs.update(dormancy_compat_kwargs())
+        # Dormancy signal functions (+ Ks / K_dorm) from the BRG selectors.
+        extra_kwargs.update(mode_dormancy_kwargs(
+            st.session_state.get("int_brg_dorm_signal", "nutrient"),
+            st.session_state.get("int_brg_resus_signal", "nutrient"),
+            float(st.session_state.get("int_brg_dorm_ks", 0.0)),
+            float(st.session_state.get("int_brg_dorm_kdorm", 0.0)),
+        ))
 
         # Dose schedule
         if schedule:
@@ -1531,10 +1564,18 @@ def build_nominal_config_from_gui():
         
         # Expose extra kwargs
         extra_kwargs["allow_superinfection"] = superinfection
-        
+
         # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
         extra_kwargs.update(growth_nutrient_kwargs())
-        extra_kwargs.update(dormancy_compat_kwargs())
+        # Dormancy signal functions (+ Ks / K_dorm) from the first dormancy-enabled
+        # strain's selectors (the engine dormancy function is model-wide).
+        _ss_dorm = [s for s in strains if s.get("dormancy_enabled", False)]
+        extra_kwargs.update(mode_dormancy_kwargs(
+            _ss_dorm[0].get("dormancy_signal", "nutrient") if _ss_dorm else "nutrient",
+            _ss_dorm[0].get("resuscitation_signal", "nutrient") if _ss_dorm else "nutrient",
+            float(_ss_dorm[0].get("dormancy_monod_constant", 0.0)) if _ss_dorm else 0.0,
+            float(_ss_dorm[0].get("dormancy_carrying_capacity", 0.0)) if _ss_dorm else 0.0,
+        ))
 
         # Dose schedule
         if schedule:
@@ -4432,7 +4473,30 @@ elif st.session_state.current_page == "Interactive Simulator":
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
                         "Dormant death rate (dD)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                     )
-                    
+                    _bds = canonical_signal(st.session_state.get("int_brg_dorm_signal", "nutrient"))
+                    _brs = canonical_signal(st.session_state.get("int_brg_resus_signal", "nutrient"))
+                    st.session_state["int_brg_dorm_signal"] = st.selectbox(
+                        "Dormancy signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_bds),
+                        key="widget_brg_dorm_signal",
+                        help="Entry-rate modulation: constant, nutrient-scarcity (Monod), density (quorum), or nutrient×density.")
+                    st.session_state["int_brg_resus_signal"] = st.selectbox(
+                        "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_brs),
+                        key="widget_brg_resus_signal")
+                    _bds2 = canonical_signal(st.session_state["int_brg_dorm_signal"])
+                    _brs2 = canonical_signal(st.session_state["int_brg_resus_signal"])
+                    if "nutrient" in (_bds2, _brs2) or "nutrient+density" in (_bds2, _brs2):
+                        st.session_state["int_brg_dorm_ks"] = st.number_input(
+                            "Dormancy nutrient half-saturation (Ks)",
+                            value=float(st.session_state.get("int_brg_dorm_ks", st.session_state.get("int_monod_constant", 0.3))),
+                            min_value=0.0, format="%g",
+                            help="Defaults to the growth Monod constant (inherited); change to decouple.")
+                    if _bds2 in ("density", "nutrient+density") or _brs2 in ("density", "nutrient+density"):
+                        st.session_state["int_brg_dorm_kdorm"] = st.number_input(
+                            "Dormancy density threshold (K_dorm)",
+                            value=float(st.session_state.get("int_brg_dorm_kdorm", 1e8)),
+                            min_value=0.0, format="%.2e",
+                            help="Density threshold (CFU/mL) for the density dormancy signal. 0 inherits growth K.")
+
                 # Renders the loci count
                 st.markdown("---")
                 st.markdown("### 🧬 Phage Loci")
@@ -4603,6 +4667,27 @@ elif st.session_state.current_page == "Interactive Simulator":
                             strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
                             strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
                             strains[i]["death_rate_D"] = st.number_input("Dormant death rate (dD)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
+                            _sds = canonical_signal(strains[i].get("dormancy_signal", "nutrient"))
+                            _srs = canonical_signal(strains[i].get("resuscitation_signal", "nutrient"))
+                            strains[i]["dormancy_signal"] = st.selectbox(
+                                "Dormancy signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_sds), key=f"ss_str_dsig_{i}",
+                                help="Model-wide dormancy entry signal (taken from the first dormancy-enabled strain).")
+                            strains[i]["resuscitation_signal"] = st.selectbox(
+                                "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_srs), key=f"ss_str_rsig_{i}")
+                            _sds2 = canonical_signal(strains[i]["dormancy_signal"])
+                            _srs2 = canonical_signal(strains[i]["resuscitation_signal"])
+                            if "nutrient" in (_sds2, _srs2) or "nutrient+density" in (_sds2, _srs2):
+                                strains[i]["dormancy_monod_constant"] = st.number_input(
+                                    "Dormancy nutrient half-saturation (Ks)",
+                                    value=float(strains[i].get("dormancy_monod_constant", st.session_state.get("int_monod_constant", 0.3))),
+                                    min_value=0.0, format="%g", key=f"ss_str_dks_{i}",
+                                    help="Defaults to the growth Monod constant (inherited); change to decouple.")
+                            if _sds2 in ("density", "nutrient+density") or _srs2 in ("density", "nutrient+density"):
+                                strains[i]["dormancy_carrying_capacity"] = st.number_input(
+                                    "Dormancy density threshold (K_dorm)",
+                                    value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
+                                    min_value=0.0, format="%.2e", key=f"ss_str_dcc_{i}",
+                                    help="Density threshold (CFU/mL). 0 inherits growth K.")
 
                         if len(phages) > 0:
                             st.markdown("**Phage Adsorption Rates**")

@@ -459,3 +459,39 @@ def test_dormancy_signals_and_growth_signals():
         [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
         assert len(a.error) == 0, f"{name}: {[e.value for e in a.error]}"
         assert "simulation_result" in a.session_state and a.session_state["simulation_result"] is not None
+
+
+def test_dormancy_signal_config_in_brg_and_strainset():
+    """BRG and StrainSet now expose dormancy/resuscitation signal selectors that map
+    to the right engine dormancy function (+ density threshold)."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    at.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"
+    at.run(); at.run()
+    at.session_state["int_brg_dormancy_enabled"] = True
+    at.run()
+    assert any(s.key == "widget_brg_dorm_signal" for s in at.selectbox)
+    at.session_state["widget_brg_dorm_signal"] = "nutrient+density"
+    at.session_state["widget_brg_resus_signal"] = "nutrient+density"
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    cfg = at.session_state["simulation_config"]
+    assert cfg.dormancy_function.__name__ == "nutrient_and_density_dormancy"
+    assert cfg.dormancy_carrying_capacity == 1e8  # default density threshold
+    assert len(at.error) == 0
+
+    a = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    a.run()
+    a.session_state["widget_builder_mode"] = "Custom Strains & Graph (StrainSet)"
+    a.run(); a.run()
+    a.session_state["ss_str_dorm_0"] = True
+    a.run()
+    assert any(s.key == "ss_str_dsig_0" for s in a.selectbox)
+    a.session_state["ss_str_dsig_0"] = "density"
+    a.session_state["ss_str_rsig_0"] = "density"
+    a.run()
+    [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert a.session_state["simulation_config"].dormancy_function.__name__ == "density_dependent_dormancy"
+    assert len(a.error) == 0
