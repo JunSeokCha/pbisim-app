@@ -604,8 +604,8 @@ def load_preset_to_state(params: dict):
     st.session_state["int_debris_enabled"] = params.get("debris_enabled", False)
     st.session_state["int_debris_u"] = params.get("debris_u", 1.0)
     st.session_state["int_debris_v"] = params.get("debris_v", 0.5)
-    st.session_state["int_debris_kdis"] = params.get("debris_kdis", 0.1)
-    st.session_state["int_od_to_cfu_conversion_factor"] = params.get("od_to_cfu_conversion_factor", 1.0)
+    st.session_state["int_debris_kdis"] = params.get("debris_kdis", 0.01)
+    st.session_state["int_od_to_cfu_conversion_factor"] = params.get("od_to_cfu_conversion_factor", 2e8)
 
     # 5. Strains list
     strains_list = []
@@ -619,8 +619,8 @@ def load_preset_to_state(params: dict):
                 "death_rate_B": s.get("death_rate_B", 0.0),
                 "death_rate_D": s.get("death_rate_D", 0.0),
                 "dormancy_enabled": s.get("dormancy_enabled", False),
-                "dormancy_depth": s.get("dormancy_depth", 3),
-                "dormancy_rate": s.get("dormancy_rate", 0.2),
+                "dormancy_depth": s.get("dormancy_depth", 1),
+                "dormancy_rate": s.get("dormancy_rate", 0.001),
                 "resuscitation_rate": s.get("resuscitation_rate", 0.1),
                 "dormancy_diffusion_rate": s.get("dormancy_diffusion_rate", 0.05),
                 "dormancy_signal": s.get("dormancy_signal", "nutrient"),
@@ -1037,8 +1037,8 @@ def build_nominal_config_from_gui():
     if debris_enabled:
         extra_kwargs["debris_u"] = st.session_state.get("int_debris_u", 1.0)
         extra_kwargs["debris_v"] = st.session_state.get("int_debris_v", 0.5)
-        extra_kwargs["debris_kdis"] = st.session_state.get("int_debris_kdis", 0.1)
-        extra_kwargs["od_to_cfu_conversion_factor"] = st.session_state.get("int_od_to_cfu_conversion_factor", 1.0)
+        extra_kwargs["debris_kdis"] = st.session_state.get("int_debris_kdis", 0.01)
+        extra_kwargs["od_to_cfu_conversion_factor"] = st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)
         
     # ── Resolve Dose Schedule ─────────────────────────────────────────────────
     dose_events = []
@@ -1251,8 +1251,8 @@ def build_nominal_config_from_gui():
             builder = builder.with_od_debris(
                 u=extra_kwargs.get("debris_u", 1.0),
                 v=extra_kwargs.get("debris_v", 0.5),
-                kdis=extra_kwargs.get("debris_kdis", 0.1),
-                od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 1.0),
+                kdis=extra_kwargs.get("debris_kdis", 0.01),
+                od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 2e8),
             )
 
         config = builder.build()
@@ -1796,8 +1796,8 @@ def generate_reproduction_code() -> str:
                 f"builder = builder.with_od_debris("
                 f"u={st.session_state.get('int_debris_u', 1.0)}, "
                 f"v={st.session_state.get('int_debris_v', 0.5)}, "
-                f"kdis={st.session_state.get('int_debris_kdis', 0.1)}, "
-                f"od_to_cfu_conversion_factor={st.session_state.get('int_od_to_cfu_conversion_factor', 1.0)})"
+                f"kdis={st.session_state.get('int_debris_kdis', 0.01)}, "
+                f"od_to_cfu_conversion_factor={st.session_state.get('int_od_to_cfu_conversion_factor', 2e8)})"
             )
 
     # ──── BRG ────
@@ -1911,7 +1911,7 @@ def generate_reproduction_code() -> str:
         graph_dict = {t["from"]: {t["to"]: t["rate"]} for t in transitions if t["from"] and t["to"]}
         code.append(f"ss.set_mutation_graph({graph_dict})")
         _ss_decay = [p["phage_decay_rates"] for p in phages]
-        _ss_max_depth = max((s.get("dormancy_depth", 3) for s in strains if s.get("dormancy_enabled", False)), default=1)
+        _ss_max_depth = max((s.get("dormancy_depth", 1) for s in strains if s.get("dormancy_enabled", False)), default=1)
         _ss_imm_on = st.session_state.get("int_immunity_enabled", False)
         _ss_imm_args = ""
         if _ss_imm_on:
@@ -2536,7 +2536,7 @@ elif st.session_state.current_page == "Calibration":
                     dk1, dk2, dk3, dk4 = st.columns(4)
                     with dk1:
                         st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
-                            "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 1e9)),
+                            "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
                             format="%.3e", key="fit_edit_od2cfu",
                             help="CFU per OD unit: OD = (biomass + debris) / od_to_cfu.")
                     with dk2:
@@ -2549,7 +2549,7 @@ elif st.session_state.current_page == "Calibration":
                             format="%g", key="fit_edit_debris_v")
                     with dk4:
                         st.session_state["int_debris_kdis"] = st.number_input(
-                            "Debris dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.1)),
+                            "Debris dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.01)),
                             format="%g", key="fit_edit_debris_kdis")
 
                 # Bacterial parameters. IMPORTANT: in Binary-Genotypes (BRG) mode the
@@ -2601,7 +2601,7 @@ elif st.session_state.current_page == "Calibration":
                         with _dcols[0]:
                             _s["dormancy_depth"] = int(st.number_input(
                                 "Depth layers (Q)", min_value=1, max_value=10,
-                                value=int(_s.get("dormancy_depth", 3)), step=1,
+                                value=int(_s.get("dormancy_depth", 1)), step=1,
                                 key=f"fit_edit_s_dormancy_depth_{_si}",
                                 help="Number of dormancy-depth compartments (max across strains sets n_depth)."))
                         for _dc, _knob in zip(_dcols[1:], STRAIN_DORMANCY_TUNABLES):
@@ -3428,7 +3428,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                         if _od_enabled:
                             _od = (result.get_od() if hasattr(result, "get_od")
                                    else (total_bacteria + result.get("Debris"))
-                                   / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                                   / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
                             od_trajectories.append((result.time, _od, f"Run {k_idx + 1}: {run_label}"))
                         progress_bar.progress((k_idx + 1) / M)
                         
@@ -3706,7 +3706,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     if _od_enabled:
                         _od = (result.get_od() if hasattr(result, "get_od")
                                else (total_bacteria + result.get("Debris"))
-                               / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                               / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
                         od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((idx + 1) / len(sweep_values))
 
@@ -3776,7 +3776,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     if _od_enabled:
                         _od = (result.get_od() if hasattr(result, "get_od")
                                else (total_bacteria + result.get("Debris"))
-                               / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0))
+                               / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
                         od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((k + 1) / M)
 
@@ -4064,8 +4064,8 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 "death_rate_B": 0.0,
                                 "death_rate_D": 0.0,
                                 "dormancy_enabled": False,
-                                "dormancy_depth": 3,
-                                "dormancy_rate": 0.2,
+                                "dormancy_depth": 1,
+                                "dormancy_rate": 0.001,
                                 "resuscitation_rate": 0.1,
                                 "dormancy_diffusion_rate": 0.05,
                                 "dormancy_signal": "nutrient",
@@ -4123,13 +4123,13 @@ elif st.session_state.current_page == "Interactive Simulator":
                                     "Depth layers (Q)",
                                     min_value=1,
                                     max_value=10,
-                                    value=int(strains[i].get("dormancy_depth", 3)),
+                                    value=int(strains[i].get("dormancy_depth", 1)),
                                     key=f"str_depth_{i}",
                                 )
                             with cd2:
                                 strains[i]["dormancy_rate"] = st.number_input(
                                     "Dormancy rate (sleep)",
-                                    value=float(strains[i].get("dormancy_rate", 0.2)),
+                                    value=float(strains[i].get("dormancy_rate", 0.001)),
                                     step=0.05,
                                     key=f"str_sleep_{i}",
                                 )
@@ -4562,7 +4562,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             "death_rate_B": 0.0,
                             "death_rate_D": 0.0,
                             "dormancy_enabled": False,
-                            "dormancy_rate": 0.2, "resuscitation_rate": 0.1, "dormancy_diffusion_rate": 0.05
+                            "dormancy_rate": 0.001, "resuscitation_rate": 0.1, "dormancy_diffusion_rate": 0.05
                         })
                     st.session_state["int_strains"] = strains
                     
@@ -4581,8 +4581,8 @@ elif st.session_state.current_page == "Interactive Simulator":
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
                         if strains[i]["dormancy_enabled"]:
-                            strains[i]["dormancy_depth"] = st.number_input("Depth layers (Q)", min_value=1, max_value=10, value=int(strains[i].get("dormancy_depth", 3)), key=f"ss_str_depth_{i}", help="Number of dormancy-depth compartments (max across strains sets the model n_depth).")
-                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate", value=float(strains[i].get("dormancy_rate", 0.2)), key=f"ss_str_sleep_{i}")
+                            strains[i]["dormancy_depth"] = st.number_input("Depth layers (Q)", min_value=1, max_value=10, value=int(strains[i].get("dormancy_depth", 1)), key=f"ss_str_depth_{i}", help="Number of dormancy-depth compartments (max across strains sets the model n_depth).")
+                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
                             strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
                             strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
                             strains[i]["death_rate_D"] = st.number_input("Dormant death rate (dD)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
@@ -5022,12 +5022,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 st.session_state["int_debris_kdis"] = st.number_input(
                     "Debris dissolution rate (k_dis)",
-                    value=float(st.session_state.get("int_debris_kdis", 0.1)),
+                    value=float(st.session_state.get("int_debris_kdis", 0.01)),
                     step=0.05,
                 )
                 st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
                     "OD-to-CFU conversion factor",
-                    value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 1e9)),
+                    value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
                     format="%.1e",
                 )
 
@@ -5372,7 +5372,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     )
                     if strains[j].get("dormancy_enabled", False):
                         D_total = np.zeros_like(t)
-                        for q in range(strains[j].get("dormancy_depth", 3)):
+                        for q in range(strains[j].get("dormancy_depth", 1)):
                             D_total += result.get(f"D{q}_{j}")
                         ax.semilogy(
                             t, np.maximum(D_total, 1.0), ":", label=f"{name} (Dormant)"
@@ -5444,13 +5444,13 @@ elif st.session_state.current_page == "Interactive Simulator":
                     fig, ax = plt.subplots(figsize=(8, 4))
                     ax.plot(
                         t,
-                        result.get_od() if hasattr(result, "get_od") else (total_bacteria + result.get("Debris")) / st.session_state.get("int_od_to_cfu_conversion_factor", 1.0),
+                        result.get_od() if hasattr(result, "get_od") else (total_bacteria + result.get("Debris")) / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8),
                         "C2-",
                         lw=2.5,
                         label="OD (AU)",
                     )
                     cfu_od = total_bacteria / st.session_state.get(
-                        "int_od_to_cfu_conversion_factor", 1.0
+                        "int_od_to_cfu_conversion_factor", 2e8
                     )
                     ax.plot(
                         t,
