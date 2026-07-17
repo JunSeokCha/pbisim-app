@@ -4008,7 +4008,35 @@ elif st.session_state.current_page == "Interactive Simulator":
             st.session_state.simulation_result = None
             st.session_state.simulation_config = None
             st.rerun()
-            
+
+        # ── Growth model (signal function + its half-saturation / carrying capacity) ──
+        # Kept here in the model builder (not the Environment tab) since it defines the
+        # growth kinetics. The nutrient environment (S0 / recycle / inflow / washout)
+        # stays in Environment & Dosing.
+        _gm1, _gm2 = st.columns([2, 1])
+        with _gm1:
+            _gs_cur_fn = st.session_state.get("int_growth_function", "monod_growth")
+            _gs_labels = list(GROWTH_SIGNALS.keys())
+            _gs_cur_label = next((L for L, (fn, _) in GROWTH_SIGNALS.items() if fn == _gs_cur_fn), _gs_labels[0])
+            _gs_choice = st.selectbox(
+                "Growth signal function", _gs_labels, index=_gs_labels.index(_gs_cur_label),
+                help="How the per-strain growth rate is modulated:  constant = unlimited;  "
+                     "nutrient = Monod S/(Ks+S);  density = logistic (1−ΣB/K);  "
+                     "nutrient+density = Monod × logistic.",
+            )
+        _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
+        st.session_state["int_growth_function"] = _gs_fn
+        st.session_state["int_track_nutrients"] = _gs_track
+        with _gm2:
+            if _gs_fn in ("monod_growth", "monod_logistic_growth"):
+                st.session_state["int_monod_constant"] = st.number_input(
+                    "Monod constant (Ks)", value=float(st.session_state.get("int_monod_constant", 0.3)),
+                    step=0.05, help="Nutrient half-saturation for Monod growth S/(Ks+S).")
+            if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
+                st.session_state["int_carrying_capacity"] = st.number_input(
+                    "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                    format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
+
         st.markdown("---")
         col1, col2 = st.columns(2)
 
@@ -4153,10 +4181,11 @@ elif st.session_state.current_page == "Interactive Simulator":
                             if _dsig_i in ("density", "nutrient+density") or _rsig_i in ("density", "nutrient+density"):
                                 strains[i]["dormancy_carrying_capacity"] = st.number_input(
                                     "Dormancy density threshold (K_dorm)",
-                                    value=float(strains[i].get("dormancy_carrying_capacity", 0.0)),
+                                    value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
                                     min_value=0.0, format="%.2e", key=f"str_dcc_{i}",
-                                    help="Density threshold for the density dormancy signal (rate ∝ ΣB/K_dorm). "
-                                         "0 = inherit the growth carrying capacity (pbisim default).",
+                                    help="Density threshold (CFU/mL) for the density dormancy signal "
+                                         "(rate ∝ ΣB/K_dorm). Default 1e8. Set 0 to inherit the growth "
+                                         "carrying capacity instead.",
                                 )
                             strains[i]["initial_D"] = st.number_input(
                                 "Initial dormant density (D0)",
@@ -4943,30 +4972,14 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Environment & Debris
         with col1:
-            st.markdown("### 🍎 Growth signal / Nutrients")
-            _gs_cur_fn = st.session_state.get("int_growth_function", "monod_growth")
-            _gs_labels = list(GROWTH_SIGNALS.keys())
-            _gs_cur_label = next((L for L, (fn, _) in GROWTH_SIGNALS.items() if fn == _gs_cur_fn), _gs_labels[0])
-            _gs_choice = st.selectbox(
-                "Growth signal", _gs_labels, index=_gs_labels.index(_gs_cur_label),
-                help="How the per-strain growth rate is modulated:  constant = unlimited;  "
-                     "nutrient = Monod S/(Ks+S);  density = logistic (1−ΣB/K);  "
-                     "nutrient+density = Monod × logistic.",
-            )
-            _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
-            st.session_state["int_growth_function"] = _gs_fn
-            st.session_state["int_track_nutrients"] = _gs_track
-            _gs_nutrient = _gs_fn in ("monod_growth", "monod_logistic_growth")
-            _gs_needs_K = _gs_fn in ("logistic_growth", "monod_logistic_growth")
-
-            if _gs_nutrient:
+            st.markdown("### 🍎 Nutrient environment")
+            st.caption("The **growth signal function** (and its Monod constant / carrying capacity) "
+                       "is set under **Strains & Phages → Growth model**. These are the medium/reactor "
+                       "conditions for nutrient-tracking growth.")
+            if st.session_state.get("int_track_nutrients", True):
                 st.session_state["int_initial_S"] = st.number_input(
                     "Initial Resource Substrate (S0)",
                     value=float(st.session_state.get("int_initial_S", 1.0)), step=0.1,
-                )
-                st.session_state["int_monod_constant"] = st.number_input(
-                    "Monod Half-saturation Constant (Ks)",
-                    value=float(st.session_state.get("int_monod_constant", 0.3)), step=0.05,
                 )
                 st.session_state["int_recycle_fraction"] = st.number_input(
                     "Nutrient recycling fraction",
@@ -4981,11 +4994,9 @@ elif st.session_state.current_page == "Interactive Simulator":
                     "Continuous Washout dilution (s_out)",
                     value=float(st.session_state.get("int_s_out", 0.0)), step=0.05,
                 )
-            if _gs_needs_K:
-                st.session_state["int_carrying_capacity"] = st.number_input(
-                    "Carrying Capacity (K)",
-                    value=float(st.session_state.get("int_carrying_capacity", 1e9)), format="%.1e",
-                )
+            else:
+                st.info("The selected growth signal is nutrient-independent (constant / density), "
+                        "so nutrient substrate dynamics are inactive.")
 
             st.markdown("### 🎚️ Optical Density (OD) & Debris")
             st.session_state["int_debris_enabled"] = st.checkbox(
