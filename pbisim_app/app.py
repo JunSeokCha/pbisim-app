@@ -572,7 +572,13 @@ def load_preset_to_state(params: dict):
     st.session_state["int_s_in"] = params.get("s_in", 0.0)
     st.session_state["int_s_out"] = params.get("s_out", 0.0)
     st.session_state["int_carrying_capacity"] = params.get("carrying_capacity", 1e9)
-    st.session_state["int_growth_function"] = params.get("growth_function", "monod_growth")
+    # Growth signal: prefer an explicit growth_function; else derive from the legacy
+    # track_nutrients flag (True → Monod nutrient growth, False → logistic density).
+    _gf = params.get("growth_function")
+    if _gf not in ("monod_growth", "logistic_growth", "constant_growth", "monod_logistic_growth"):
+        _gf = "monod_growth" if params.get("track_nutrients", True) else "logistic_growth"
+    st.session_state["int_growth_function"] = _gf
+    st.session_state["int_track_nutrients"] = _gf in ("monod_growth", "monod_logistic_growth")
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
 
@@ -923,6 +929,89 @@ if "int_strains" not in st.session_state:
     load_preset_to_state(DEFAULT_SCENARIO)
 
 
+# Dormancy / resuscitation entry-signal options — must match pbisim's
+# _DORMANCY_SIGNALS / _RESUSCITATION_SIGNALS keys exactly.
+SIGNAL_OPTIONS = ["constant", "nutrient", "density", "nutrient+density"]
+
+# Growth-signal options → pbisim growth function name + whether nutrients are tracked.
+GROWTH_SIGNALS = {
+    "nutrient (Monod)":            ("monod_growth", True),
+    "nutrient + density":          ("monod_logistic_growth", True),
+    "density (logistic)":          ("logistic_growth", False),
+    "constant (unlimited)":        ("constant_growth", False),
+}
+
+
+def canonical_signal(v):
+    """Normalise a stored dormancy/resuscitation signal to a pbisim-recognised key.
+
+    Translates the app's legacy ``'nutrient_and_density'`` to the engine's
+    ``'nutrient+density'`` (the mismatch that made that option raise a ValueError).
+    """
+    v = v or "nutrient"
+    if v in ("nutrient_and_density", "nutrient+density"):
+        return "nutrient+density"
+    return v if v in SIGNAL_OPTIONS else "nutrient"
+
+
+def compat_dormancy_signal(sig, track_nutrients):
+    """Coerce a nutrient-based dormancy/resuscitation signal to a nutrient-independent
+    one when nutrients are not tracked (S frozen) — otherwise the engine refuses to
+    build (a nutrient signal can't read a frozen S). Returns ``(signal, coerced?)``.
+    """
+    if track_nutrients:
+        return sig, False
+    if sig == "nutrient":
+        return "constant", True
+    if sig == "nutrient+density":
+        return "density", True
+    return sig, False  # constant / density are already compatible
+
+
+def growth_nutrient_kwargs():
+    """Growth function + nutrient config for the selected growth signal.
+
+    Returns a dict of ModelConfig fields (growth_function, track_nutrients, and the
+    relevant monod_constant / carrying_capacity / recycle / s_in / s_out). Works both
+    for the Direct builder (split into with_growth_function + with_nutrient) and for
+    BRG / StrainSet ``to_config(**extra_config_kwargs)`` (forwarded to ModelConfig).
+    """
+    from pbisim import monod_growth, logistic_growth, constant_growth, monod_logistic_growth
+    fns = {"monod_growth": monod_growth, "logistic_growth": logistic_growth,
+           "constant_growth": constant_growth, "monod_logistic_growth": monod_logistic_growth}
+    name = st.session_state.get("int_growth_function", "monod_growth")
+    fn = fns.get(name, monod_growth)
+    nutrient_based = name in ("monod_growth", "monod_logistic_growth")
+    needs_K = name in ("logistic_growth", "monod_logistic_growth")
+    # monod_constant + recycle_fraction are always supplied — StrainSet.to_config
+    # requires them (they are simply unused by non-nutrient growth functions).
+    kw = {
+        "growth_function": fn,
+        "track_nutrients": nutrient_based,
+        "monod_constant": st.session_state.get("int_monod_constant", 0.3),
+        "recycle_fraction": st.session_state.get("int_recycle_fraction", 0.0),
+    }
+    if nutrient_based:
+        kw["s_in"] = st.session_state.get("int_s_in", 0.0)
+        kw["s_out"] = st.session_state.get("int_s_out", 0.0)
+    if needs_K:
+        kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+    return kw
+
+
+def dormancy_compat_kwargs():
+    """Nutrient-independent (constant) dormancy/resuscitation functions when the growth
+    signal freezes S. For BRG / StrainSet, which don't expose a dormancy-signal
+    selector and would otherwise keep the default nutrient functions (incompatible
+    with a frozen S). Returns ``{}`` for nutrient-tracking growth signals.
+    """
+    name = st.session_state.get("int_growth_function", "monod_growth")
+    if name in ("monod_growth", "monod_logistic_growth"):
+        return {}
+    from pbisim import constant_dormancy, constant_resuscitation
+    return {"dormancy_function": constant_dormancy, "resuscitation_function": constant_resuscitation}
+
+
 def build_nominal_config_from_gui():
     """
     Constructs and returns the ModelConfig and corresponding state initial values
@@ -1003,16 +1092,33 @@ def build_nominal_config_from_gui():
             resus_rates = [s["resuscitation_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             diff_rates = [s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             enabled_strains = [s for s in strains if s.get("dormancy_enabled", False)]
-            ds = enabled_strains[0]["dormancy_signal"] if enabled_strains else "nutrient"
-            rs = enabled_strains[0]["resuscitation_signal"] if enabled_strains else "nutrient"
-            
-            builder = builder.with_dormancy(
+            ds = canonical_signal(enabled_strains[0]["dormancy_signal"]) if enabled_strains else "nutrient"
+            rs = canonical_signal(enabled_strains[0]["resuscitation_signal"]) if enabled_strains else "nutrient"
+            _dorm_ks = float(enabled_strains[0].get("dormancy_monod_constant", 0.0)) if enabled_strains else 0.0
+            # nutrient dormancy signals need S tracked; coerce when it isn't.
+            ds, _cd = compat_dormancy_signal(ds, track_nutrients)
+            rs, _cr = compat_dormancy_signal(rs, track_nutrients)
+
+            _dorm_kwargs = dict(
                 dormancy_rate=np.array(dormancy_rates),
                 resuscitation_rate=np.array(resus_rates),
                 dormancy_diffusion_rate=np.array(diff_rates),
                 dormancy_signal=ds,
-                resuscitation_signal=rs
+                resuscitation_signal=rs,
             )
+            if _dorm_ks > 0 and any(sig in ("nutrient", "nutrient+density") for sig in (ds, rs)):
+                _dorm_kwargs["dormancy_monod_constant"] = _dorm_ks
+            # density-based dormancy/resuscitation needs a density threshold — supply
+            # the carrying capacity (used even when growth is Monod, which doesn't set it).
+            if any(sig in ("density", "nutrient+density") for sig in (ds, rs)):
+                _dorm_kwargs["dormancy_carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+            builder = builder.with_dormancy(**_dorm_kwargs)
+        elif not track_nutrients:
+            # No dormancy configured, but a frozen S is incompatible with the default
+            # nutrient dormancy function — pin nutrient-independent (constant) functions.
+            builder = builder.with_dormancy(
+                dormancy_rate=0.0, resuscitation_rate=0.0, dormancy_diffusion_rate=0.0,
+                dormancy_signal="constant", resuscitation_signal="constant")
             
         # Phages
         if n_phages > 0:
@@ -1113,22 +1219,10 @@ def build_nominal_config_from_gui():
                 Km_elim=abx.get("Km_elim", None) if abx.get("Km_elim", 0.0) > 0 else None,
             )
             
-        # Nutrients
-        if not track_nutrients:
-            from pbisim import logistic_growth
-            builder = builder.with_growth_function(logistic_growth)
-            builder = builder.with_nutrient(
-                track_nutrients=False,
-                carrying_capacity=st.session_state.get("int_carrying_capacity", 1e9)
-            )
-        else:
-            builder = builder.with_nutrient(
-                track_nutrients=True,
-                monod_constant=st.session_state.get("int_monod_constant", 0.3),
-                recycle_fraction=st.session_state.get("int_recycle_fraction", 0.0),
-                s_in=st.session_state.get("int_s_in", 0.0),
-                s_out=st.session_state.get("int_s_out", 0.0)
-            )
+        # Nutrients / growth signal
+        _gk = growth_nutrient_kwargs()
+        builder = builder.with_growth_function(_gk.pop("growth_function"))
+        builder = builder.with_nutrient(**_gk)
             
         # Immunity
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
@@ -1268,16 +1362,10 @@ def build_nominal_config_from_gui():
         # Expose nonlinear clearances
         extra_kwargs["allow_superinfection"] = superinfection
         
-        # Add solver-specified non-Monod growth if needed
-        if not track_nutrients:
-            from pbisim import logistic_growth
-            extra_kwargs["growth_function"] = logistic_growth
-            extra_kwargs["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
-            extra_kwargs["track_nutrients"] = False
-        else:
-            extra_kwargs["monod_constant"] = st.session_state.get("int_monod_constant", 0.3)
-            extra_kwargs["recycle_fraction"] = st.session_state.get("int_recycle_fraction", 0.0)
-            
+        # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
+        extra_kwargs.update(growth_nutrient_kwargs())
+        extra_kwargs.update(dormancy_compat_kwargs())
+
         # Dose schedule
         if schedule:
             extra_kwargs["dose_schedule"] = schedule
@@ -1441,12 +1529,10 @@ def build_nominal_config_from_gui():
         # Expose extra kwargs
         extra_kwargs["allow_superinfection"] = superinfection
         
-        if not track_nutrients:
-            from pbisim import logistic_growth
-            extra_kwargs["growth_function"] = logistic_growth
-            extra_kwargs["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
-            extra_kwargs["track_nutrients"] = False
-            
+        # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
+        extra_kwargs.update(growth_nutrient_kwargs())
+        extra_kwargs.update(dormancy_compat_kwargs())
+
         # Dose schedule
         if schedule:
             extra_kwargs["dose_schedule"] = schedule
@@ -1467,12 +1553,10 @@ def build_nominal_config_from_gui():
             imm_decay_rate=st.session_state.get("int_innate_decay_rate", 0.1),
             imm_stim50=st.session_state.get("int_imm_stim50", 1e6),
             imm_kill50=st.session_state.get("int_innate_kill50", 1e5),
-            monod_constant=st.session_state.get("int_monod_constant", 0.3),
-            recycle_fraction=st.session_state.get("int_recycle_fraction", 0.0),
             phage_pk_config=phage_pk_config,
             immune_module=st.session_state.get("int_immune_module", "innate"),
             imm_max=st.session_state.get("int_innate_max", 1e7),
-            **extra_kwargs
+            **extra_kwargs  # includes growth_function + monod_constant/recycle/etc.
         )
 
         initial_B = np.array([s["initial_B"] for s in strains])
@@ -1670,12 +1754,21 @@ def generate_reproduction_code() -> str:
             phg_res_rates = st.session_state.get("direct_phg_res_rates", [1e-7] * len(phages))
             code.append(f"builder = builder.with_mutations(phage_resistance_rates={phg_res_rates})")
 
-        # nutrients
-        _track_nutrients = st.session_state.get("int_track_nutrients", True)
-        if not _track_nutrients:
-            code.append(f"builder = builder.with_nutrient(track_nutrients=False, carrying_capacity={st.session_state.get('int_carrying_capacity', 1e9)})")
-        else:
-            code.append(f"builder = builder.with_nutrient(track_nutrients=True, monod_constant={st.session_state.get('int_monod_constant', 0.3)}, recycle_fraction={st.session_state.get('int_recycle_fraction', 0.0)}, s_in={st.session_state.get('int_s_in', 0.0)}, s_out={st.session_state.get('int_s_out', 0.0)})")
+        # growth signal + nutrients
+        _gname = st.session_state.get("int_growth_function", "monod_growth")
+        _track = _gname in ("monod_growth", "monod_logistic_growth")
+        _needs_K = _gname in ("logistic_growth", "monod_logistic_growth")
+        code.append(f"from pbisim import {_gname}")
+        code.append(f"builder = builder.with_growth_function({_gname})")
+        _nut = [f"track_nutrients={_track}",
+                f"monod_constant={st.session_state.get('int_monod_constant', 0.3)}",
+                f"recycle_fraction={st.session_state.get('int_recycle_fraction', 0.0)}"]
+        if _track:
+            _nut.append(f"s_in={st.session_state.get('int_s_in', 0.0)}")
+            _nut.append(f"s_out={st.session_state.get('int_s_out', 0.0)}")
+        if _needs_K:
+            _nut.append(f"carrying_capacity={st.session_state.get('int_carrying_capacity', 1e9)}")
+        code.append(f"builder = builder.with_nutrient({', '.join(_nut)})")
 
         # immunity
         if st.session_state.get("int_immunity_enabled", False):
@@ -4032,16 +4125,26 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                             strains[i]["dormancy_signal"] = st.selectbox(
                                 "Dormancy Signal",
-                                ["nutrient", "density", "nutrient_and_density"],
-                                index=["nutrient", "density", "nutrient_and_density"].index(strains[i].get("dormancy_signal", "nutrient")),
+                                SIGNAL_OPTIONS,
+                                index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("dormancy_signal"))),
                                 key=f"str_dsig_{i}",
+                                help="Entry-rate modulation: constant, nutrient-scarcity (Monod), "
+                                     "density (quorum), or nutrient×density.",
                             )
                             strains[i]["resuscitation_signal"] = st.selectbox(
                                 "Resuscitation Signal",
-                                ["nutrient", "density", "nutrient_and_density"],
-                                index=["nutrient", "density", "nutrient_and_density"].index(strains[i].get("resuscitation_signal", "nutrient")),
+                                SIGNAL_OPTIONS,
+                                index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("resuscitation_signal"))),
                                 key=f"str_rsig_{i}",
                             )
+                            if canonical_signal(strains[i].get("dormancy_signal")) in ("nutrient", "nutrient+density"):
+                                strains[i]["dormancy_monod_constant"] = st.number_input(
+                                    "Dormancy nutrient half-saturation (Ks)",
+                                    value=float(strains[i].get("dormancy_monod_constant", 0.0)),
+                                    min_value=0.0, format="%g", key=f"str_dks_{i}",
+                                    help="Half-saturation for the nutrient dormancy signal. "
+                                         "0 = inherit the growth Monod constant (pbisim default).",
+                                )
                             strains[i]["initial_D"] = st.number_input(
                                 "Initial dormant density (D0)",
                                 value=float(strains[i].get("initial_D", 0.0)),
@@ -4827,45 +4930,48 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Environment & Debris
         with col1:
-            st.markdown("### 🍎 Nutrients / Substrate")
-            st.session_state["int_track_nutrients"] = st.checkbox(
-                "Track Nutrients (Monod Kinetics)",
-                value=st.session_state.get("int_track_nutrients", True),
+            st.markdown("### 🍎 Growth signal / Nutrients")
+            _gs_cur_fn = st.session_state.get("int_growth_function", "monod_growth")
+            _gs_labels = list(GROWTH_SIGNALS.keys())
+            _gs_cur_label = next((L for L, (fn, _) in GROWTH_SIGNALS.items() if fn == _gs_cur_fn), _gs_labels[0])
+            _gs_choice = st.selectbox(
+                "Growth signal", _gs_labels, index=_gs_labels.index(_gs_cur_label),
+                help="How the per-strain growth rate is modulated:  constant = unlimited;  "
+                     "nutrient = Monod S/(Ks+S);  density = logistic (1−ΣB/K);  "
+                     "nutrient+density = Monod × logistic.",
             )
+            _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
+            st.session_state["int_growth_function"] = _gs_fn
+            st.session_state["int_track_nutrients"] = _gs_track
+            _gs_nutrient = _gs_fn in ("monod_growth", "monod_logistic_growth")
+            _gs_needs_K = _gs_fn in ("logistic_growth", "monod_logistic_growth")
 
-            if st.session_state["int_track_nutrients"]:
+            if _gs_nutrient:
                 st.session_state["int_initial_S"] = st.number_input(
                     "Initial Resource Substrate (S0)",
-                    value=float(st.session_state.get("int_initial_S", 1.0)),
-                    step=0.1,
+                    value=float(st.session_state.get("int_initial_S", 1.0)), step=0.1,
                 )
                 st.session_state["int_monod_constant"] = st.number_input(
                     "Monod Half-saturation Constant (Ks)",
-                    value=float(st.session_state.get("int_monod_constant", 0.3)),
-                    step=0.05,
+                    value=float(st.session_state.get("int_monod_constant", 0.3)), step=0.05,
                 )
                 st.session_state["int_recycle_fraction"] = st.number_input(
                     "Nutrient recycling fraction",
                     value=float(st.session_state.get("int_recycle_fraction", 0.0)),
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.1,
+                    min_value=0.0, max_value=1.0, step=0.1,
                 )
                 st.session_state["int_s_in"] = st.number_input(
                     "Continuous medium inflow (s_in)",
-                    value=float(st.session_state.get("int_s_in", 0.0)),
-                    step=0.1,
+                    value=float(st.session_state.get("int_s_in", 0.0)), step=0.1,
                 )
                 st.session_state["int_s_out"] = st.number_input(
                     "Continuous Washout dilution (s_out)",
-                    value=float(st.session_state.get("int_s_out", 0.0)),
-                    step=0.05,
+                    value=float(st.session_state.get("int_s_out", 0.0)), step=0.05,
                 )
-            else:
+            if _gs_needs_K:
                 st.session_state["int_carrying_capacity"] = st.number_input(
-                    "Logistic Carrying Capacity (K)",
-                    value=float(st.session_state.get("int_carrying_capacity", 1e9)),
-                    format="%.1e",
+                    "Carrying Capacity (K)",
+                    value=float(st.session_state.get("int_carrying_capacity", 1e9)), format="%.1e",
                 )
 
             st.markdown("### 🎚️ Optical Density (OD) & Debris")

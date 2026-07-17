@@ -425,3 +425,37 @@ def test_direct_mutation_rate_survives_navigation():
     muw = [n for n in at.number_input if n.key == "direct_mu_0"]
     assert muw and muw[0].value == 0.0
     assert at.session_state["direct_phg_res_rates"] == [0.0]
+
+
+def test_dormancy_signals_and_growth_signals():
+    """nutrient+density dormancy no longer errors (was a string mismatch), the dormancy
+    Ks flows through, and all four growth signals build."""
+    from streamlit.testing.v1 import AppTest
+
+    # nutrient+density dormancy with a custom Ks runs (the reported bug). Drive the
+    # widgets (not the dict) so keyed widget state doesn't override the edits.
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    at.session_state["int_carrying_capacity"] = 1e9
+    at.session_state["str_dorm_en_0"] = True   # enable dormancy
+    at.run()
+    at.session_state["str_dsig_0"] = "nutrient+density"
+    at.session_state["str_rsig_0"] = "nutrient+density"
+    at.run()
+    at.session_state["str_dks_0"] = 0.05        # dormancy nutrient half-saturation
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0 and len(at.error) == 0
+    assert at.session_state["simulation_config"].dormancy_monod_constant == 0.05
+
+    # all four growth signals build without error
+    for name, track in [("constant_growth", False), ("monod_growth", True),
+                        ("logistic_growth", False), ("monod_logistic_growth", True)]:
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+        a.run()
+        a.session_state["int_growth_function"] = name
+        a.session_state["int_track_nutrients"] = track
+        a.run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        assert len(a.error) == 0, f"{name}: {[e.value for e in a.error]}"
+        assert "simulation_result" in a.session_state and a.session_state["simulation_result"] is not None

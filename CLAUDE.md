@@ -206,6 +206,31 @@ python -m streamlit run pbisim_app/app.py
   contains only phage or only antibiotic doses (Combo = monotherapy → identical KM
   curves). Explains the "strange outputs" the user observed.
 
+## Done this session (2026-07-17) — signal functions (dormancy/resus/growth) + dormancy Ks
+
+- **BUG: nutrient+density dormancy raised a ValueError.** The app sent the dormancy/
+  resuscitation signal as `"nutrient_and_density"`, but pbisim's key is `"nutrient+density"`
+  (`_DORMANCY_SIGNALS`). Fixed via `canonical_signal()` (also translates legacy stored
+  values) + `SIGNAL_OPTIONS = ["constant","nutrient","density","nutrient+density"]` — the
+  **"constant"** option was also missing. Direct-mode dormancy/resuscitation selectors now
+  offer all four; build path canonicalises before calling `with_dormancy`.
+- **Configurable dormancy nutrient half-saturation (engine + app).** Added
+  `dormancy_monod_constant` to pbisim (`ModelConfig` field, `_monod_signal` uses it, else
+  falls back to `monod_constant`; `with_dormancy(dormancy_monod_constant=…)`). App exposes
+  a "Dormancy nutrient half-saturation (Ks)" input (Direct mode, shown for nutrient signals;
+  0 = inherit growth Ks). Engine: **1144 tests pass** (+1).
+- **Comprehensive growth signals.** New "Growth signal" selector (constant / nutrient (Monod)
+  / density (logistic) / nutrient+density) mapped to pbisim growth functions via
+  `growth_nutrient_kwargs()`, wired into all three builder modes (replaces the bare
+  track-nutrients checkbox). Compatibility handled: when a growth signal freezes S,
+  `compat_dormancy_signal()` / `dormancy_compat_kwargs()` pin nutrient-independent dormancy
+  functions (the engine rejects nutrient dormancy with a frozen S); density-based dormancy
+  now gets a `dormancy_carrying_capacity` even under Monod growth. Verified all 4 signals ×
+  3 modes build. Repro code emits the growth function + nutrient config.
+- Tests: `test_builder_modes.py::test_dormancy_signals_and_growth_signals`,
+  `pbisim/tests/test_dormancy.py::test_dormancy_monod_constant_overrides_growth_ks`.
+  **App: 74 tests pass.**
+
 ## Done this session (2026-07-16) — OD trajectories in parameter sweep
 
 - **Parameter sweep now plots OD trajectories** when the OD/debris module is enabled
