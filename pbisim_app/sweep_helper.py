@@ -273,9 +273,14 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
         setattr(config, meta["field"], val)
 
     elif param_type == "dimension":
+        # Compartment counts (n_depth, n_latent) must be integers >= 1. A sweep can
+        # hand us a fractional or sub-1 value (e.g. a default log range starting at
+        # 0.1); round to the nearest integer and clamp to 1 so the model never gets
+        # 0 compartments (which crashes with an IndexError).
         field = meta["field"]
+        new_val = max(1, int(round(float(val))))
         if field == "n_depth":
-            new_depth = int(val)
+            new_depth = new_val
             config = dataclasses.replace(config, n_depth=new_depth)
             # Resize initial_D if present
             if "initial_D" in model_kwargs and model_kwargs["initial_D"] is not None:
@@ -286,7 +291,7 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
                     new_init_D[q, :] = total_D / new_depth
                 model_kwargs["initial_D"] = new_init_D
         elif field == "n_latent":
-            config = dataclasses.replace(config, n_latent=int(val))
+            config = dataclasses.replace(config, n_latent=new_val)
 
     elif param_type == "array1d":
         arr = np.copy(getattr(config, meta["field"]))

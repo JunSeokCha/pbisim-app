@@ -324,3 +324,20 @@ def test_parameter_sweep_shows_od_trajectories_when_enabled():
     [b for b in at2.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
     assert not any("Optical Density" in m.value for m in at2.markdown)
     assert len(at2.exception) == 0
+
+
+def test_dimension_sweep_clamps_to_int_ge_1():
+    """Sweeping a dimension parameter (n_depth / n_latent) never produces 0 or a
+    fractional compartment count — it rounds and clamps to an integer >= 1 (a
+    fractional/sub-1 value previously crashed the model with an IndexError)."""
+    b = ModelBuilder(n_bacteria=1, n_phages=1, n_latent=5, n_depth=2).with_growth_rates([1.2])
+    b = b.with_dormancy(dormancy_rate=0.2, resuscitation_rate=0.1, dormancy_diffusion_rate=0.05)
+    cfg = b.build()
+    params = get_sweep_parameters(cfg)
+    mk = {"initial_D": np.zeros((2, 1))}
+    for label, field in [("Dormancy Depth Layers (Q)", "n_depth"),
+                         ("Phage Latent Stages (L)", "n_latent")]:
+        for val, expect in [(0.1, 1), (0.9, 1), (2.4, 2), (2.6, 3)]:
+            c, *_ = apply_sweep_parameter(val, params[label], cfg,
+                                          np.array([1e7]), np.array([1e6]), 1.0, mk)
+            assert getattr(c, field) == expect, f"{field} {val} -> {getattr(c, field)} != {expect}"

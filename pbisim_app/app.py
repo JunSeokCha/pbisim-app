@@ -1281,7 +1281,7 @@ def build_nominal_config_from_gui():
         base_ratio = st.session_state.get("int_brg_base_ratio", 1e9)
         dormancy_enabled = st.session_state.get("int_brg_dormancy_enabled", False)
         
-        dorm_rate = st.session_state.get("int_brg_dorm_rate", 0.2) if dormancy_enabled else 0.0
+        dorm_rate = st.session_state.get("int_brg_dorm_rate", 0.001) if dormancy_enabled else 0.0
         resus_rate = st.session_state.get("int_brg_resus_rate", 0.1) if dormancy_enabled else 0.0
         diff_rate = st.session_state.get("int_brg_diff_rate", 0.05) if dormancy_enabled else 0.0
         
@@ -1343,7 +1343,7 @@ def build_nominal_config_from_gui():
         )
         
         # Build config — dormancy depth compartments (configurable; 1 when dormancy off)
-        max_depth = int(st.session_state.get("int_brg_n_depth", 3)) if dormancy_enabled else 1
+        max_depth = int(st.session_state.get("int_brg_n_depth", 1)) if dormancy_enabled else 1
 
         # Resolve Phage PK config
         phage_pk_config = None
@@ -1808,7 +1808,7 @@ def generate_reproduction_code() -> str:
         code.append("bacteria = BacterialStrain(")
         code.append(f"    base_growth_rate={st.session_state.get('int_brg_base_growth', 1.2)},")
         code.append(f"    bacteria_to_resource_ratio={st.session_state.get('int_brg_base_ratio', 1e9)},")
-        code.append(f"    dormancy_rate={st.session_state.get('int_brg_dorm_rate', 0.2) if st.session_state.get('int_brg_dormancy_enabled', False) else 0.0},")
+        code.append(f"    dormancy_rate={st.session_state.get('int_brg_dorm_rate', 0.001) if st.session_state.get('int_brg_dormancy_enabled', False) else 0.0},")
         code.append(f"    resuscitation_rate={st.session_state.get('int_brg_resus_rate', 0.1) if st.session_state.get('int_brg_dormancy_enabled', False) else 0.0},")
         code.append(f"    dormancy_diffusion_rate={st.session_state.get('int_brg_diff_rate', 0.05) if st.session_state.get('int_brg_dormancy_enabled', False) else 0.0},")
         code.append(f"    death_rate_B={st.session_state.get('int_brg_death_rate_B', 0.0) or None},")
@@ -1824,7 +1824,7 @@ def generate_reproduction_code() -> str:
         code.append("]")
         code.append("")
         code.append("brg = BinaryResistanceGenotypes.from_strains(phages, bacteria=bacteria, antibiotics=antibiotics or None)")
-        _brg_n_depth = int(st.session_state.get("int_brg_n_depth", 3)) if st.session_state.get("int_brg_dormancy_enabled", False) else 1
+        _brg_n_depth = int(st.session_state.get("int_brg_n_depth", 1)) if st.session_state.get("int_brg_dormancy_enabled", False) else 1
         if st.session_state.get("int_brg_use_eq_ic", False):
             _eq_total = st.session_state.get("int_brg_eq_total_B", 1e7)
             code.append(f"initial_B = brg.equilibrium_initial_condition(total_bacteria={_eq_total})")
@@ -3578,13 +3578,24 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
             st.caption(f"Nominal Value: `{default_val:.2e}`" if isinstance(default_val, (int, float)) else f"Nominal Value: `{default_val}`")
             
+            _is_dim = meta1["type"] == "dimension"
             c1, c2, c3 = st.columns(3)
-            with c1:
-                min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e", key="ps_1d_min")
-            with c2:
-                max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e", key="ps_1d_max")
-            with c3:
-                steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
+            if _is_dim:
+                # integer compartment count: integer bounds ≥ 1
+                _dv = max(1, int(round(default_val)))
+                with c1:
+                    min_val = st.number_input("Min Value", min_value=1, value=1, step=1, key="ps_1d_min")
+                with c2:
+                    max_val = st.number_input("Max Value", min_value=1, value=max(_dv + 3, 5), step=1, key="ps_1d_max")
+                with c3:
+                    steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
+            else:
+                with c1:
+                    min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e", key="ps_1d_min")
+                with c2:
+                    max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e", key="ps_1d_max")
+                with c3:
+                    steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
             spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
             run_sweep = st.button("🚀 Run 1D Sweep", use_container_width=True)
@@ -3652,6 +3663,12 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     sweep_values = np.logspace(np.log10(min_val), np.log10(max_val), int(steps))
                 else:
                     sweep_values = np.linspace(min_val, max_val, int(steps))
+                # Compartment counts (n_depth / n_latent) are integers >= 1 — sweep unique
+                # integers so the results aren't fractional/duplicated.
+                if meta1["type"] == "dimension":
+                    sweep_values = np.unique(np.clip(np.round(sweep_values).astype(int), 1, None))
+                    st.caption("Integer parameter — swept over unique integer values ≥ 1: "
+                               f"{list(sweep_values)}")
 
                 runs_outcomes = []
                 trajectories = [] # (time, viable_b, label)
@@ -4398,7 +4415,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 if st.session_state["int_brg_dormancy_enabled"]:
                     st.session_state["int_brg_dorm_rate"] = st.number_input(
-                        "Dormancy rate (sleep)", value=float(st.session_state.get("int_brg_dorm_rate", 0.2)), step=0.05
+                        "Dormancy rate (sleep)", value=float(st.session_state.get("int_brg_dorm_rate", 0.001)), step=0.05
                     )
                     st.session_state["int_brg_resus_rate"] = st.number_input(
                         "Resuscitation rate (wake)", value=float(st.session_state.get("int_brg_resus_rate", 0.1)), step=0.05
@@ -4409,7 +4426,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     st.session_state["int_brg_n_depth"] = st.number_input(
                         "Dormancy depth layers (Q)",
                         min_value=1, max_value=10,
-                        value=int(st.session_state.get("int_brg_n_depth", 3)),
+                        value=int(st.session_state.get("int_brg_n_depth", 1)),
                         help="Number of dormancy-depth compartments for all genotypes.",
                     )
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
