@@ -495,3 +495,30 @@ def test_dormancy_signal_config_in_brg_and_strainset():
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert a.session_state["simulation_config"].dormancy_function.__name__ == "density_dependent_dormancy"
     assert len(a.error) == 0
+
+
+def test_reset_environment_clears_brg_and_strainset():
+    """Reset Environment must clear BRG / StrainSet config, not just the Direct
+    builder — the mode returns to Direct and the mode-specific keys are gone."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at.run()
+    # configure BRG + a StrainSet mutation graph
+    at.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"
+    at.run(); at.run()
+    at.session_state["int_brg_base_growth"] = 0.55
+    at.session_state["int_brg_dormancy_enabled"] = True
+    at.run()
+    at.session_state["int_transitions"] = [{"from": "WT", "to": "R", "rate": 1e-7}]
+    at.run()
+    # Reset Environment (button lives on the AI Assistant page)
+    at.session_state["current_page_radio"] = "AI Assistant"
+    at.run()
+    [b for b in at.button if "Reset Environment" in (b.label or "")][0].click().run()
+    assert at.session_state["int_builder_mode"] == "Direct (ModelBuilder)"
+    assert "int_brg_base_growth" not in at.session_state
+    assert "int_brg_dormancy_enabled" not in at.session_state
+    # the mutation graph is cleared (re-initialised to empty by session init)
+    assert at.session_state["int_transitions"] == []
+    assert "widget_builder_mode" not in at.session_state
+    assert len(at.exception) == 0

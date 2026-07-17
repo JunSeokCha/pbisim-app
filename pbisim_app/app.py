@@ -546,14 +546,17 @@ def load_preset_to_state(params: dict):
     st.session_state.simulation_config = None
     st.session_state.int_builder_mode = "Direct (ModelBuilder)"
 
-    # 1. Clear any old strain/phage/abx/dose keys to prevent widget collision
+    # 1. Clear old per-mode config + widget keys to prevent collisions and so a reset
+    #    actually clears BRG / StrainSet (not just the Direct builder). Covers the Direct
+    #    widget keys, the BRG data + widgets (int_brg_*, brg_*), StrainSet (int_transitions,
+    #    ss_*, trans_*, direct_*), and the mode/signal selector widgets (widget_*).
+    _clear_prefixes = (
+        "strain_", "phage_", "abx_", "dose_", "ads_",
+        "int_brg_", "brg_", "ss_", "str_", "direct_", "trans_", "widget_",
+    )
     keys_to_clear = [
-        k
-        for k in st.session_state.keys()
-        if any(
-            k.startswith(prefix)
-            for prefix in ("strain_", "phage_", "abx_", "dose_", "ads_")
-        )
+        k for k in st.session_state.keys()
+        if any(k.startswith(p) for p in _clear_prefixes) or k == "int_transitions"
     ]
     for k in keys_to_clear:
         st.session_state.pop(k, None)
