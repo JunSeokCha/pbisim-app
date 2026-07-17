@@ -582,6 +582,7 @@ def load_preset_to_state(params: dict):
         _gf = "monod_growth" if params.get("track_nutrients", True) else "logistic_growth"
     st.session_state["int_growth_function"] = _gf
     st.session_state["int_track_nutrients"] = _gf in ("monod_growth", "monod_logistic_growth")
+    st.session_state["int_death_function"] = params.get("death_function_name", "constant_death")
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
 
@@ -944,6 +945,15 @@ GROWTH_SIGNALS = {
     "constant (unlimited)":        ("constant_growth", False),
 }
 
+# Death-signal options → pbisim death function name. constant_death (default) is the
+# flat rate d that the app used all along; nutrient = starvation d·(1−S/(Ks+S));
+# density = crowding d·min(1, ΣB/K). (No nutrient+density death function exists.)
+DEATH_SIGNALS = {
+    "constant":              "constant_death",
+    "nutrient (starvation)": "nutrient_dependent_death",
+    "density (crowding)":    "density_dependent_death",
+}
+
 
 def canonical_signal(v):
     """Normalise a stored dormancy/resuscitation signal to a pbisim-recognised key.
@@ -1042,6 +1052,25 @@ def mode_dormancy_kwargs(dsig="nutrient", rsig="nutrient", ks=0.0, kdorm=0.0):
     return kw
 
 
+def death_signal_function(name):
+    """Map a death-function name to the pbisim function object."""
+    from pbisim import constant_death, nutrient_dependent_death, density_dependent_death
+    return {"constant_death": constant_death,
+            "nutrient_dependent_death": nutrient_dependent_death,
+            "density_dependent_death": density_dependent_death}.get(name, constant_death)
+
+
+def death_kwargs():
+    """death_function (+ carrying_capacity when the density death function needs it) for
+    the selected death signal. `constant_death` reproduces the previous behaviour (a flat
+    rate d, applied regardless of nutrients)."""
+    name = st.session_state.get("int_death_function", "constant_death")
+    kw = {"death_function": death_signal_function(name)}
+    if name == "density_dependent_death":
+        kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+    return kw
+
+
 def build_nominal_config_from_gui():
     """
     Constructs and returns the ModelConfig and corresponding state initial values
@@ -1109,11 +1138,17 @@ def build_nominal_config_from_gui():
         # Natural death rates
         death_rates_B = [s.get("death_rate_B", 0.0) for s in strains]
         death_rates_D = [s.get("death_rate_D", 0.0) for s in strains]
-        if any(db > 0 for db in death_rates_B) or any(dd > 0 for dd in death_rates_D):
-            builder = builder.with_death(
-                death_rate_B=np.array(death_rates_B) if any(db > 0 for db in death_rates_B) else None,
-                death_rate_D=np.array(death_rates_D) if any(dd > 0 for dd in death_rates_D) else None,
-            )
+        _has_active_death = any(db > 0 for db in death_rates_B)
+        _dthk = death_kwargs()
+        if _has_active_death and "carrying_capacity" in _dthk:  # density death needs K
+            builder = builder.with_nutrient(carrying_capacity=_dthk["carrying_capacity"])
+        # Always set the death function so the config reflects the chosen signal; the
+        # rates are only overridden when > 0 (a None rate means that pathway is off).
+        builder = builder.with_death(
+            death_rate_B=np.array(death_rates_B) if _has_active_death else None,
+            death_rate_D=np.array(death_rates_D) if any(dd > 0 for dd in death_rates_D) else None,
+            death_function=_dthk["death_function"],
+        )
         
         # Dormancy
         any_dormancy = any(s.get("dormancy_enabled", False) for s in strains)
@@ -1404,6 +1439,7 @@ def build_nominal_config_from_gui():
             float(st.session_state.get("int_brg_dorm_ks", 0.0)),
             float(st.session_state.get("int_brg_dorm_kdorm", 0.0)),
         ))
+        extra_kwargs.update(death_kwargs())  # death signal function (+ K for density death)
 
         # Dose schedule
         if schedule:
@@ -1579,6 +1615,7 @@ def build_nominal_config_from_gui():
             float(_ss_dorm[0].get("dormancy_monod_constant", 0.0)) if _ss_dorm else 0.0,
             float(_ss_dorm[0].get("dormancy_carrying_capacity", 0.0)) if _ss_dorm else 0.0,
         ))
+        extra_kwargs.update(death_kwargs())  # death signal function (+ K for density death)
 
         # Dose schedule
         if schedule:
@@ -1753,7 +1790,9 @@ def generate_reproduction_code() -> str:
         death_rates_B = [s.get("death_rate_B", 0.0) for s in strains]
         death_rates_D = [s.get("death_rate_D", 0.0) for s in strains]
         if any(db > 0 for db in death_rates_B) or any(dd > 0 for dd in death_rates_D):
-            code.append(f"builder = builder.with_death(death_rate_B=np.array({death_rates_B}), death_rate_D=np.array({death_rates_D}))")
+            _dfn = st.session_state.get("int_death_function", "constant_death")
+            code.append(f"from pbisim import {_dfn}")
+            code.append(f"builder = builder.with_death(death_rate_B=np.array({death_rates_B}), death_rate_D=np.array({death_rates_D}), death_function={_dfn})")
             
         # dormancy
         any_dorm = any(s.get("dormancy_enabled", False) for s in strains)
@@ -4099,6 +4138,18 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.session_state["int_carrying_capacity"] = st.number_input(
                     "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                     format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
+
+        # Death signal (model-wide) — modulates the per-strain natural death rate dB.
+        _dth_cur_fn = st.session_state.get("int_death_function", "constant_death")
+        _dth_labels = list(DEATH_SIGNALS.keys())
+        _dth_cur_label = next((L for L, fn in DEATH_SIGNALS.items() if fn == _dth_cur_fn), _dth_labels[0])
+        _dth_choice = st.selectbox(
+            "Death signal function", _dth_labels, index=_dth_labels.index(_dth_cur_label),
+            help="How the per-strain natural death rate dB is modulated:  constant = flat rate d "
+                 "(the previous behaviour);  nutrient = starvation d·(1−S/(Ks+S)) (rises as nutrients "
+                 "deplete);  density = crowding d·min(1, ΣB/K). Note: starvation death only separates "
+                 "stationary from death phase when nutrients persist at a low plateau (recycling).")
+        st.session_state["int_death_function"] = DEATH_SIGNALS[_dth_choice]
 
         st.markdown("---")
         col1, col2 = st.columns(2)

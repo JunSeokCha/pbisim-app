@@ -522,3 +522,22 @@ def test_reset_environment_clears_brg_and_strainset():
     assert at.session_state["int_transitions"] == []
     assert "widget_builder_mode" not in at.session_state
     assert len(at.exception) == 0
+
+
+def test_death_signal_function_selector():
+    """The death-signal selector sets the model's death_function (default constant),
+    and density death gets a carrying capacity so it doesn't crash under Monod growth."""
+    from streamlit.testing.v1 import AppTest
+    DEATH = {"constant": "constant_death",
+             "nutrient (starvation)": "nutrient_dependent_death",
+             "density (crowding)": "density_dependent_death"}
+    for label, fn in DEATH.items():
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+        a.run()
+        a.session_state["str_death_0"] = 0.05   # nonzero death rate via the widget
+        a.run()
+        [s for s in a.selectbox if "Death signal function" in (s.label or "")][0].set_value(label).run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.death_function.__name__ == fn, f"{label}: {cfg.death_function}"
+        assert len(a.error) == 0
