@@ -1095,6 +1095,7 @@ def build_nominal_config_from_gui():
             ds = canonical_signal(enabled_strains[0]["dormancy_signal"]) if enabled_strains else "nutrient"
             rs = canonical_signal(enabled_strains[0]["resuscitation_signal"]) if enabled_strains else "nutrient"
             _dorm_ks = float(enabled_strains[0].get("dormancy_monod_constant", 0.0)) if enabled_strains else 0.0
+            _dorm_kdorm = float(enabled_strains[0].get("dormancy_carrying_capacity", 0.0)) if enabled_strains else 0.0
             # nutrient dormancy signals need S tracked; coerce when it isn't.
             ds, _cd = compat_dormancy_signal(ds, track_nutrients)
             rs, _cr = compat_dormancy_signal(rs, track_nutrients)
@@ -1108,10 +1109,12 @@ def build_nominal_config_from_gui():
             )
             if _dorm_ks > 0 and any(sig in ("nutrient", "nutrient+density") for sig in (ds, rs)):
                 _dorm_kwargs["dormancy_monod_constant"] = _dorm_ks
-            # density-based dormancy/resuscitation needs a density threshold — supply
-            # the carrying capacity (used even when growth is Monod, which doesn't set it).
+            # density-based dormancy/resuscitation needs a density threshold. Use the
+            # per-strain dormancy_carrying_capacity when set, else the growth carrying
+            # capacity (Monod growth doesn't set one, so supply it explicitly).
             if any(sig in ("density", "nutrient+density") for sig in (ds, rs)):
-                _dorm_kwargs["dormancy_carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+                _dorm_kwargs["dormancy_carrying_capacity"] = (
+                    _dorm_kdorm if _dorm_kdorm > 0 else st.session_state.get("int_carrying_capacity", 1e9))
             builder = builder.with_dormancy(**_dorm_kwargs)
         elif not track_nutrients:
             # No dormancy configured, but a frozen S is incompatible with the default
@@ -4137,13 +4140,23 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("resuscitation_signal"))),
                                 key=f"str_rsig_{i}",
                             )
-                            if canonical_signal(strains[i].get("dormancy_signal")) in ("nutrient", "nutrient+density"):
+                            _dsig_i = canonical_signal(strains[i].get("dormancy_signal"))
+                            _rsig_i = canonical_signal(strains[i].get("resuscitation_signal"))
+                            if "nutrient" in (_dsig_i, _rsig_i) or "nutrient+density" in (_dsig_i, _rsig_i):
                                 strains[i]["dormancy_monod_constant"] = st.number_input(
                                     "Dormancy nutrient half-saturation (Ks)",
                                     value=float(strains[i].get("dormancy_monod_constant", 0.0)),
                                     min_value=0.0, format="%g", key=f"str_dks_{i}",
                                     help="Half-saturation for the nutrient dormancy signal. "
                                          "0 = inherit the growth Monod constant (pbisim default).",
+                                )
+                            if _dsig_i in ("density", "nutrient+density") or _rsig_i in ("density", "nutrient+density"):
+                                strains[i]["dormancy_carrying_capacity"] = st.number_input(
+                                    "Dormancy density threshold (K_dorm)",
+                                    value=float(strains[i].get("dormancy_carrying_capacity", 0.0)),
+                                    min_value=0.0, format="%.2e", key=f"str_dcc_{i}",
+                                    help="Density threshold for the density dormancy signal (rate ∝ ΣB/K_dorm). "
+                                         "0 = inherit the growth carrying capacity (pbisim default).",
                                 )
                             strains[i]["initial_D"] = st.number_input(
                                 "Initial dormant density (D0)",

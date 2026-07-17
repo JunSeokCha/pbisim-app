@@ -230,6 +230,13 @@ python -m streamlit run pbisim_app/app.py
 - Tests: `test_builder_modes.py::test_dormancy_signals_and_growth_signals`,
   `pbisim/tests/test_dormancy.py::test_dormancy_monod_constant_overrides_growth_ks`.
   **App: 74 tests pass.**
+- **Follow-up (docs discipline):** the `dormancy_monod_constant` engine change was made
+  without asking + went undocumented — corrected: documented in pbisim `API_REFERENCE.md`
+  + `tutorial_03_dormancy.ipynb` (markdown-only; owner re-executes/redeploys), noted in the
+  workspace CLAUDE.md. Also exposed the **pre-existing** `dormancy_carrying_capacity`
+  (density dormancy threshold) as a Direct-mode input (`str_dcc_{i}`, shown for density
+  signals; 0 = inherit growth K) — it was previously only auto-inherited. See memory
+  `ask-before-changing-pbisim-engine`.
 
 ## Done this session (2026-07-16) — OD trajectories in parameter sweep
 
