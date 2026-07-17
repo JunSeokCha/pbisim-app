@@ -17,8 +17,7 @@
 FROM python:3.11-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
@@ -40,6 +39,16 @@ RUN pip install -e .
 
 # --- 3. Scrub any token left in VCS install metadata ---
 RUN find /opt/venv -name direct_url.json -delete || true
+
+# --- 4. Pre-compile bytecode so the runtime container starts fast ---
+# Without this the image ships no .pyc, so every boot compiles all of
+# Streamlit's + pbisim's bytecode on first import — far too slow on the free
+# plan's fractional CPU, so Streamlit misses Render's port-scan window and the
+# deploy fails with "no open ports detected". Compiling here (on the build
+# instance's full CPU) bakes the .pyc into the image → fast cold start.
+# `unchecked-hash` makes the .pyc always valid regardless of source mtime, so the
+# cross-stage COPY can't invalidate them and force a runtime recompile.
+RUN python -m compileall -q -j 0 --invalidation-mode unchecked-hash /opt/venv /app || true
 
 ########################  runtime  ########################
 FROM python:3.11-slim AS runtime
