@@ -4171,12 +4171,17 @@ elif st.session_state.current_page == "Interactive Simulator":
                             _dsig_i = canonical_signal(strains[i].get("dormancy_signal"))
                             _rsig_i = canonical_signal(strains[i].get("resuscitation_signal"))
                             if "nutrient" in (_dsig_i, _rsig_i) or "nutrient+density" in (_dsig_i, _rsig_i):
+                                # Inherit the growth Monod constant by default (pbisim
+                                # convention: dormancy_monod_constant=None → monod_constant);
+                                # the user only changes it to decouple the two.
+                                _grow_ks = float(st.session_state.get("int_monod_constant", 0.3))
                                 strains[i]["dormancy_monod_constant"] = st.number_input(
                                     "Dormancy nutrient half-saturation (Ks)",
-                                    value=float(strains[i].get("dormancy_monod_constant", 0.0)),
+                                    value=float(strains[i].get("dormancy_monod_constant", _grow_ks)),
                                     min_value=0.0, format="%g", key=f"str_dks_{i}",
-                                    help="Half-saturation for the nutrient dormancy signal. "
-                                         "0 = inherit the growth Monod constant (pbisim default).",
+                                    help="Half-saturation for the nutrient dormancy signal. Defaults to the "
+                                         "growth Monod constant (inherited); change it to decouple the two. "
+                                         "0 also inherits the growth Monod constant.",
                                 )
                             if _dsig_i in ("density", "nutrient+density") or _rsig_i in ("density", "nutrient+density"):
                                 strains[i]["dormancy_carrying_capacity"] = st.number_input(
