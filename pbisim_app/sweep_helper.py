@@ -57,7 +57,26 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         "type": "scalar",
         "field": "debris_kdis",
     }
-    
+    params["Immune Stim 50 (K_stim)"] = {
+        "type": "scalar",
+        "field": "imm_stim50",
+    }
+    # Dormancy sensing thresholds (None → inherit growth Ks / K; give a numeric
+    # `default` so the 1D UI has a sensible nominal even when the field is None).
+    params["Dormancy Nutrient Half-saturation (Ks_dorm)"] = {
+        "type": "scalar", "field": "dormancy_monod_constant", "default": 0.3,
+    }
+    params["Dormancy Density Threshold (K_dorm)"] = {
+        "type": "scalar", "field": "dormancy_carrying_capacity", "default": 1e8,
+    }
+    params["Lysis Monod Constant (Ks_lysis)"] = {
+        "type": "scalar", "field": "monod_constant_lysis", "default": 0.3,
+    }
+    if getattr(config, "debris_u", None) is not None:
+        params["Debris Yield · deaths (u)"] = {"type": "scalar", "field": "debris_u"}
+    if getattr(config, "debris_v", None) is not None:
+        params["Debris Yield · lysis (v)"] = {"type": "scalar", "field": "debris_v"}
+
     # Dimensions (Q & L)
     params["Dormancy Depth Layers (Q)"] = {
         "type": "dimension",
@@ -116,6 +135,16 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             "field": "imm_kill_rate_D",
             "index": i,
         }
+        params[f"Immune Stim Rate - {strain_name}"] = {
+            "type": "array1d",
+            "field": "imm_stim_rate",
+            "index": i,
+        }
+        params[f"Immune Kill Rate (Active) - {strain_name}"] = {
+            "type": "array1d",
+            "field": "imm_kill_rate",
+            "index": i,
+        }
 
     # 3. Phage-specific parameters
     for j in range(config.n_phages):
@@ -158,6 +187,18 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             params[f"Latent Period - {phage_name} on {strain_name}"] = {
                 "type": "array2d",
                 "field": "latent_periods",
+                "index_row": i,
+                "index_col": j,
+            }
+            params[f"Dormant Latent Period - {phage_name} on {strain_name}"] = {
+                "type": "array2d",
+                "field": "latent_periods_dormant",
+                "index_row": i,
+                "index_col": j,
+            }
+            params[f"Dormant Adsorption Attenuation - {phage_name} on {strain_name}"] = {
+                "type": "array2d",
+                "field": "attenuation_rate",
                 "index_row": i,
                 "index_col": j,
             }
@@ -243,7 +284,12 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             ("Bacteria-Resource Ratio (ALL strains)", "bacteria_to_resource_ratio", "array1d_broadcast"),
             ("Dormancy Rate (ALL strains)", "dormancy_rate", "array1d_broadcast"),
             ("Resuscitation Rate (ALL strains)", "resuscitation_rate", "array1d_broadcast"),
+            ("Dormancy Diffusion Rate (ALL strains)", "dormancy_diffusion_rate", "array1d_broadcast"),
             ("Natural Death Rate dB (ALL strains)", "death_rate_B", "array1d_broadcast_or_none"),
+            ("Dormant Death Rate dD (ALL strains)", "death_rate_D", "array1d_broadcast_or_none"),
+            ("Immune Stim Rate (ALL strains)", "imm_stim_rate", "array1d_broadcast"),
+            ("Immune Kill Rate (ALL strains)", "imm_kill_rate", "array1d_broadcast"),
+            ("Immune Kill Rate Dormant (ALL strains)", "imm_kill_rate_D", "array1d_broadcast_or_none"),
             ("Initial Density B0 (ALL strains)", "growth_rates", "initial_B_broadcast"),
         ]:
             params[label] = {"type": typ, "field": field}

@@ -3594,6 +3594,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
             default_val = 1e-9
             if meta1["type"] == "scalar":
                 default_val = getattr(nominal_config, meta1["field"])
+                if default_val is None:  # e.g. dormancy_monod_constant when inheriting
+                    default_val = meta1.get("default", 1.0)
             elif meta1["type"] == "dimension":
                 default_val = getattr(nominal_config, meta1["field"])
             elif meta1["type"] == "array1d":

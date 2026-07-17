@@ -341,3 +341,34 @@ def test_dimension_sweep_clamps_to_int_ge_1():
             c, *_ = apply_sweep_parameter(val, params[label], cfg,
                                           np.array([1e7]), np.array([1e6]), 1.0, mk)
             assert getattr(c, field) == expect, f"{field} {val} -> {getattr(c, field)} != {expect}"
+
+
+def test_sweep_parameters_cover_dormancy_immune_debris():
+    """The previously-missing parameters are now sweepable: dormancy thresholds,
+    dormant-death / diffusion / immune broadcasts, per-strain immune rates, and
+    dormant latent / attenuation per pair."""
+    b = ModelBuilder(n_bacteria=2, n_phages=1, n_latent=5, n_depth=2).with_growth_rates([1.2, 1.1])
+    b = b.with_dormancy(dormancy_rate=0.2, resuscitation_rate=0.1, dormancy_diffusion_rate=0.05)
+    b = b.with_nutrient(monod_constant=0.3, carrying_capacity=1e9)
+    cfg = b.build()
+    p = get_sweep_parameters(cfg)
+    for label in [
+        "Dormancy Nutrient Half-saturation (Ks_dorm)",
+        "Dormancy Density Threshold (K_dorm)",
+        "Immune Stim 50 (K_stim)",
+        "Dormant Death Rate dD (ALL strains)",
+        "Dormancy Diffusion Rate (ALL strains)",
+        "Immune Kill Rate Dormant (ALL strains)",
+        "Immune Stim Rate (ALL strains)",
+        "Immune Kill Rate (ALL strains)",
+        "Immune Stim Rate - Strain 0",
+        "Immune Kill Rate (Active) - Strain 0",
+        "Dormant Latent Period - Phage 0 on Strain 0",
+        "Dormant Adsorption Attenuation - Phage 0 on Strain 0",
+    ]:
+        assert label in p, f"missing sweep parameter: {label}"
+
+    # a None-valued dormancy threshold can still be swept (safety-net: set the field)
+    c, *_ = apply_sweep_parameter(0.05, p["Dormancy Nutrient Half-saturation (Ks_dorm)"],
+                                  cfg, np.array([1e7, 1e7]), np.array([1e6]), 1.0, {})
+    assert c.dormancy_monod_constant == 0.05
