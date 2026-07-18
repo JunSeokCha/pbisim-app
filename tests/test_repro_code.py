@@ -194,3 +194,48 @@ def test_repro_brg_equilibrium_ic_and_prerun():
     ns = {}
     exec(compile(code, "<repro>", "exec"), ns)
     assert ns["cfg"] is not None
+
+
+# ── sweep reproduction scripts (Dose-Response + Parameter Sweeps pages) ──
+
+def _sweep_code(at):
+    assert "_last_sweep_repro_code" in at.session_state
+    return at.session_state["_last_sweep_repro_code"]
+
+
+def test_param_sweep_reproduction_code_execs():
+    """The Parameter Sweeps page emits a runnable 1D-sweep script that shadows the base
+    builder and loops over the app's own apply_sweep_parameter."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=240)
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    [b for b in at.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+
+    code = _sweep_code(at)
+    assert "apply_sweep_parameter(" in code
+    assert "ModelBuilder(" in code  # shadows the builder path, not a config dump
+    ns = {}
+    exec(compile(code, "<param-sweep>", "exec"), ns)
+    assert "sweep_values" in ns and len(ns["sweep_values"]) >= 2
+
+
+def test_dose_sweep_reproduction_code_execs_and_zeroes_swept_phage():
+    """The Dose-Response page emits a runnable script that rebuilds the per-run dose
+    schedule and starts the swept phage at zero free phage (so dose=0 is a true control)."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=240)
+    at.run()
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    [b for b in at.button if "Run Dose-Response Sweep" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+
+    code = _sweep_code(at)
+    assert "cfg.dose_schedule = DoseSchedule(" in code
+    assert "initial_P = np.array([0.0])" in code  # swept phage zeroed
+    ns = {}
+    exec(compile(code, "<dose-sweep>", "exec"), ns)
+    assert ns["M"] >= 2

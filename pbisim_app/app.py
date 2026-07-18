@@ -2000,6 +2000,224 @@ def generate_reproduction_code() -> str:
     return _script
 
 
+def _repro_base_config_block(rec, iB, iP, iS, mk, extra_imports=(), initial_P_override=None):
+    """Shared prefix for sweep reproduction scripts: imports + the recorded base-config
+    builder calls + initial_B/P/S/model_kwargs statements. ``initial_P_override`` lets the
+    caller substitute a modified initial_P array (e.g. swept phages zeroed)."""
+    imports = set(rec.imports) | {"PBIModel", "solve_ode"} | set(extra_imports)
+    lines = [
+        "import numpy as np",
+        "import matplotlib.pyplot as plt",
+        "from pbisim import " + ", ".join(sorted(imports)),
+        "from pbisim_app.sweep_helper import apply_sweep_parameter",
+        "",
+        "# 1. Nominal model configuration (exact shadow of the app's builder calls)",
+        *rec.lines,
+        f"initial_B = {rec.render(iB)}",
+        f"initial_P = {rec.render(iP if initial_P_override is None else initial_P_override)}",
+        f"initial_S = {rec.render(iS)}",
+        f"model_kwargs = {rec.render(mk)}",
+    ]
+    return imports, lines
+
+
+def _repro_solve_kwargs():
+    _thresh = st.session_state.get("int_extinction_threshold", 1.0) or None
+    _check = st.session_state.get("int_extinction_check_interval", 0.0) or None
+    return (f"t_end={st.session_state.get('int_t_end', 48.0)}, dt={st.session_state.get('int_dt', 0.25)}, "
+            f"method='{st.session_state.get('int_solver_method', 'BDF')}', "
+            f"extinction_threshold={_thresh}, extinction_check_interval={_check}")
+
+
+def _repro_prerun_lines(indent, t_prerun):
+    """Emit the per-run pre-run block (carry B/D/S/Imm) at the given indent, or []."""
+    if not t_prerun:
+        return []
+    p = indent
+    return [
+        f"{p}ic = stationary_phase_ic(c_k, t_prerun={t_prerun}, B0=ib_k)",
+        f"{p}ib_k, is_k = ic.B, max(float(ic.S), 0.0)",
+        f"{p}if ic.D is not None: mk_k['initial_D'] = ic.D",
+        f"{p}if ic.Imm is not None: mk_k['initial_Imm'] = ic.Imm",
+    ]
+
+
+def generate_param_sweep_reproduction_code() -> str:
+    """Reproduction script for a 1D parameter sweep: the recorded base config plus a loop
+    calling the app's own ``apply_sweep_parameter`` per value (no re-derivation)."""
+    if st.session_state.get("ps_sweep_type", "1D Sweep") != "1D Sweep":
+        return ("# Reproduction code is currently available for 1D parameter sweeps only.\n"
+                "# Switch 'Sweep Dimension' to '1D Sweep' to export a script.")
+    config, iB, iP, iS, mk = build_nominal_config_from_gui()
+    rec = st.session_state["_repro_rec"]
+
+    sweep_params = get_sweep_parameters(
+        config, st.session_state.get("int_strains", []),
+        st.session_state.get("int_phages", []), st.session_state.get("int_antibiotics", []))
+    label = st.session_state.get("p1_sweep_label")
+    if not label or label not in sweep_params:
+        return "# Configure and run a 1D parameter sweep first."
+    meta = sweep_params[label]
+
+    t_prerun = st.session_state.get("int_t_prerun", 0.0)
+    imports, code = _repro_base_config_block(
+        rec, iB, iP, iS, mk, extra_imports={"stationary_phase_ic"} if t_prerun else set())
+    code[0:0] = ["# ── pbisim 1D Parameter-Sweep Reproduction Script ──"]
+
+    _min = st.session_state.get("ps_1d_min")
+    _max = st.session_state.get("ps_1d_max")
+    _steps = int(st.session_state.get("ps_1d_steps", 5))
+    _log = st.session_state.get("ps_1d_spacing", "Linear") == "Logarithmic"
+
+    code += ["", "# 2. Sweep definition", f"meta = {rec.render(meta)}"]
+    if _log:
+        code.append(f"sweep_values = np.logspace(np.log10({_min}), np.log10({_max}), {_steps})")
+    else:
+        code.append(f"sweep_values = np.linspace({_min}, {_max}, {_steps})")
+    if meta["type"] == "dimension":
+        code.append("sweep_values = np.unique(np.clip(np.round(sweep_values).astype(int), 1, None))")
+
+    _label_lit = label.replace('"', "'")
+    code += [
+        "",
+        "# 3. Run the sweep (apply_sweep_parameter is the same function the app uses)",
+        "fig, ax = plt.subplots(figsize=(8, 4))",
+        "for val in sweep_values:",
+        "    c_k, ib_k, ip_k, is_k, mk_k = apply_sweep_parameter(",
+        "        val, meta, cfg, initial_B, initial_P, initial_S, model_kwargs)",
+        *_repro_prerun_lines("    ", t_prerun),
+        "    model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)",
+        f"    result = solve_ode(model, {_repro_solve_kwargs()})",
+        "    total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)",
+        '    ax.semilogy(result.time, total, label="' + _label_lit + ' = %.2e" % val)',
+        f'ax.set(xlabel="Time (h)", ylabel="Total viable (cells/mL)", title="1D sweep: {_label_lit}")',
+        "ax.legend(fontsize=7)",
+        "plt.show()",
+    ]
+    _script = "\n".join(code)
+    st.session_state["_last_sweep_repro_code"] = _script
+    return _script
+
+
+def generate_dose_sweep_reproduction_code() -> str:
+    """Reproduction script for the dose-response sweep: the recorded base config plus a
+    loop that rebuilds the per-run dose schedule exactly as the app does (MOI scaling,
+    repeat regimens, nominal overrides) and re-solves."""
+    phages = st.session_state.get("int_phages", [])
+    antibiotics = st.session_state.get("int_antibiotics", [])
+    strains = st.session_state.get("int_strains", [])
+
+    # Reconstruct the sweep inputs from the dr_sweep_* widgets (mirrors the page).
+    swept_inputs, swept_units, swept_repeat_configs = {}, {}, {}
+    for j in range(len(phages)):
+        if st.session_state.get(f"dr_sweep_phg_en_{j}"):
+            swept_inputs[f"phage_{j}"] = st.session_state.get(f"dr_sweep_phg_series_{j}", "0, 1e3, 1e5, 1e7, 1e9")
+            swept_units[f"phage_{j}"] = st.session_state.get(f"dr_sweep_phg_unit_{j}", "PFU (absolute)")
+            if st.session_state.get(f"dr_sweep_phg_rep_en_{j}"):
+                swept_repeat_configs[f"phage_{j}"] = {
+                    "interval": st.session_state.get(f"dr_sweep_phg_rep_int_{j}", 12.0),
+                    "count": int(st.session_state.get(f"dr_sweep_phg_rep_count_{j}", 4)),
+                    "start": st.session_state.get(f"dr_sweep_phg_rep_start_{j}", 0.0),
+                    "route": st.session_state.get(f"dr_sweep_phg_rep_route_{j}", "bolus"),
+                    "duration": st.session_state.get(f"dr_sweep_phg_rep_dur_{j}", 0.0),
+                }
+    for j in range(len(antibiotics)):
+        if st.session_state.get(f"dr_sweep_abx_en_{j}"):
+            swept_inputs[f"abx_{j}"] = st.session_state.get(f"dr_sweep_abx_series_{j}", "0.5, 1.0, 2.0")
+            swept_units[f"abx_{j}"] = "absolute"
+            if st.session_state.get(f"dr_sweep_abx_rep_en_{j}"):
+                swept_repeat_configs[f"abx_{j}"] = {
+                    "interval": st.session_state.get(f"dr_sweep_abx_rep_int_{j}", 12.0),
+                    "count": int(st.session_state.get(f"dr_sweep_abx_rep_count_{j}", 4)),
+                    "start": st.session_state.get(f"dr_sweep_abx_rep_start_{j}", 0.0),
+                    "route": st.session_state.get(f"dr_sweep_abx_rep_route_{j}", "bolus"),
+                    "duration": st.session_state.get(f"dr_sweep_abx_rep_dur_{j}", 0.0),
+                }
+    if not swept_inputs:
+        return "# Enable at least one phage/antibiotic dose sweep, then reopen this."
+
+    parsed = {}
+    for k, s in swept_inputs.items():
+        parsed[k] = parse_comma_separated_series(s)
+    padded, _ = pad_vectors(parsed)
+
+    config, iB, iP, iS, mk = build_nominal_config_from_gui()
+    rec = st.session_state["_repro_rec"]
+
+    # Swept phages start at zero free phage — the dose delivers them (mirrors the app).
+    swept_phage_idx = [int(k.split("_")[1]) for k in padded if k.startswith("phage_")]
+    iP_mod = np.array(iP, dtype=float).copy()
+    for jj in swept_phage_idx:
+        if jj < len(iP_mod):
+            iP_mod[jj] = 0.0
+
+    original_doses = list(st.session_state.get("int_doses", []))
+    sum_initial_B = float(sum(s["initial_B"] for s in strains))
+    t_prerun = st.session_state.get("int_t_prerun", 0.0)
+
+    _extra = {"DoseEvent", "DoseSchedule"}
+    if t_prerun:
+        _extra.add("stationary_phase_ic")
+    imports, code = _repro_base_config_block(
+        rec, iB, iP, iS, mk, extra_imports=_extra, initial_P_override=iP_mod)
+    code[0:0] = ["# ── pbisim Dose-Response Sweep Reproduction Script ──"]
+
+    code += [
+        "",
+        "# 2. Sweep definition (padded value series per swept agent)",
+        f"padded = {padded!r}",
+        f"swept_units = {swept_units!r}",
+        f"swept_repeat_configs = {swept_repeat_configs!r}",
+        f"original_doses = {original_doses!r}",
+        f"sum_initial_B = {sum_initial_B!r}",
+        "M = len(next(iter(padded.values())))",
+        "",
+        "# 3. Run one simulation per dose combination",
+        "fig, ax = plt.subplots(figsize=(8, 4))",
+        "for k in range(M):",
+        "    custom = [nd for nd in original_doses if not (",
+        "        (nd['target_type'] == 'phage' and f\"phage_{nd['target_idx']}\" in padded) or",
+        "        (nd['target_type'] == 'antibiotic' and f\"abx_{nd['target_idx']}\" in padded))]",
+        "    for key, vec in padded.items():",
+        "        val = vec[k]",
+        "        if swept_units.get(key) == 'MOI (relative to B(0))':",
+        "            val = val * sum_initial_B",
+        "        tt = 'phage' if key.startswith('phage') else 'antibiotic'",
+        "        ti = int(key.split('_')[1])",
+        "        if key in swept_repeat_configs:",
+        "            rc = swept_repeat_configs[key]",
+        "            for r in range(rc['count']):",
+        "                custom.append({'time': rc['start'] + r * rc['interval'], 'amount': val,",
+        "                               'target_type': tt, 'target_idx': ti, 'route': rc['route'], 'duration': rc['duration']})",
+        "        else:",
+        "            nom = [d for d in original_doses if d['target_type'] == tt and d['target_idx'] == ti]",
+        "            if nom:",
+        "                for nd in nom:",
+        "                    c = dict(nd); c['amount'] = val; custom.append(c)",
+        "            else:",
+        "                custom.append({'time': 0.0, 'amount': val, 'target_type': tt,",
+        "                               'target_idx': ti, 'route': 'bolus', 'duration': 0.0})",
+        "    events = [DoseEvent(time=d['time'], amount=d['amount'],",
+        "                        target=('phage' if d['target_type'] == 'phage' else",
+        "                                'antibiotic' if d['target_type'] == 'antibiotic' else 'nutrient'),",
+        "                        index=d['target_idx'], route=d['route'], duration=d.get('duration', 0.0))",
+        "              for d in custom]",
+        "    cfg.dose_schedule = DoseSchedule(events) if events else None",
+        "    c_k, ib_k, ip_k, is_k, mk_k = cfg, np.array(initial_B, float), np.array(initial_P, float), initial_S, dict(model_kwargs)",
+        *_repro_prerun_lines("    ", t_prerun),
+        "    model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)",
+        f"    result = solve_ode(model, {_repro_solve_kwargs()})",
+        "    total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)",
+        '    ax.semilogy(result.time, total, label="run %d" % (k + 1))',
+        'ax.set(xlabel="Time (h)", ylabel="Total viable (cells/mL)", title="Dose-response sweep")',
+        "ax.legend(fontsize=7)",
+        "plt.show()",
+    ]
+    _script = "\n".join(code)
+    st.session_state["_last_sweep_repro_code"] = _script
+    return _script
+
+
 # ── Sidebar Settings ──────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🦠 pbisim App")
@@ -3514,6 +3732,14 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
         else:
             st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
 
+    with st.expander("🐍 View Python Reproduction Code"):
+        st.caption("Standalone script that reproduces this sweep — the recorded base "
+                   "model plus a loop rebuilding the per-run dose schedule exactly as the app does.")
+        try:
+            st.code(generate_dose_sweep_reproduction_code(), language="python")
+        except Exception as _e:
+            st.warning(f"Reproduction code unavailable: {_e}")
+
     # Persist the sweep controls so they survive navigation (see reseed above).
     save_widget_config("dr_sweep_config", ("dr_sweep_",))
 
@@ -3997,6 +4223,15 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     st.plotly_chart(fig_nadir, use_container_width=True)
         else:
             st.info("Configure parameters and click **Run Sweep** to start the analysis.")
+
+    with st.expander("🐍 View Python Reproduction Code"):
+        st.caption("Standalone script that reproduces this sweep — the recorded base model "
+                   "plus a loop calling the app's own apply_sweep_parameter per value. "
+                   "(1D sweeps only.)")
+        try:
+            st.code(generate_param_sweep_reproduction_code(), language="python")
+        except Exception as _e:
+            st.warning(f"Reproduction code unavailable: {_e}")
 
     # Persist the sweep controls so they survive navigation (see reseed above).
     save_widget_config("param_sweep_config", ("p1_", "p2_", "ps_", "pc_"))
