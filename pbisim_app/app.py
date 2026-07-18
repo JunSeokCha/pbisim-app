@@ -1758,6 +1758,60 @@ def save_widget_config(store_key, prefixes, exclude=()):
             store[k] = st.session_state[k]
 
 
+def _repro_to_config_signal_args(dsig, rsig, dks, dkdorm):
+    """Reproduce ``growth_nutrient_kwargs() + mode_dormancy_kwargs() + death_kwargs()``
+    as literal ``to_config(...)`` source for the BRG / StrainSet reproduction code.
+
+    ``to_config`` forwards these to ``ModelConfig`` and takes function *objects* for the
+    growth / dormancy / death signals (not the Direct builder's signal strings), so the
+    generated script must import them by name. Returns ``(import_names, kwargs_str)``.
+    Mirrors the three build-path helpers field-for-field, including the compatibility
+    coercion and the carrying-capacity de-duplication (logistic growth and density death
+    both want ``carrying_capacity`` — emitting it twice would be a SyntaxError).
+    """
+    imports, parts = [], []
+    K = st.session_state.get("int_carrying_capacity", 1e9)
+    _K_added = False
+
+    # growth signal + nutrient config (mirrors growth_nutrient_kwargs)
+    gname = st.session_state.get("int_growth_function", "monod_growth")
+    track = gname in ("monod_growth", "monod_logistic_growth")
+    needs_K = gname in ("logistic_growth", "monod_logistic_growth")
+    imports.append(gname)
+    parts.append(f"growth_function={gname}")
+    parts.append(f"track_nutrients={track}")
+    parts.append(f"monod_constant={st.session_state.get('int_monod_constant', 0.3)}")
+    parts.append(f"recycle_fraction={st.session_state.get('int_recycle_fraction', 0.0)}")
+    if track:
+        parts.append(f"s_in={st.session_state.get('int_s_in', 0.0)}")
+        parts.append(f"s_out={st.session_state.get('int_s_out', 0.0)}")
+    if needs_K:
+        parts.append(f"carrying_capacity={K}")
+        _K_added = True
+
+    # dormancy / resuscitation signal functions (mirrors mode_dormancy_kwargs)
+    ds, _ = compat_dormancy_signal(canonical_signal(dsig), track)
+    rs, _ = compat_dormancy_signal(canonical_signal(rsig), track)
+    dfn, rfn = dormancy_signal_functions(ds, rs)
+    imports.append(dfn.__name__)
+    imports.append(rfn.__name__)
+    parts.append(f"dormancy_function={dfn.__name__}")
+    parts.append(f"resuscitation_function={rfn.__name__}")
+    if dks > 0 and any(s in ("nutrient", "nutrient+density") for s in (ds, rs)):
+        parts.append(f"dormancy_monod_constant={dks}")
+    if any(s in ("density", "nutrient+density") for s in (ds, rs)):
+        parts.append(f"dormancy_carrying_capacity={dkdorm if dkdorm > 0 else K}")
+
+    # death signal function (mirrors death_kwargs)
+    death_name = st.session_state.get("int_death_function", "constant_death")
+    imports.append(death_name)
+    parts.append(f"death_function={death_name}")
+    if death_name == "density_dependent_death" and not _K_added:
+        parts.append(f"carrying_capacity={K}")
+
+    return imports, ", ".join(parts)
+
+
 def generate_reproduction_code() -> str:
     """Generates complete Python script code corresponding to the current state."""
     builder_mode = st.session_state.get("int_builder_mode", "Direct (ModelBuilder)")
@@ -1786,21 +1840,43 @@ def generate_reproduction_code() -> str:
         ratios = [s.get("bacteria_to_resource_ratio", 1e9) for s in strains]
         code.append(f"builder = builder.with_growth_rates({rates}, bacteria_to_resource_ratio={ratios})")
         
-        # natural death
+        # natural death — the death *function* is always set (mirrors the build), so
+        # the chosen death signal is reproduced even when a rate is 0 (= that pathway off).
         death_rates_B = [s.get("death_rate_B", 0.0) for s in strains]
         death_rates_D = [s.get("death_rate_D", 0.0) for s in strains]
-        if any(db > 0 for db in death_rates_B) or any(dd > 0 for dd in death_rates_D):
-            _dfn = st.session_state.get("int_death_function", "constant_death")
-            code.append(f"from pbisim import {_dfn}")
-            code.append(f"builder = builder.with_death(death_rate_B=np.array({death_rates_B}), death_rate_D=np.array({death_rates_D}), death_function={_dfn})")
-            
-        # dormancy
+        _dfn = st.session_state.get("int_death_function", "constant_death")
+        _has_dB = any(db > 0 for db in death_rates_B)
+        _has_dD = any(dd > 0 for dd in death_rates_D)
+        code.append(f"from pbisim import {_dfn}")
+        if _has_dB and _dfn == "density_dependent_death":  # density death needs K
+            code.append(f"builder = builder.with_nutrient(carrying_capacity={st.session_state.get('int_carrying_capacity', 1e9)})")
+        _dB_arg = f"np.array({death_rates_B})" if _has_dB else "None"
+        _dD_arg = f"np.array({death_rates_D})" if _has_dD else "None"
+        code.append(f"builder = builder.with_death(death_rate_B={_dB_arg}, death_rate_D={_dD_arg}, death_function={_dfn})")
+
+        # dormancy — signal functions (constant/nutrient/density/nutrient+density) and
+        # their Ks / density-threshold must be reproduced, not just the rates.
+        _trk = st.session_state.get("int_track_nutrients", True)
         any_dorm = any(s.get("dormancy_enabled", False) for s in strains)
         if any_dorm:
             d_rates = [s["dormancy_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             r_rates = [s["resuscitation_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             diff_rates = [s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
-            code.append(f"builder = builder.with_dormancy(dormancy_rate=np.array({d_rates}), resuscitation_rate=np.array({r_rates}), dormancy_diffusion_rate=np.array({diff_rates}))")
+            _en = [s for s in strains if s.get("dormancy_enabled", False)]
+            _ds = compat_dormancy_signal(canonical_signal(_en[0]["dormancy_signal"]) if _en else "nutrient", _trk)[0]
+            _rs = compat_dormancy_signal(canonical_signal(_en[0]["resuscitation_signal"]) if _en else "nutrient", _trk)[0]
+            _dks = float(_en[0].get("dormancy_monod_constant", 0.0)) if _en else 0.0
+            _dkd = float(_en[0].get("dormancy_carrying_capacity", 0.0)) if _en else 0.0
+            _extra = ""
+            if _dks > 0 and any(sig in ("nutrient", "nutrient+density") for sig in (_ds, _rs)):
+                _extra += f", dormancy_monod_constant={_dks}"
+            if any(sig in ("density", "nutrient+density") for sig in (_ds, _rs)):
+                _extra += f", dormancy_carrying_capacity={_dkd if _dkd > 0 else st.session_state.get('int_carrying_capacity', 1e9)}"
+            code.append(f"builder = builder.with_dormancy(dormancy_rate=np.array({d_rates}), resuscitation_rate=np.array({r_rates}), dormancy_diffusion_rate=np.array({diff_rates}), dormancy_signal='{_ds}', resuscitation_signal='{_rs}'{_extra})")
+        elif not _trk:
+            # No dormancy, but a frozen S is incompatible with the engine's default
+            # nutrient dormancy function — pin nutrient-independent (constant) functions.
+            code.append("builder = builder.with_dormancy(dormancy_rate=0.0, resuscitation_rate=0.0, dormancy_diffusion_rate=0.0, dormancy_signal='constant', resuscitation_signal='constant')")
             
         # phages
         if phages:
@@ -1946,7 +2022,20 @@ def generate_reproduction_code() -> str:
             )
         _brg_atten = [p.get('attenuation_rate', 0.0) for p in phages]
         _brg_atten_arg = f", attenuation_rate=np.array({_brg_atten})" if phages else ""
-        code.append(f"cfg = brg.to_config(n_latent={_n_latent}, n_depth={_brg_n_depth}{_brg_atten_arg}{_brg_imm_args})")
+        # Growth / dormancy / death signal functions (+ nutrient config) — forwarded to
+        # ModelConfig via to_config. Passed as function objects, so import them by name.
+        _brg_imp, _brg_sig = _repro_to_config_signal_args(
+            st.session_state.get("int_brg_dorm_signal", "nutrient"),
+            st.session_state.get("int_brg_resus_signal", "nutrient"),
+            float(st.session_state.get("int_brg_dorm_ks", 0.0)),
+            float(st.session_state.get("int_brg_dorm_kdorm", 0.0)),
+        )
+        code.append(f"from pbisim import {', '.join(dict.fromkeys(_brg_imp))}")
+        code.append(
+            f"cfg = brg.to_config(n_latent={_n_latent}, n_depth={_brg_n_depth}, "
+            f"allow_superinfection={st.session_state.get('int_superinfection', False)}, "
+            f"{_brg_sig}{_brg_atten_arg}{_brg_imm_args})"
+        )
 
     # ──── STRAINSET ────
     else:
@@ -1967,45 +2056,69 @@ def generate_reproduction_code() -> str:
             diff_rate = s["dormancy_diffusion_rate"] if dorm_enabled else 0.0
             db_val = s.get("death_rate_B", 0.0)
             dd_val = s.get("death_rate_D", 0.0)
-            code.append(f"        ss.add_strain(StrainDefinition(")
-            code.append(f"            name='{s['name']}', growth_rate={s['growth_rate']},")
-            code.append(f"            adsorption_rates=np.array({ads_rates}),")
-            code.append(f"            adsorption_rates_dormant=np.array({ads_dorm}),")
-            code.append(f"            burst_sizes=np.array({bursts}),")
-            code.append(f"            latent_periods=np.array({latents}),")
-            code.append(f"            latent_periods_dormant=np.array({latents}),")
-            code.append(f"            bacteria_to_resource_ratio={s.get('bacteria_to_resource_ratio', 1e9)},")
-            code.append(f"            dormancy_rate={dorm_rate}, resuscitation_rate={resus_rate}, dormancy_diffusion_rate={diff_rate},")
-            code.append(f"            death_rate_B={db_val if db_val > 0 else None}, death_rate_D={dd_val if dd_val > 0 else None},")
+            # NB: these are top-level statements in the generated script — the first
+            # line and the closing paren must sit at column 0 (only the args, inside the
+            # open paren, may be indented) or the script raises IndentationError.
+            code.append(f"ss.add_strain(StrainDefinition(")
+            code.append(f"    name='{s['name']}', growth_rate={s['growth_rate']},")
+            code.append(f"    adsorption_rates=np.array({ads_rates}),")
+            code.append(f"    adsorption_rates_dormant=np.array({ads_dorm}),")
+            code.append(f"    burst_sizes=np.array({bursts}),")
+            code.append(f"    latent_periods=np.array({latents}),")
+            code.append(f"    latent_periods_dormant=np.array({latents}),")
+            code.append(f"    bacteria_to_resource_ratio={s.get('bacteria_to_resource_ratio', 1e9)},")
+            code.append(f"    dormancy_rate={dorm_rate}, resuscitation_rate={resus_rate}, dormancy_diffusion_rate={diff_rate},")
+            code.append(f"    death_rate_B={db_val if db_val > 0 else None}, death_rate_D={dd_val if dd_val > 0 else None},")
             _imm_on = st.session_state.get("int_immunity_enabled", False)
             _stim_r = st.session_state.get("int_imm_stim_rate", 0.1) if _imm_on else 0.0
             _kill_r = st.session_state.get("int_innate_kill_rate", 1e7) if _imm_on else 0.0
-            code.append(f"            imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.array({[p.get('attenuation_rate', 0.0) for p in phages]}),")
+            code.append(f"    imm_stim_rate={_stim_r}, imm_kill_rate={_kill_r}, attenuation_rate=np.array({[p.get('attenuation_rate', 0.0) for p in phages]}),")
             if antibiotics:
-                code.append(f"            antibiotic_sensitivity={{")
+                code.append(f"    antibiotic_sensitivity={{")
                 for abx in antibiotics:
                     emax_val = abx["emax"] if i == 0 else abx["emax"] * 0.1
                     ec50_val = abx["ec50"] if i == 0 else abx["ec50"] * 10.0
-                    code.append(f"                '{abx['name']}': AntibioticSensitivity(emax={emax_val}, ec50={ec50_val}),")
-                code.append(f"            }}")
-            code.append(f"        ))")
+                    code.append(f"        '{abx['name']}': AntibioticSensitivity(emax={emax_val}, ec50={ec50_val}),")
+                code.append(f"    }}")
+            code.append(f"))")
             
         transitions = st.session_state.get("int_transitions", [])
         graph_dict = {t["from"]: {t["to"]: t["rate"]} for t in transitions if t["from"] and t["to"]}
         code.append(f"ss.set_mutation_graph({graph_dict})")
         _ss_decay = [p["phage_decay_rates"] for p in phages]
         _ss_max_depth = max((s.get("dormancy_depth", 1) for s in strains if s.get("dormancy_enabled", False)), default=1)
-        _ss_imm_on = st.session_state.get("int_immunity_enabled", False)
-        _ss_imm_args = ""
-        if _ss_imm_on:
-            _ss_imm_args = (
-                f", imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.05)}"
-                f", imm_stim50={st.session_state.get('int_imm_stim50', 1e6)}"
-                f", imm_kill50={st.session_state.get('int_innate_kill50', 1e8)}"
-                f", immune_module='{st.session_state.get('int_immune_module', 'innate')}'"
-                f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
+        # StrainSet.to_config requires imm_decay_rate/imm_stim50/imm_kill50 as keyword-only
+        # arguments even when immunity is off, so these are always emitted (mirroring the
+        # build path). The per-strain imm_stim_rate/imm_kill_rate live on StrainDefinition.
+        _ss_imm_args = (
+            f", imm_decay_rate={st.session_state.get('int_innate_decay_rate', 0.1)}"
+            f", imm_stim50={st.session_state.get('int_imm_stim50', 1e6)}"
+            f", imm_kill50={st.session_state.get('int_innate_kill50', 1e5)}"
+            f", immune_module='{st.session_state.get('int_immune_module', 'innate')}'"
+            f", imm_max={st.session_state.get('int_innate_max', 1e7)}"
+        )
+        # Growth / dormancy / death signal functions (+ nutrient config), from the first
+        # dormancy-enabled strain's selectors — forwarded to ModelConfig via to_config.
+        _ss_dorm = [s for s in strains if s.get("dormancy_enabled", False)]
+        _ss_imp, _ss_sig = _repro_to_config_signal_args(
+            _ss_dorm[0].get("dormancy_signal", "nutrient") if _ss_dorm else "nutrient",
+            _ss_dorm[0].get("resuscitation_signal", "nutrient") if _ss_dorm else "nutrient",
+            float(_ss_dorm[0].get("dormancy_monod_constant", 0.0)) if _ss_dorm else 0.0,
+            float(_ss_dorm[0].get("dormancy_carrying_capacity", 0.0)) if _ss_dorm else 0.0,
+        )
+        _ss_km_arg = ""
+        if phages and any(p.get("phage_decay_Km", 0.0) > 0 for p in phages):
+            _ss_km_vals = ", ".join(
+                str(p.get("phage_decay_Km")) if p.get("phage_decay_Km", 0.0) > 0 else "np.inf" for p in phages
             )
-        code.append(f"cfg = ss.to_config(n_latent={_n_latent}, n_depth={_ss_max_depth}, phage_decay_rates=np.array({_ss_decay}){_ss_imm_args})")
+            _ss_km_arg = f", phage_decay_Km=np.array([{_ss_km_vals}])"
+        code.append(f"from pbisim import {', '.join(dict.fromkeys(_ss_imp))}")
+        code.append(
+            f"cfg = ss.to_config(n_latent={_n_latent}, n_depth={_ss_max_depth}, "
+            f"phage_decay_rates=np.array({_ss_decay}), "
+            f"allow_superinfection={st.session_state.get('int_superinfection', False)}, "
+            f"{_ss_sig}{_ss_km_arg}{_ss_imm_args})"
+        )
 
     # ──── Dosing Schedule ────
     if doses:
@@ -2061,8 +2174,10 @@ def generate_reproduction_code() -> str:
     code.append("ax.set(xlabel='Time (h)', ylabel='Density (cells/mL)', title='Simulation Run')")
     code.append("ax.legend()")
     code.append("plt.show()")
-    
-    return "\n".join(code)
+
+    _script = "\n".join(code)
+    st.session_state["_last_repro_code"] = _script  # for tests / debugging
+    return _script
 
 
 # ── Sidebar Settings ──────────────────────────────────────────────────────────
