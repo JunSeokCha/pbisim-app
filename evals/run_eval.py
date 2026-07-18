@@ -45,6 +45,8 @@ def main(argv=None):
     ap.add_argument("--ids", default=None, help="Comma-separated case ids to run.")
     ap.add_argument("--tag", default=None, help="Only run cases with this tag.")
     ap.add_argument("--json", dest="json_path", default=None, help="Write a JSON report here.")
+    ap.add_argument("--dump", dest="dump_dir", default=None,
+                    help="Write each case's final generated code + error to this directory (for diagnosis).")
     ap.add_argument("--list", action="store_true", help="List selected cases and exit.")
     args = ap.parse_args(argv)
 
@@ -70,12 +72,23 @@ def main(argv=None):
     print(f"Running {len(cases)} case(s) on {model} "
           f"(up to ~{est} API calls, {args.max_retries} retries each).\n")
 
+    if args.dump_dir:
+        os.makedirs(args.dump_dir, exist_ok=True)
+
     results = []
     for i, case in enumerate(cases, 1):
         agent = SimulationAgent(model=model)   # fresh history per case
         res = run_case(case, agent, execute_code, max_retries=args.max_retries)
         results.append(res)
         plt.close("all")  # release figures produced during execution
+        if args.dump_dir:
+            with open(os.path.join(args.dump_dir, f"{case.id}.py"), "w") as fh:
+                fh.write(f"# case: {case.id}  passed={res.passed}  attempts={res.attempts}\n")
+                fh.write(f"# prompt: {case.prompt}\n")
+                fh.write(f"# failed checks: {res.failed_checks}\n\n{res.code}\n")
+            if res.error:
+                with open(os.path.join(args.dump_dir, f"{case.id}.error.txt"), "w") as fh:
+                    fh.write(res.error)
         flag = "✓" if res.passed else ("~" if res.one_shot else "✗")
         fails = ("  fail: " + ", ".join(res.failed_checks)) if res.failed_checks else ""
         print(f"[{i:2d}/{len(cases)}] {flag} {case.id:22s} "

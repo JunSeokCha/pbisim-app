@@ -97,3 +97,42 @@ def test_simulation_result_accessors():
         assert callable(getattr(SimulationResult, method, None)), (
             f"system_prompt.md uses result.{method}() but it no longer exists"
         )
+
+
+# ── 5. §13 stationary_phase_ic — B0 is required (the prompt example passes it) ─
+
+def test_stationary_phase_ic_requires_B0():
+    from pbisim import stationary_phase_ic
+    params = _params(stationary_phase_ic)
+    assert "B0" in params, "system_prompt.md §13 passes B0= to stationary_phase_ic"
+
+
+# ── 6. §18 StrainSet surface — required StrainDefinition fields + to_config args ─
+
+def test_strain_definition_required_fields():
+    """The §18 StrainDefinition example sets exactly the required fields; if pbisim
+    adds/removes a required field the example goes stale."""
+    import dataclasses as dc
+    from pbisim.strains.builder import StrainDefinition
+    required = {f.name for f in dc.fields(StrainDefinition)
+               if f.default is dc.MISSING and f.default_factory is dc.MISSING}
+    documented = {
+        "name", "growth_rate", "adsorption_rates", "adsorption_rates_dormant",
+        "burst_sizes", "latent_periods", "latent_periods_dormant",
+        "bacteria_to_resource_ratio", "dormancy_rate", "resuscitation_rate",
+        "dormancy_diffusion_rate", "imm_stim_rate", "imm_kill_rate", "attenuation_rate",
+    }
+    assert required == documented, (
+        f"StrainDefinition required fields changed — update system_prompt.md §18.\n"
+        f"missing from prompt: {required - documented}\n"
+        f"stale in prompt: {documented - required}"
+    )
+
+
+def test_strainset_to_config_required_args():
+    """§18 documents these to_config args; a rename would break generated StrainSet code."""
+    from pbisim.strains.builder import StrainSet
+    params = _params(StrainSet.to_config)
+    for name in ("n_latent", "n_depth", "phage_decay_rates", "imm_decay_rate",
+                 "imm_stim50", "imm_kill50", "monod_constant", "recycle_fraction"):
+        assert name in params, f"StrainSet.to_config lost parameter '{name}' (see §18)"

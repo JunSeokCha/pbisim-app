@@ -339,20 +339,24 @@ result = solve_ode(
 ```python
 from pbisim import stationary_phase_ic
 
-# Pre-grow bacteria to stationary phase before starting treatment
-stat_ic = stationary_phase_ic(cfg, t_prerun=24.0)
+# Pre-grow bacteria to stationary phase, THEN start treatment from that state.
+# B0= is REQUIRED (the starting inoculum for the pre-growth) — without it,
+# stationary_phase_ic raises "no starting inoculum found".
+stat_ic = stationary_phase_ic(cfg, t_prerun=24.0, B0=np.array([1e6]))
 
 model = PBIModel(
     cfg,
-    initial_B   = stat_ic.B,
-    initial_P   = np.zeros(n_phages),   # no phage during pre-growth
-    initial_S   = stat_ic.S,
-    initial_Imm = stat_ic.Imm,          # preserve immune priming from pre-run
+    initial_B   = stat_ic.B,                    # active cells at stationary phase
+    initial_D   = stat_ic.D,                    # carry the dormant reservoir (persisters);
+                                                # dropping it silently loses most of the culture
+    initial_S   = max(float(stat_ic.S), 0.0),   # pre-run can leave S slightly negative
+    initial_P   = np.array([1e6]),              # treatment phage inoculum, shape (n_phages,)
+    initial_Imm = stat_ic.Imm or 0.0,           # immune priming (0.0 if immunity is off)
 )
 ```
 
 Use this to model the common in vitro protocol of growing bacteria overnight before
-adding phage or antibiotic.
+adding phage or antibiotic. `B0` has shape `(n_bacteria,)`.
 
 ---
 
@@ -425,3 +429,58 @@ t_2lr    = time_to_log_reduction(result, n_logs=2.0)       # time to 2-log CFU r
 ```
 
 Both return `None` if the endpoint is never reached during the simulation.
+
+---
+
+## 18. StrainSet — named strains + custom mutation graph
+
+Use `StrainSet` when the user wants explicitly **named** strains and/or a **custom
+strain→strain mutation graph** (BRG only gives the automatic `2^n` genotype lattice;
+`ModelBuilder.with_mutations` takes a raw matrix). `StrainDefinition` has **many required
+fields** — set unused mechanisms (dormancy, immunity, attenuation) to `0`. All phage arrays
+have shape `(n_phages,)`.
+
+```python
+from pbisim.strains.builder import StrainSet, StrainDefinition
+
+ss = StrainSet(n_phages=1)
+
+def strain(name, growth, ads):
+    return StrainDefinition(
+        name=name, growth_rate=growth,
+        adsorption_rates=np.array([ads]),            # (n_phages,); 0 = resistant to that phage
+        adsorption_rates_dormant=np.array([0.0]),
+        burst_sizes=np.array([50.0]),
+        latent_periods=np.array([0.5]),
+        latent_periods_dormant=np.array([0.5]),
+        bacteria_to_resource_ratio=1e9,
+        dormancy_rate=0.0, resuscitation_rate=0.0, dormancy_diffusion_rate=0.0,
+        imm_stim_rate=0.0, imm_kill_rate=0.0,
+        attenuation_rate=np.array([0.0]),
+    )
+
+ss.add_strain(strain("WT", 1.2, 1e-8))
+ss.add_strain(strain("resistant", 1.1, 0.0))          # phage cannot adsorb
+ss.set_mutation_graph({"WT": {"resistant": 1e-7}})    # WT → resistant per replication
+
+# to_config REQUIRES these keyword-only args even when immunity is off (set to 0/defaults):
+cfg = ss.to_config(
+    n_latent=5, n_depth=1, phage_decay_rates=np.array([0.03]),
+    imm_decay_rate=0.0, imm_stim50=1e6, imm_kill50=1e8,
+    monod_constant=0.5, recycle_fraction=0.0,
+)
+
+# initial_B is per strain IN ADD ORDER; seed the resistant strain at the
+# mutation-selection level (mu * B0, min ~10), NOT exactly 0:
+model = PBIModel(cfg, initial_B=np.array([1e7, 10.0]),
+                 initial_P=np.array([1e6]), initial_S=1.0)
+```
+
+**Required `StrainDefinition` fields:** `name, growth_rate, adsorption_rates,
+adsorption_rates_dormant, burst_sizes, latent_periods, latent_periods_dormant,
+bacteria_to_resource_ratio, dormancy_rate, resuscitation_rate, dormancy_diffusion_rate,
+imm_stim_rate, imm_kill_rate, attenuation_rate`. Optional: `death_rate_B, death_rate_D,
+hibernation_rate, lytic_resumption_rate, antibiotic_sensitivity`.
+
+**Required `to_config` args:** `n_latent, n_depth, phage_decay_rates` (positional) and
+keyword-only `imm_decay_rate, imm_stim50, imm_kill50, monod_constant, recycle_fraction`.
