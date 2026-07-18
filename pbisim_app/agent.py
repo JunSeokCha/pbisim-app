@@ -100,6 +100,9 @@ class SimulationAgent:
 
         raw_text = response.content[0].text
         self.history.append({"role": "assistant", "content": raw_text})
+        # Expose token usage of the most recent call (used by the eval harness for
+        # cost/latency reporting; harmless for the app).
+        self.last_usage = getattr(response, "usage", None)
 
         return _parse_response(raw_text)
 

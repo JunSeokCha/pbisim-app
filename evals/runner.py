@@ -1,0 +1,107 @@
+"""Core eval runner — the deterministic, unit-tested part.
+
+``run_case`` drives one case through the *same* generate → execute → self-healing-retry
+loop the app uses (app.py), then applies the case's checks. The agent and the execute
+function are injected so the whole loop can be exercised offline with a fake agent
+(tests/test_evals.py); the live measurement in run_eval.py passes the real
+``SimulationAgent`` and ``executor.execute_code``.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from evals.checks import run_checks
+
+# Mirrors the self-healing prompt in app.py so the harness measures the real loop.
+HEALING_PROMPT = (
+    "The generated code failed to execute with the following error:\n"
+    "```text\n{error}\n```\n"
+    "Please correct the code to resolve this error. Ensure you only output the "
+    "corrected Python code block and necessary narrative/assumptions."
+)
+
+
+def _no_code_result():
+    from pbisim_app.executor import ExecutionResult
+    return ExecutionResult(success=False, figures=[], stdout="",
+                           error="the model returned no python code block")
+
+
+def _usage_dict(usage):
+    if usage is None:
+        return {}
+    return {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+    }
+
+
+@dataclass
+class CaseResult:
+    id: str
+    passed: bool
+    one_shot: bool          # passed AND on the first attempt
+    attempts: int           # 1 = no retries
+    latency_s: float
+    check_rows: list        # list of (name, ok, msg)
+    code: str = ""
+    error: str = ""
+    usage: dict = field(default_factory=dict)
+
+    @property
+    def failed_checks(self):
+        return [name for name, ok, _ in self.check_rows if not ok]
+
+
+def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter) -> CaseResult:
+    """Run one EvalCase end-to-end and score it. ``agent`` needs an ``.ask(str)`` returning
+    an object with ``.code``; ``execute`` maps code → ExecutionResult-like object."""
+    t0 = clock()
+    resp = agent.ask(case.prompt)
+    result = execute(resp.code) if getattr(resp, "code", "") else _no_code_result()
+
+    retries = 0
+    while not result.success and retries < max_retries:
+        retries += 1
+        resp = agent.ask(HEALING_PROMPT.format(error=result.error))
+        result = execute(resp.code) if getattr(resp, "code", "") else _no_code_result()
+
+    latency = clock() - t0
+    rows, passed = run_checks(case.checks, getattr(resp, "code", ""), result)
+    attempts = 1 + retries
+    return CaseResult(
+        id=case.id,
+        passed=passed,
+        one_shot=passed and attempts == 1,
+        attempts=attempts,
+        latency_s=latency,
+        check_rows=rows,
+        code=getattr(resp, "code", ""),
+        error=result.error,
+        usage=_usage_dict(getattr(agent, "last_usage", None)),
+    )
+
+
+def summarize(results) -> dict:
+    """Aggregate metrics across CaseResults."""
+    n = len(results) or 1
+    def _mean(xs):
+        xs = [x for x in xs if x is not None]
+        return sum(xs) / len(xs) if xs else 0.0
+    in_tok = sum((r.usage.get("input_tokens") or 0) for r in results)
+    out_tok = sum((r.usage.get("output_tokens") or 0) for r in results)
+    cache_read = sum((r.usage.get("cache_read_input_tokens") or 0) for r in results)
+    return {
+        "n_cases": len(results),
+        "one_shot_pct": 100.0 * sum(r.one_shot for r in results) / n,
+        "overall_pct": 100.0 * sum(r.passed for r in results) / n,
+        "mean_attempts": _mean([r.attempts for r in results]),
+        "mean_latency_s": _mean([r.latency_s for r in results]),
+        "total_input_tokens": in_tok,
+        "total_output_tokens": out_tok,
+        "total_cache_read_tokens": cache_read,
+    }
