@@ -169,3 +169,28 @@ def test_repro_full_config_parity_with_dosing(mode):
     # the dose actually made it into the reproduced config
     assert ns["cfg"].dose_schedule is not None
     assert len(ns["cfg"].dose_schedule.events) == 1
+
+
+def test_repro_brg_equilibrium_ic_and_prerun():
+    """BRG equilibrium IC must appear in the script as the derivation call (not just the
+    resulting numbers), and a stationary pre-run must start from it (B0=initial_B) rather
+    than override it."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=220)
+    at.run()
+    _sel(at, "Bacterial Population Builder Mode").set_value("Binary Genotypes (BRG)")
+    at.run()
+    at.session_state["int_brg_use_eq_ic"] = True
+    at.session_state["int_brg_eq_total_B"] = 1e7
+    at.session_state["int_t_prerun"] = 24.0
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+
+    code = at.session_state["_last_repro_code"]
+    assert "brg.equilibrium_initial_condition(total_bacteria=" in code, code
+    # the pre-run must start from the equilibrium inoculum, not a default
+    assert "stationary_phase_ic(cfg, t_prerun=24.0, B0=initial_B)" in code, code
+    # and it still runs
+    ns = {}
+    exec(compile(code, "<repro>", "exec"), ns)
+    assert ns["cfg"] is not None

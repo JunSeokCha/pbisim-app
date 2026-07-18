@@ -1195,6 +1195,12 @@ class _ReproRecorder:
         self._render_of[id(res)] = var
         return res
 
+    def expr(self, value, source):
+        """Register ``value`` so it renders as the given source expression (e.g. a
+        ``brg.equilibrium_initial_condition(...)`` call) instead of a literal dump."""
+        self._render_of[id(value)] = source
+        return value
+
 
 def build_nominal_config_from_gui():
     """
@@ -1634,7 +1640,12 @@ def build_nominal_config_from_gui():
         # Resolve initial densities
         if st.session_state.get("int_brg_use_eq_ic", False):
             total_B = st.session_state.get("int_brg_eq_total_B", 1e7)
-            initial_B = brg.equilibrium_initial_condition(total_bacteria=total_B)
+            # Record as the derivation call so the repro shows the pbisim function, not
+            # just the resulting numbers.
+            initial_B = rec.expr(
+                brg.equilibrium_initial_condition(total_bacteria=total_B),
+                f"brg.equilibrium_initial_condition(total_bacteria={rec.render(total_B)})",
+            )
         else:
             initial_B = np.zeros(brg.n_strains)
             saved_init_B = st.session_state.get("int_brg_initial_B", {})
@@ -1947,21 +1958,23 @@ def generate_reproduction_code() -> str:
         *rec.lines,
         "",
         "# 2. Initial conditions",
+        f"initial_B = {rec.render(iB)}",
+        f"initial_P = {rec.render(iP)}",
+        f"initial_S = {rec.render(iS)}",
     ]
 
-    _iP = rec.render(iP)
     if t_prerun > 0:
-        code.append(f"# Stationary-phase equilibration prerun ({t_prerun} h): carry B, D, S, Imm")
-        code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun})")
+        code.append(f"# Stationary-phase pre-run ({t_prerun} h) starting from the configured inoculum;")
+        code.append("# carry the full final state — active B, dormant D, nutrient S, immune Imm.")
+        code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun}, B0=initial_B)")
         code.append(
-            f"model = PBIModel(cfg, initial_B=ic.B, initial_P={_iP}, "
-            f"initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0))"
+            "model = PBIModel(cfg, initial_B=ic.B, initial_P=initial_P, "
+            "initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0))"
         )
     else:
         _extra_ic = "".join(f", {k}={rec.render(v)}" for k, v in mkw.items())
         code.append(
-            f"model = PBIModel(cfg, initial_B={rec.render(iB)}, initial_P={_iP}, "
-            f"initial_S={rec.render(iS)}{_extra_ic})"
+            f"model = PBIModel(cfg, initial_B=initial_B, initial_P=initial_P, initial_S=initial_S{_extra_ic})"
         )
 
     _method = st.session_state.get("int_solver_method", "BDF")
