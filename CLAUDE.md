@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **56 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **86 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -48,14 +48,16 @@ pbisim-app/
 ├── tests/
 │   ├── test_agent.py        5 tests — response parsing
 │   ├── test_executor.py     10 tests — sandbox, capture, security, errors
-│   ├── test_builder_modes.py 8 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun guards
-│   ├── test_sweeps.py       4 tests — sweep_helper parameter application
+│   ├── test_builder_modes.py 14 tests — BRG, StrainSet, cohort, phage-leak + immune + prerun + death-signal guards
+│   ├── test_sweeps.py       14 tests — sweep_helper params, broadcast/coupled sweeps, OD trajectories, persistence
 │   ├── test_self_healing.py 2 tests — self-healing loop and history rollback
 │   ├── test_trial_features.py 5 tests — dose regimens, multi-arm, metrics, PK/PD trajectories
 │   ├── test_scenarios.py     2 tests — scenario save/load round-trip (AppTest)
 │   ├── test_parts.py         2 tests — parts save/load/export, host-tag (AppTest)
-│   └── test_fit_helper.py    6 tests — observable registry, ingestion, overlay/RMSE
-│   (test_system_prompt_sync.py  — sync guard, run after pbisim API changes)
+│   ├── test_calibration.py   4 tests — Calibration page config persistence, overlay, tuning (AppTest)
+│   ├── test_fit_helper.py    9 tests — observable registry, ingestion, overlay/RMSE, tuning keys
+│   └── test_repro_code.py    7 tests — reproduction script execs + full-config parity vs build (AppTest)
+│   (test_system_prompt_sync.py  12 tests — sync guard, run after pbisim API changes)
 └── pyproject.toml           entry point: pbisim-app = "pbisim_app.app:main"
 ```
 
@@ -135,16 +137,19 @@ Streamlit UI (app.py)
 Activate the project env first (`conda activate pbisim`), then:
 
 ```bash
-# Full suite — expected: 56 passed
+# Full suite — expected: 86 passed
 python -m pytest tests/ -q
 
 # By file:
 python -m pytest tests/test_executor.py -q        # 10 tests
 python -m pytest tests/test_agent.py -q           # 5 tests
-python -m pytest tests/test_builder_modes.py -q   # 8 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun)
-python -m pytest tests/test_sweeps.py -q          # 4 tests
+python -m pytest tests/test_builder_modes.py -q   # 14 tests (BRG, StrainSet, cohort, phage-leak + immune + prerun + death-signal)
+python -m pytest tests/test_sweeps.py -q          # 14 tests (params, broadcast/coupled sweeps, OD trajectories, persistence)
 python -m pytest tests/test_self_healing.py -q    # 2 tests
 python -m pytest tests/test_trial_features.py -q  # 5 tests (dose regimens, multi-arm, metrics, PK/PD trajectories)
+python -m pytest tests/test_calibration.py -q     # 4 tests (config persistence, overlay, manual tuning)
+python -m pytest tests/test_fit_helper.py -q      # 9 tests (observable registry, ingestion, overlay/RMSE)
+python -m pytest tests/test_repro_code.py -q      # 7 tests (repro script execs + full-config parity vs build)
 ```
 
 After any pbisim API change, also run:
