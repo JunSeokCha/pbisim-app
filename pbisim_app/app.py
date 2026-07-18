@@ -2268,10 +2268,10 @@ with st.sidebar:
             st.session_state.api_models_list = ["__FAILED__"]
 
     default_model_ops = [
-        "claude-sonnet-4-6",
+        "claude-opus-4-8",          # default — strongest for one-shot code generation
+        "claude-sonnet-4-6",        # faster / cheaper
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-fable-5",

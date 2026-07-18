@@ -21,8 +21,10 @@ _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system_prompt.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
 # ── Claude model ──────────────────────────────────────────────────────────────
-_MODEL = "claude-sonnet-4-6"   # update when newer versions are available
-# For highest code-generation quality, use "claude-opus-4-8" instead.
+# Default to the strongest code model — one-shot accuracy matters more here than
+# per-call cost, since a wrong first guess triggers a full extra round-trip. The
+# sidebar dropdown lets the user switch to a faster/cheaper model when desired.
+_MODEL = "claude-opus-4-8"
 
 
 class AgentResponse(NamedTuple):
@@ -82,7 +84,14 @@ class SimulationAgent:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=_SYSTEM_PROMPT,
+                # Send the long, static API reference as a cached content block. It is
+                # re-used across every turn and every self-healing retry within the
+                # 5-minute cache window, cutting latency and cost substantially.
+                system=[{
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=self.history,
             )
         except Exception:
@@ -99,14 +108,38 @@ class SimulationAgent:
         self.history.clear()
 
 
+# Any fenced block: captures an optional language tag and the body.
+_FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+.-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
+_PBISIM_TOKENS = ("solve_ode", "ModelBuilder", "PBIModel", "BinaryResistanceGenotypes",
+                  "StrainSet", "DoseSchedule", "import ", "plt.", "np.")
+
+
+def _extract_code(text: str) -> str:
+    """Pull the Python code out of a model response, robustly.
+
+    Tolerates ```py / ```Python / bare ``` fences and multiple blocks: prefers
+    Python-tagged (or untagged) blocks, and among those picks the one that most
+    looks like a pbisim script (falling back to the longest). Returns "" if none.
+    """
+    blocks = [(lang.lower(), body) for lang, body in _FENCE_RE.findall(text)]
+    if not blocks:
+        return ""
+    py = [b for lang, b in blocks if lang in ("python", "py", "python3", "")]
+    candidates = py or [b for _, b in blocks]
+
+    def score(body: str) -> tuple:
+        hits = sum(tok in body for tok in _PBISIM_TOKENS)
+        return (hits, len(body))
+
+    return textwrap.dedent(max(candidates, key=score)).strip()
+
+
 def _parse_response(text: str) -> AgentResponse:
     """Extract code block, narrative, and assumptions from model response."""
-    # Extract Python code block
-    code_match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
-    code = textwrap.dedent(code_match.group(1)).strip() if code_match else ""
+    code = _extract_code(text)
 
-    # Remove the code block for narrative extraction
-    text_no_code = re.sub(r"```python.*?```", "", text, flags=re.DOTALL).strip()
+    # Remove ALL fenced blocks for narrative extraction (any language).
+    text_no_code = _FENCE_RE.sub("", text).strip()
 
     # Extract assumptions bullet list (after "assumption" keyword)
     assumptions_match = re.search(
