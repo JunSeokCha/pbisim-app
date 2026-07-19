@@ -729,6 +729,42 @@ def load_preset_to_state(params: dict):
     st.session_state["int_doses"] = doses_list
 
 
+def configure_summary(config: dict) -> str:
+    """One-line human summary of an AI-supplied simulator configuration (no Streamlit)."""
+    strains = config.get("strains") or []
+    bits = [f"{len(strains)} strain(s)"]
+    for key, label in (("phages", "phage"), ("antibiotics", "antibiotic"), ("doses", "dose event")):
+        n = len(config.get(key) or [])
+        if n:
+            bits.append(f"{n} {label}(s)")
+    extras = []
+    if any(s.get("dormancy_enabled") for s in strains):
+        extras.append("dormancy")
+    if config.get("immunity_enabled"):
+        extras.append("immunity")
+    if config.get("debris_enabled"):
+        extras.append("OD/debris")
+    tail = f"; t_end={config.get('t_end', 48.0)} h"
+    if extras:
+        tail += ", " + ", ".join(extras)
+    return ", ".join(bits) + tail
+
+
+def apply_ai_configuration(config: dict) -> str:
+    """Handler for the assistant's ``configure_simulator`` tool: populate the Interactive
+    Simulator (Direct mode) from the model's structured config via load_preset_to_state.
+    Returns a summary for the model, or an ``ERROR ...`` string (which the model reads as
+    a signal to fall back to run_pbisim_code)."""
+    try:
+        if not config.get("strains"):
+            return "ERROR: configuration needs at least one strain."
+        load_preset_to_state(config)                       # fills defaults, Direct mode
+        st.session_state["int_builder_mode"] = "Direct (ModelBuilder)"
+        return "Configured the Interactive Simulator (Direct mode): " + configure_summary(config)
+    except Exception as e:
+        return f"ERROR applying configuration: {e}"
+
+
 # ── Scenario snapshots (Tier 1: full-config save / load / export / import) ─────
 # A "scenario" is everything needed to reproduce a simulation: the builder mode,
 # strains / phages / antibiotics, pairwise adsorption, dosing, nutrient, immune,
@@ -3104,7 +3140,7 @@ elif st.session_state.current_page == "AI Assistant":
         run = None
         try:
             with st.spinner("Claude is thinking..."):
-                run = st.session_state.agent.generate(prompt, execute_code)
+                run = st.session_state.agent.generate(prompt, execute_code, configure=apply_ai_configuration)
         except Exception as e:
             st.error(f"❌ AI Assistant Error: {e}")
             st.info("💡 If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
@@ -3129,6 +3165,13 @@ elif st.session_state.current_page == "AI Assistant":
                     else:
                         st.error("The code still failed after self-correction:")
                         st.code(exec_result.error or "", language="text")
+
+                # The assistant populated the Interactive Simulator's widgets — offer to open it.
+                if getattr(run, "configured", False):
+                    st.success("✅ I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
+                    if st.button("▶ Open in Interactive Simulator", key=f"nav_sim_{len(st.session_state.history)}", use_container_width=True):
+                        st.session_state["_nav_to"] = "Interactive Simulator"
+                        st.rerun()
 
             st.session_state.history.append(("assistant", (exec_result, run)))
 

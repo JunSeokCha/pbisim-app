@@ -47,8 +47,9 @@ class AgentRun(NamedTuple):
     code: str            # the last code the model executed
     result: object       # executor.ExecutionResult of that code (figures, stdout, error)
     success: bool        # did the final executed code run cleanly
-    tool_calls: int      # number of run_pbisim_code calls (1 = ran code once)
+    tool_calls: int      # number of run_pbisim_code (code) executions (1 = ran code once)
     transcript: tuple = ()  # per-run ({code, success, error, figures}); [0] = the FIRST execution
+    configured: bool = False  # the model called configure_simulator (populated the widgets)
 
 
 # Tool the model uses to run and iterate on its code inside a single turn.
@@ -72,18 +73,97 @@ _RUN_TOOL = {
     },
 }
 
+# Tool the model uses to populate the app's Interactive Simulator (Direct mode) instead
+# of writing throwaway code. Its schema is a bounded subset of the app config; anything it
+# can't express is a signal to fall back to run_pbisim_code.
+_CONFIGURE_TOOL = {
+    "name": "configure_simulator",
+    "description": (
+        "Populate the app's Interactive Simulator (Direct/ModelBuilder mode) from a "
+        "structured configuration so the user sees the widgets filled in and can tweak & "
+        "run it. Use for STANDARD setups: strains, phages, antibiotics, a dose schedule, "
+        "and basic nutrient/immunity/dormancy/OD options. Phage arrays are per-phage "
+        "scalars; adsorption_rates is per-strain (length = number of strains, 0 = resistant). "
+        "Do NOT use for BRG genotype lattices, StrainSet mutation graphs, sweeps, or custom "
+        "analysis — use run_pbisim_code for those."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "strains": {
+                "type": "array", "minItems": 1,
+                "items": {"type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "growth_rate": {"type": "number", "description": "h^-1, e.g. 1.2"},
+                    "initial_B": {"type": "number", "description": "CFU/mL at t=0, e.g. 1e7"},
+                    "death_rate_B": {"type": "number"},
+                    "dormancy_enabled": {"type": "boolean"},
+                    "dormancy_rate": {"type": "number"},
+                    "resuscitation_rate": {"type": "number"},
+                }, "required": ["name"]},
+            },
+            "phages": {
+                "type": "array",
+                "items": {"type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "burst_sizes": {"type": "number", "description": "progeny per lysis, e.g. 50"},
+                    "latent_periods": {"type": "number", "description": "hours, e.g. 0.5"},
+                    "phage_decay_rates": {"type": "number", "description": "h^-1, e.g. 0.1"},
+                    "initial_P": {"type": "number", "description": "PFU/mL at t=0"},
+                    "adsorption_rates": {
+                        "type": "array", "items": {"type": "number"},
+                        "description": "per-strain adsorption (length = #strains); 0 = strain resistant to this phage",
+                    },
+                }, "required": ["name"]},
+            },
+            "antibiotics": {
+                "type": "array",
+                "items": {"type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "emax": {"type": "number"}, "ec50": {"type": "number"},
+                    "k_elim": {"type": "number", "description": "elimination rate h^-1"},
+                }, "required": ["name"]},
+            },
+            "doses": {
+                "type": "array",
+                "items": {"type": "object", "properties": {
+                    "time": {"type": "number"}, "amount": {"type": "number"},
+                    "target_type": {"type": "string", "enum": ["phage", "antibiotic", "nutrient"]},
+                    "target_idx": {"type": "integer"},
+                    "route": {"type": "string", "enum": ["bolus", "infusion"]},
+                }, "required": ["time", "amount", "target_type"]},
+            },
+            "t_end": {"type": "number", "description": "simulation end time (h), default 48"},
+            "dt": {"type": "number"},
+            "track_nutrients": {"type": "boolean"},
+            "immunity_enabled": {"type": "boolean"},
+            "debris_enabled": {"type": "boolean", "description": "track optical density via the debris ODE"},
+        },
+        "required": ["strains"],
+    },
+}
+
+
 _TOOL_INSTRUCTION = (
-    "You have a run_pbisim_code tool for running simulations.\n"
-    "- If the user is asking a QUESTION or wants to CHAT / EXPLAIN / INTERPRET, answer "
-    "directly in plain text and do NOT call the tool.\n"
-    "- If the user wants to BUILD, RUN, PLOT, SWEEP, or COMPUTE a simulation result, use "
-    "run_pbisim_code to write and verify the code, fixing any traceback and re-running "
-    "(a few attempts). Your LAST run_pbisim_code call must be the COMPLETE final script "
-    "that produces the requested plot (and any printed values) — do not follow a working "
-    "script with a separate diagnostic-only run, or the plot will be lost. After it "
-    "succeeds, reply with a concise explanation. Do not paste the code in your final "
-    "message — the app captures it from your last tool call.\n"
-    "Only simulate when the user is actually asking for a simulation; otherwise just talk."
+    "Choose the right response for the user's request:\n"
+    "- QUESTION / CHAT / EXPLAIN / INTERPRET → answer directly in plain text; call NO tool.\n"
+    "- SET UP a standard model the app's Interactive Simulator supports (bacterial strains, "
+    "phages, antibiotics, a dose schedule, and basic nutrient/immunity/dormancy/OD options, "
+    "in Direct/ModelBuilder mode) → call configure_simulator. This populates the app's own "
+    "widgets so the user can see, tweak, and run it (editable + reproducible). Prefer this "
+    "over writing code whenever the request fits the simulator. After configuring, tell the "
+    "user it's ready in the Interactive Simulator.\n"
+    "- Something the simulator CANNOT express (binary-genotype BRG lattices, custom StrainSet "
+    "mutation graphs, parameter/dose SWEEPS, comparing many configurations, or bespoke "
+    "analysis/plots), OR the user explicitly asks to run it now → use run_pbisim_code: write "
+    "and verify the code, fix any traceback and re-run (a few attempts). Your LAST "
+    "run_pbisim_code call must be the COMPLETE final script that produces the requested plot "
+    "(and any printed values) — do not follow a working script with a separate diagnostic-"
+    "only run, or the plot will be lost. Then reply with a concise explanation; do not paste "
+    "the code in your final message.\n"
+    "When unsure whether configuring covers the request, prefer run_pbisim_code (it is fully "
+    "general). If configure_simulator reports it cannot express the request, switch to "
+    "run_pbisim_code."
 )
 
 
@@ -158,14 +238,15 @@ class SimulationAgent:
 
         return _parse_response(raw_text)
 
-    def generate(self, user_message: str, execute, max_tool_calls: int = 6) -> AgentRun:
-        """Agentic generation: the model writes code, runs it via the ``run_pbisim_code``
-        tool (``execute`` — typically ``executor.execute_code``), reads the result, and
-        self-corrects within this single turn until the code runs and plots, then gives a
-        final explanation. Returns an :class:`AgentRun` with the last executed code, its
-        ExecutionResult (figures/stdout), and how many times it ran code.
+    def generate(self, user_message: str, execute, configure=None, max_tool_calls: int = 6) -> AgentRun:
+        """Agentic generation. The model decides what the request needs and, within one
+        turn, either answers directly (no tool), populates the app's Interactive Simulator
+        via ``configure_simulator`` (``configure`` handler), or writes and runs code via
+        ``run_pbisim_code`` (``execute``), self-correcting until it works.
 
-        ``execute`` maps ``code:str -> ExecutionResult`` (``.success/.figures/.stdout/.error``).
+        ``execute`` maps ``code:str -> ExecutionResult``. ``configure`` (optional) maps a
+        config dict -> a short text summary (and applies it as a side effect); when None,
+        only the code tool is offered. Returns an :class:`AgentRun`.
         """
         _entry_len = len(self.history)   # roll back to here if this turn fails
         self.history.append({"role": "user", "content": user_message})
@@ -173,14 +254,16 @@ class SimulationAgent:
             {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": _TOOL_INSTRUCTION},
         ]
+        tools = [_RUN_TOOL] + ([_CONFIGURE_TOOL] if configure is not None else [])
 
         last_code, last_result, tool_calls, transcript = "", None, 0, []
         results_hist = []
+        configured = False
         try:
             for _ in range(max_tool_calls):
                 response = self.client.messages.create(
                     model=self.model, max_tokens=self.max_tokens,
-                    system=system, tools=[_RUN_TOOL], messages=self.history,
+                    system=system, tools=tools, messages=self.history,
                 )
                 self.last_usage = getattr(response, "usage", None)
                 self.history.append({"role": "assistant", "content": response.content})
@@ -191,22 +274,32 @@ class SimulationAgent:
                                         if getattr(b, "type", None) == "text").strip()
                     display = _pick_display(last_result, results_hist)
                     ok = bool(display and display.success)
-                    return AgentRun(narrative, last_code, display, ok, tool_calls, tuple(transcript))
+                    return AgentRun(narrative, last_code, display, ok, tool_calls,
+                                    tuple(transcript), configured)
 
                 tool_results = []
                 for tu in tool_uses:
-                    code = (tu.input or {}).get("code", "")
-                    result = execute(code) if code else _no_code_execution_result()
-                    last_code, last_result, tool_calls = code, result, tool_calls + 1
-                    results_hist.append(result)
-                    transcript.append({"code": code, "success": bool(result.success),
-                                       "error": result.error, "figures": len(result.figures)})
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu.id,
-                        "content": _format_tool_result(result),
-                        "is_error": not result.success,
-                    })
+                    name = getattr(tu, "name", "run_pbisim_code")
+                    if name == "configure_simulator" and configure is not None:
+                        summary = configure(tu.input or {})
+                        is_err = isinstance(summary, str) and summary.strip().upper().startswith("ERROR")
+                        configured = configured or not is_err
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": summary, "is_error": is_err,
+                        })
+                    else:  # run_pbisim_code
+                        code = (tu.input or {}).get("code", "")
+                        result = execute(code) if code else _no_code_execution_result()
+                        last_code, last_result, tool_calls = code, result, tool_calls + 1
+                        results_hist.append(result)
+                        transcript.append({"code": code, "success": bool(result.success),
+                                           "error": result.error, "figures": len(result.figures)})
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": _format_tool_result(result),
+                            "is_error": not result.success,
+                        })
                 self.history.append({"role": "user", "content": tool_results})
 
             # Ran out of tool budget — return the best (last) attempt.
@@ -215,7 +308,7 @@ class SimulationAgent:
             return AgentRun(
                 "Reached the maximum number of code-execution attempts."
                 + ("" if ok else " The last attempt still errored."),
-                last_code, display, ok, tool_calls, tuple(transcript),
+                last_code, display, ok, tool_calls, tuple(transcript), configured,
             )
         except Exception:
             # Roll the whole turn back — leaving a partial tool exchange (an assistant

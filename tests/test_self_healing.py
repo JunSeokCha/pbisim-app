@@ -12,9 +12,9 @@ from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import ExecutionResult
 
 
-def _blk(btype, text=None, id=None, inp=None):
+def _blk(btype, text=None, id=None, inp=None, name="run_pbisim_code"):
     b = MagicMock()
-    b.type, b.text, b.id, b.input = btype, text, id, inp
+    b.type, b.text, b.id, b.input, b.name = btype, text, id, inp, name
     return b
 
 
@@ -116,3 +116,43 @@ def test_generate_answers_question_without_running_code():
     assert run.result is None      # nothing was simulated
     assert run.code == ""
     assert "adsorption" in run.narrative.lower()
+
+
+def test_generate_routes_to_configure_tool():
+    """Phase 2: when the model calls configure_simulator, generate invokes the handler and
+    marks the run configured — without running any code."""
+    applied = {}
+    def configure(cfg):
+        applied.update(cfg)
+        return "Configured the Interactive Simulator (Direct mode): 2 strain(s); t_end=24.0 h"
+
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="c1", name="configure_simulator",
+                    inp={"strains": [{"name": "WT"}, {"name": "R"}]})]),
+        _resp([_blk("text", text="I've set up a 2-strain model in the simulator.")]),
+    ])
+    run = agent.generate("set up a 2-strain model", _execute, configure=configure)
+
+    assert run.configured is True
+    assert run.tool_calls == 0      # no code executed
+    assert run.result is None
+    assert applied.get("strains")   # the handler received the config
+    assert "set up" in run.narrative.lower()
+
+
+def test_configure_error_lets_model_fall_back_to_code():
+    """If configure_simulator reports ERROR, the run isn't marked configured and the model
+    can proceed to run_pbisim_code (generality preserved)."""
+    def configure(cfg):
+        return "ERROR: configuration needs at least one strain."
+
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="c1", name="configure_simulator", inp={})]),
+        _resp([_blk("tool_use", id="t1", name="run_pbisim_code", inp={"code": "GOOD"})]),
+        _resp([_blk("text", text="Done via code.")]),
+    ])
+    run = agent.generate("do something", _execute, configure=configure)
+    assert run.configured is False
+    assert run.tool_calls == 1 and run.success is True
