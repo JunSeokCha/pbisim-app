@@ -142,3 +142,19 @@ def test_summary_reads_current_results():
     md = " ".join((m.value or "") for m in at.markdown)
     assert "Total bacteria" in md
     assert "clearance" in md.lower()
+
+
+def test_brg_accepts_five_phages():
+    """Regression: a 5-phage cocktail configured by the AI must not hit the old max-3
+    phage cap when the BRG builder renders."""
+    at = _configure({
+        "builder_mode": "brg",
+        "strains": [{"name": "base", "growth_rate": 1.2}],
+        "phages": [{"name": f"phi{i}", "burst_sizes": 50, "adsorption_s": 1e-8} for i in range(5)],
+        "t_end": 6.0,
+    })
+    assert len(at.session_state["int_phages"]) == 5
+    # rendering the BRG builder with the phage-count widget at 5 (old max was 3) must not error
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    assert len(at.exception) == 0, at.exception

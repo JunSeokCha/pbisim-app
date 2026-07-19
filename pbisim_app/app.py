@@ -921,7 +921,9 @@ def _json_safe(obj):
         return obj.tolist()
     if isinstance(obj, np.generic):
         return obj.item()
-    return obj
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)   # last resort so export never crashes on an odd object
 
 
 def dump_state_to_scenario() -> dict:
@@ -953,7 +955,7 @@ def load_scenario_to_state(state: dict) -> None:
 def export_scenarios_json(scenarios: dict) -> str:
     """Serialise the whole scenario library to a portable JSON string."""
     return json.dumps(
-        {"schema_version": SCENARIO_SCHEMA_VERSION, "scenarios": scenarios},
+        {"schema_version": SCENARIO_SCHEMA_VERSION, "scenarios": _json_safe(scenarios)},
         indent=2,
     )
 
@@ -988,9 +990,9 @@ PARTS_SCHEMA_VERSION = 1
 
 # category -> (shared session entity-list key, max count in the UI, human label)
 PART_CATEGORIES = {
-    "bacteria":    {"key": "int_strains",     "max": 4, "label": "Bacteria"},
-    "phages":      {"key": "int_phages",      "max": 3, "label": "Phages"},
-    "antibiotics": {"key": "int_antibiotics", "max": 2, "label": "Antibiotics"},
+    "bacteria":    {"key": "int_strains",     "max": 10, "label": "Bacteria"},
+    "phages":      {"key": "int_phages",      "max": 10, "label": "Phages"},
+    "antibiotics": {"key": "int_antibiotics", "max": 6, "label": "Antibiotics"},
 }
 PART_SOURCES = ["educated guess", "literature", "pbisim-fit", "experimental"]
 
@@ -2405,7 +2407,7 @@ with st.sidebar:
     if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
         _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
         st.caption(f"🔑 Anthropic API key set ({_src})")
-        if st.button("Change key", key="change_api_key", use_container_width=True):
+        if st.button("Change key", key="change_api_key", width="stretch"):
             st.session_state._editing_api_key = True
             st.rerun()
     else:
@@ -2421,7 +2423,7 @@ with st.sidebar:
             st.session_state.api_key = _entered
             st.session_state._editing_api_key = False
             st.rerun()
-        if st.session_state.api_key and st.button("Clear key", key="clear_api_key", use_container_width=True):
+        if st.session_state.api_key and st.button("Clear key", key="clear_api_key", width="stretch"):
             st.session_state.api_key = ""
             st.session_state._editing_api_key = False
             st.rerun()
@@ -2567,7 +2569,7 @@ if st.session_state.current_page == "Library":
                 "Annotation (optional)", key="sc_save_note",
                 placeholder="e.g. PA high-persister + fast-adsorbing phage, immunocompromised host",
             )
-            if st.button("💾 Save scenario", key="sc_save_btn", use_container_width=True):
+            if st.button("💾 Save scenario", key="sc_save_btn", width="stretch"):
                 _name = (_sc_name or "").strip()
                 if not _name:
                     st.error("Please enter a scenario name.")
@@ -2587,7 +2589,7 @@ if st.session_state.current_page == "Library":
                 data=export_scenarios_json(_scenarios),
                 file_name="pbisim_scenarios.json",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
                 disabled=not _scenarios,
             )
             _up = st.file_uploader("📥 Import scenarios (JSON)", type=["json"], key="sc_import")
@@ -2640,7 +2642,7 @@ if st.session_state.current_page == "Library":
         st.download_button(
             "📤 Export parts (JSON)", data=export_parts_json(_lib),
             file_name="pbisim_parts.json", mime="application/json",
-            use_container_width=True, disabled=not _has_parts,
+            width="stretch", disabled=not _has_parts,
         )
         _pup = st.file_uploader("📥 Import parts (JSON)", type=["json"], key="parts_import")
         if _pup is not None and st.button("Merge imported parts", key="parts_import_btn"):
@@ -2684,7 +2686,7 @@ if st.session_state.current_page == "Library":
                             help="Burst/latent/adsorption are phage×host properties — record the host so reuse elsewhere is flagged.",
                         )
                         _pref = "" if _pref == "(unspecified)" else _pref
-                    if st.button("💾 Save part", key=f"part_save_{_cat}", use_container_width=True):
+                    if st.button("💾 Save part", key=f"part_save_{_cat}", width="stretch"):
                         _nm = (_pname or "").strip()
                         if not _nm:
                             st.error("Please enter a part name.")
@@ -2783,7 +2785,7 @@ elif st.session_state.current_page == "Calibration":
             st.error(f"Could not read CSV: {e}")
             _raw = None
         if _raw is not None:
-            st.dataframe(_raw.head(8), use_container_width=True)
+            st.dataframe(_raw.head(8), width="stretch")
             _cols = list(_raw.columns)
             _low = [c.lower() for c in _cols]
 
@@ -2810,7 +2812,7 @@ elif st.session_state.current_page == "Calibration":
                 _mc = st.selectbox("Phage-dose / MOI column (optional — drives the simulated dose per arm)",
                                    ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
                 _mc = None if _mc == "(none)" else _mc
-            if st.button("📥 Load dataset", key="fit_load", use_container_width=True):
+            if st.button("📥 Load dataset", key="fit_load", width="stretch"):
                 st.session_state.fit_dataset = {
                     "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
                     "arm_cols": _ac, "moi": _mc,
@@ -3089,7 +3091,7 @@ elif st.session_state.current_page == "Calibration":
             # data in session_state so the visualization stays alive across page
             # navigation (and reruns) until it is explicitly re-run or the dataset
             # is cleared.
-            if st.button("🔬 Overlay model on data", key="fit_overlay", use_container_width=True):
+            if st.button("🔬 Overlay model on data", key="fit_overlay", width="stretch"):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
                     _B0 = float(np.sum(_iB))
@@ -3161,7 +3163,7 @@ elif st.session_state.current_page == "Calibration":
                 plt.close(_fig)
                 st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _ovr["log"] else "") +
                             f", vs {_ovr['stat_label']})")
-                st.dataframe(pd.DataFrame(_ovr["metrics"]), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(_ovr["metrics"]), width="stretch", hide_index=True)
                 st.caption("Edit the parameter values above and re-overlay to improve the fit. "
                            "Edits update the live model directly and can be saved as Parts in the Library.")
 
@@ -3177,7 +3179,7 @@ elif st.session_state.current_page == "Calibration":
                 _cal_name = st.text_input("Scenario name", value="calibrated", key="fit_save_name")
             with _cs2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 Save calibrated config as Scenario", key="fit_save_scenario", use_container_width=True):
+                if st.button("💾 Save calibrated config as Scenario", key="fit_save_scenario", width="stretch"):
                     _nm = (_cal_name or "").strip()
                     if not _nm:
                         st.error("Enter a scenario name.")
@@ -3289,7 +3291,7 @@ elif st.session_state.current_page == "AI Assistant":
                 # The assistant populated the Interactive Simulator's widgets — offer to open it.
                 if getattr(run, "configured", False):
                     st.success("✅ I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
-                    if st.button("▶ Open in Interactive Simulator", key=f"nav_sim_{len(st.session_state.history)}", use_container_width=True):
+                    if st.button("▶ Open in Interactive Simulator", key=f"nav_sim_{len(st.session_state.history)}", width="stretch"):
                         st.session_state["_nav_to"] = "Interactive Simulator"
                         st.rerun()
 
@@ -3424,7 +3426,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Run Parallel Clinical Trial", use_container_width=True):
+        if st.button("🚀 Run Parallel Clinical Trial", width="stretch"):
             with st.spinner("Generating cohort populations & simulating treatment arms..."):
                 try:
                     # 1. Compile nominal base config
@@ -3535,22 +3537,22 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 result, prefixes=("B", "D", "I", "H"),
                 title="Total Bacteria (CFU/mL)", y_label="log₁₀ CFU/mL",
             )
-            st.plotly_chart(fig_cfu, use_container_width=True)
+            st.plotly_chart(fig_cfu, width="stretch")
             fig_pfu = plot_pkpd_trajectories_plotly(
                 result, prefixes=("P",),
                 title="Free Phage (PFU/mL)", y_label="log₁₀ PFU/mL",
             )
-            st.plotly_chart(fig_pfu, use_container_width=True)
+            st.plotly_chart(fig_pfu, width="stretch")
 
             # Step survival plot
             st.markdown("#### ⏳ Step-Survival (Kaplan-Meier)")
             fig_km = plot_kaplan_meier_plotly(result, endpoint=endpoint_choice, t_end=trial_t_end, threshold=clearance_threshold, n_logs=2.0)
-            st.plotly_chart(fig_km, use_container_width=True)
+            st.plotly_chart(fig_km, width="stretch")
 
             # Metric distributions
             st.markdown("#### 📦 Distribution of outcomes")
             fig_dist = plot_metric_distributions_plotly(result, metric=metric_choice)
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(fig_dist, width="stretch")
             
             # Data Exports
             st.markdown("---")
@@ -3566,7 +3568,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     data=csv_out,
                     file_name="pbisim_survival_outcomes.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    width="stretch"
                 )
             with cx2:
                 # NLME Dataframe for pharmacometric models
@@ -3579,7 +3581,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     data=csv_nlme,
                     file_name="pbisim_nlme_cohort.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    width="stretch"
                 )
 
 
@@ -3678,7 +3680,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     }
 
         st.markdown("<br>", unsafe_allow_html=True)
-        run_sweep = st.button("🚀 Run Dose-Response Sweep", use_container_width=True)
+        run_sweep = st.button("🚀 Run Dose-Response Sweep", width="stretch")
 
     with col_run:
         st.markdown("### 📊 Sweep Results")
@@ -3866,7 +3868,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     "Clearance Time (h)": "{:.1f}",
                     "2-Log Red Time (h)": "{:.1f}"
                 }),
-                use_container_width=True
+                width="stretch"
             )
 
             st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
@@ -3876,7 +3878,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
             fig_traj.update_layout(
                 xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
                 yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-            st.plotly_chart(fig_traj, use_container_width=True)
+            st.plotly_chart(fig_traj, width="stretch")
 
             if _dr["od_trajectories"]:
                 st.markdown("#### Raw Simulation Trajectories (Optical Density)")
@@ -3886,7 +3888,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 fig_od.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
                     template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                st.plotly_chart(fig_od, use_container_width=True)
+                st.plotly_chart(fig_od, width="stretch")
 
             st.markdown("#### Outcome Metrics vs Run Index")
             fig_metrics = go.Figure()
@@ -3898,7 +3900,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 yaxis=dict(title="AUC (cells·h/mL)", type="log"),
                 yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
                 template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-            st.plotly_chart(fig_metrics, use_container_width=True)
+            st.plotly_chart(fig_metrics, width="stretch")
         else:
             st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
 
@@ -4014,7 +4016,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
             spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
-            run_sweep = st.button("🚀 Run 1D Sweep", use_container_width=True)
+            run_sweep = st.button("🚀 Run 1D Sweep", width="stretch")
 
         elif sweep_type == "2D Sweep":
             param1_label = st.selectbox("Select Parameter 1 (X-axis)", param_labels, key="p1_sweep_label")
@@ -4042,7 +4044,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 steps2 = st.number_input("P2 Steps", min_value=2, max_value=10, value=3, key="p2_steps")
             spacing2 = st.selectbox("P2 Spacing", ["Linear", "Logarithmic"], key="p2_spacing")
 
-            run_sweep = st.button("🚀 Run 2D Sweep", use_container_width=True)
+            run_sweep = st.button("🚀 Run 2D Sweep", width="stretch")
 
         else:  # Coupled (linked) sweep
             st.caption(
@@ -4060,7 +4062,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     key=f"pc_series_{_ci}",
                     placeholder="e.g. 0, 0.5, 1",
                 )
-            run_sweep = st.button("🚀 Run Coupled Sweep", use_container_width=True)
+            run_sweep = st.button("🚀 Run Coupled Sweep", width="stretch")
 
     with col_run:
         st.markdown("### 📊 Sweep Results")
@@ -4309,7 +4311,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                         _p1: "{:.2e}", "Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
                         "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"
                     }),
-                    use_container_width=True)
+                    width="stretch")
                 st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
                 fig_traj = go.Figure()
                 for t_arr, b_arr, legend_lbl in _ps["trajectories"]:
@@ -4317,7 +4319,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
                     yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                st.plotly_chart(fig_traj, use_container_width=True)
+                st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
                     fig_od = go.Figure()
@@ -4326,7 +4328,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_od.update_layout(
                         xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
                         template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_od, use_container_width=True)
+                    st.plotly_chart(fig_od, width="stretch")
                 st.markdown("#### Outcome Metrics vs Parameter Value")
                 fig_metric = go.Figure()
                 fig_metric.add_trace(go.Scatter(x=df_summary[_p1], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
@@ -4336,7 +4338,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     yaxis=dict(title="AUC (cells·h/mL)", type="log"),
                     yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
                     template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                st.plotly_chart(fig_metric, use_container_width=True)
+                st.plotly_chart(fig_metric, width="stretch")
             elif _ps["type"] == "coupled":
                 _labels = _ps["labels"]
                 df_summary = pd.DataFrame(_ps["summary"])
@@ -4344,7 +4346,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 _fmt = {c: "{:.2e}" for c in _labels}
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
                              "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"})
-                st.dataframe(df_summary.style.format(_fmt), use_container_width=True)
+                st.dataframe(df_summary.style.format(_fmt), width="stretch")
                 st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
                 fig_traj = go.Figure()
                 for t_arr, b_arr, legend_lbl in _ps["trajectories"]:
@@ -4352,7 +4354,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
                     yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                st.plotly_chart(fig_traj, use_container_width=True)
+                st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
                     fig_od = go.Figure()
@@ -4361,7 +4363,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_od.update_layout(
                         xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
                         template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_od, use_container_width=True)
+                    st.plotly_chart(fig_od, width="stretch")
                 st.markdown("#### Outcome Metrics vs Step Index")
                 _step = list(range(1, len(df_summary) + 1))
                 fig_metric = go.Figure()
@@ -4372,7 +4374,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     yaxis=dict(title="AUC (cells·h/mL)", type="log"),
                     yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
                     template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                st.plotly_chart(fig_metric, use_container_width=True)
+                st.plotly_chart(fig_metric, width="stretch")
             else:
                 _p1, _p2 = _ps["param1_label"], _ps["param2_label"]
                 _xt = "log" if _ps["spacing"] == "Logarithmic" else "linear"
@@ -4382,11 +4384,11 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 with h1:
                     fig_auc = go.Figure(data=go.Contour(z=_ps["grid_auc"], x=_ps["sweep_values1"], y=_ps["sweep_values2"], colorscale="Viridis", colorbar=dict(title="AUC")))
                     fig_auc.update_layout(title="Bacterial AUC Heatmap", xaxis=dict(title=_p1, type=_xt), yaxis=dict(title=_p2, type=_yt), template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_auc, use_container_width=True)
+                    st.plotly_chart(fig_auc, width="stretch")
                 with h2:
                     fig_nadir = go.Figure(data=go.Contour(z=_ps["grid_nadir"], x=_ps["sweep_values1"], y=_ps["sweep_values2"], colorscale="Magma", colorbar=dict(title="Nadir")))
                     fig_nadir.update_layout(title="Bacterial Nadir Heatmap", xaxis=dict(title=_p1, type=_xt), yaxis=dict(title=_p2, type=_yt), template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_nadir, use_container_width=True)
+                    st.plotly_chart(fig_nadir, width="stretch")
         else:
             st.info("Configure parameters and click **Run Sweep** to start the analysis.")
 
@@ -4496,7 +4498,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.markdown("### 🧫 Bacterial Strains")
 
                 n_strains = st.number_input(
-                    "Number of strains", min_value=1, max_value=4, value=len(strains)
+                    "Number of strains", min_value=1, max_value=10, value=len(strains)
                 )
                 if n_strains != len(strains):
                     st.session_state.simulation_result = None
@@ -4655,7 +4657,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.markdown("### 🧬 Phage Strains")
 
                 n_phages = st.number_input(
-                    "Number of phages", min_value=0, max_value=3, value=len(phages)
+                    "Number of phages", min_value=0, max_value=10, value=len(phages)
                 )
                 if n_phages != len(phages):
                     st.session_state.simulation_result = None
@@ -4892,7 +4894,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 # Renders the loci count
                 st.markdown("---")
                 st.markdown("### 🧬 Phage Loci")
-                n_phg_loci = st.number_input("Number of phage species (loci)", min_value=1, max_value=3, value=max(len(phages), 1))
+                n_phg_loci = st.number_input("Number of phage species (loci)", min_value=1, max_value=10, value=max(len(phages), 1))
                 if n_phg_loci != len(phages):
                     phages = phages[:n_phg_loci]
                     while len(phages) < n_phg_loci:
@@ -5023,7 +5025,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             with col1:
                 st.markdown("### 🧫 Custom Bacterial Strains")
                 
-                n_strains = st.number_input("Number of custom strains", min_value=1, max_value=4, value=max(len(strains), 1))
+                n_strains = st.number_input("Number of custom strains", min_value=1, max_value=10, value=max(len(strains), 1))
                 if n_strains != len(strains):
                     strains = strains[:n_strains]
                     while len(strains) < n_strains:
@@ -5127,7 +5129,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
             with col2:
                 st.markdown("### 🧬 Phage Strains")
-                n_phages = st.number_input("Number of phages", min_value=0, max_value=3, value=len(phages))
+                n_phages = st.number_input("Number of phages", min_value=0, max_value=10, value=len(phages))
                 if n_phages != len(phages):
                     phages = phages[:n_phages]
                     while len(phages) < n_phages:
@@ -5205,7 +5207,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             st.markdown("### 💊 Antibiotics")
 
             n_abx = st.number_input(
-                "Number of antibiotics", min_value=0, max_value=2, value=len(antibiotics)
+                "Number of antibiotics", min_value=0, max_value=6, value=len(antibiotics)
             )
             if n_abx != len(antibiotics):
                 st.session_state.simulation_result = None
@@ -5720,7 +5722,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
     # ──── Run Button ──────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🚀 Run Simulation", use_container_width=True):
+    if st.button("🚀 Run Simulation", width="stretch"):
         with st.spinner("Assembling model equations & integrating..."):
             try:
                 _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
@@ -6048,7 +6050,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 data=csv_str,
                 file_name="pbisim_simulation_results.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
         with c_down2:
@@ -6058,7 +6060,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 data=rep_code,
                 file_name="pbisim_run.py",
                 mime="text/x-python",
-                use_container_width=True,
+                width="stretch",
             )
 
         if show_code:
