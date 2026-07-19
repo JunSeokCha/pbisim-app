@@ -172,3 +172,23 @@ def test_trial_arm_is_editable_inline():
     assert len(at.exception) == 0, at.exception
     assert "_id" in at.session_state["trial_arms"][0]
     assert any((w.label or "") == "Arm name" for w in at.text_input)   # edit form rendered
+
+
+def test_trial_iiv_is_editable_inline():
+    """IIV records now have an edit expander (change parameter/distribution/params),
+    keyed by a stable id — previously delete-and-recreate only."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at.run()
+    at.session_state["trial_iiv_inputs"] = [
+        {"path": "growth_rates", "dist_type": "LogNormal", "params": {"cv": 0.2},
+         "mode": "multiplicative"}
+    ]
+    at.session_state["current_page_radio"] = "Clinical Trials & Cohorts"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    assert "_id" in at.session_state["trial_iiv_inputs"][0]
+    assert any((s.label or "") == "Select Parameter" for s in at.selectbox)   # edit form rendered

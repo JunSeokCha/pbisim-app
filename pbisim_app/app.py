@@ -149,6 +149,50 @@ def render_regimen_config(prefix, items, target, default_amount, unit_label,
             "interval": float(interval), "n": int(n_doses)}
 
 
+def render_iiv_config(prefix, initial=None):
+    """Render the inter-individual-variability (IIV) form and return an iiv dict
+    ``{path, dist_type, params, mode}``. ``initial`` pre-fills the widgets for editing."""
+    init = initial or {}
+    names = list(IIV_PARAMETERS.keys())
+    cur_name = next((n for n, p in IIV_PARAMETERS.items() if p == init.get("path")), names[0])
+    param_display = st.selectbox("Select Parameter", names,
+                                 index=names.index(cur_name) if cur_name in names else 0,
+                                 key=f"{prefix}_param")
+    dists = ["LogNormal", "Normal", "Uniform"]
+    cur_dist = init.get("dist_type", "LogNormal")
+    dist_choice = st.selectbox("Distribution Type", dists,
+                               index=dists.index(cur_dist) if cur_dist in dists else 0,
+                               key=f"{prefix}_dist")
+    ip = init.get("params", {})
+    c1, c2 = st.columns(2)
+    params = {}
+    if dist_choice == "LogNormal":
+        with c1:
+            params["cv"] = st.number_input("CV (coefficient of variation)",
+                                           value=float(ip.get("cv", 0.25)), min_value=0.01,
+                                           key=f"{prefix}_cv")
+        mode = "multiplicative"
+    elif dist_choice == "Normal":
+        with c1:
+            params["mean"] = st.number_input("Mean", value=float(ip.get("mean", 0.0)),
+                                             key=f"{prefix}_mean")
+        with c2:
+            params["sd"] = st.number_input("SD (standard deviation)",
+                                           value=float(ip.get("sd", 0.1)), min_value=0.01,
+                                           key=f"{prefix}_sd")
+        mode = "additive"
+    else:
+        with c1:
+            params["lo"] = st.number_input("Lower Bound", value=float(ip.get("lo", 0.5)),
+                                           key=f"{prefix}_lo")
+        with c2:
+            params["hi"] = st.number_input("Upper Bound", value=float(ip.get("hi", 1.5)),
+                                           key=f"{prefix}_hi")
+        mode = "replace"
+    return {"path": IIV_PARAMETERS[param_display], "dist_type": dist_choice,
+            "params": params, "mode": mode}
+
+
 def render_mutation_graph_editor(strains, key_prefix):
     """Edit the named mutation-transition graph (shared `int_transitions`).
 
@@ -632,8 +676,8 @@ def load_preset_to_state(params: dict):
 
     # 4. OD & Debris settings
     st.session_state["int_debris_enabled"] = params.get("debris_enabled", False)
-    st.session_state["int_debris_u"] = params.get("debris_u", 1.0)
-    st.session_state["int_debris_v"] = params.get("debris_v", 0.5)
+    st.session_state["int_debris_u"] = params.get("debris_u", 0.4)
+    st.session_state["int_debris_v"] = params.get("debris_v", 0.2)
     st.session_state["int_debris_kdis"] = params.get("debris_kdis", 0.01)
     st.session_state["int_od_to_cfu_conversion_factor"] = params.get("od_to_cfu_conversion_factor", 2e8)
 
@@ -1399,8 +1443,8 @@ def build_nominal_config_from_gui():
     debris_enabled = st.session_state.get("int_debris_enabled", False)
     extra_kwargs = {}
     if debris_enabled:
-        extra_kwargs["debris_u"] = st.session_state.get("int_debris_u", 1.0)
-        extra_kwargs["debris_v"] = st.session_state.get("int_debris_v", 0.5)
+        extra_kwargs["debris_u"] = st.session_state.get("int_debris_u", 0.4)
+        extra_kwargs["debris_v"] = st.session_state.get("int_debris_v", 0.2)
         extra_kwargs["debris_kdis"] = st.session_state.get("int_debris_kdis", 0.01)
         extra_kwargs["od_to_cfu_conversion_factor"] = st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)
         
@@ -1631,8 +1675,8 @@ def build_nominal_config_from_gui():
         if debris_enabled:
             builder = rec.call(
                 "builder", builder, "with_od_debris",
-                u=extra_kwargs.get("debris_u", 1.0),
-                v=extra_kwargs.get("debris_v", 0.5),
+                u=extra_kwargs.get("debris_u", 0.4),
+                v=extra_kwargs.get("debris_v", 0.2),
                 kdis=extra_kwargs.get("debris_kdis", 0.01),
                 od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 2e8),
             )
@@ -2972,11 +3016,11 @@ elif st.session_state.current_page == "Calibration":
                             help="CFU per OD unit: OD = (biomass + debris) / od_to_cfu.")
                     with dk2:
                         st.session_state["int_debris_u"] = st.number_input(
-                            "Debris yield · deaths (u)", value=float(st.session_state.get("int_debris_u", 1.0)),
+                            "Debris yield · deaths (u)", value=float(st.session_state.get("int_debris_u", 0.4)),
                             format="%g", key="fit_edit_debris_u")
                     with dk3:
                         st.session_state["int_debris_v"] = st.number_input(
-                            "Debris yield · lysis (v)", value=float(st.session_state.get("int_debris_v", 0.5)),
+                            "Debris yield · lysis (v)", value=float(st.session_state.get("int_debris_v", 0.2)),
                             format="%g", key="fit_edit_debris_v")
                     with dk4:
                         st.session_state["int_debris_kdis"] = st.number_input(
@@ -3398,60 +3442,36 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
         st.markdown("### 🧬 Parameter Variability (IIV)")
         
-        # Display active IIVs
+        # Active IIVs — editable in place
         trial_iivs = st.session_state.get("trial_iiv_inputs", [])
-        
+
         for idx, iiv in enumerate(trial_iivs):
-            col_p, col_d, col_m, col_act = st.columns([3, 3, 2, 1])
+            iiv.setdefault("_id", _next_uid("iiv"))   # stable key across reorder/delete
+            _iid = iiv["_id"]
+            _pname = next((n for n, p in IIV_PARAMETERS.items() if p == iiv["path"]), iiv["path"])
+            col_p, col_act = st.columns([6, 1])
             with col_p:
-                st.text(f"Path: {iiv['path']}")
-            with col_d:
-                st.text(f"Dist: {iiv['dist_type']} ({iiv['params']})")
-            with col_m:
-                st.text(f"Mode: {iiv['mode']}")
+                st.markdown(f"**{_pname}** — {iiv['dist_type']} {iiv['params']} ({iiv['mode']})")
             with col_act:
-                if st.button("🗑️", key=f"del_iiv_{idx}"):
+                if st.button("🗑️", key=f"del_iiv_{_iid}"):
                     trial_iivs.pop(idx)
+                    st.session_state.trial_iiv_inputs = trial_iivs
                     st.rerun()
-                    
+            with st.expander("✏️ Edit", expanded=False):
+                _edited = render_iiv_config(f"edit_iiv_{_iid}", initial=iiv)
+                if st.button("💾 Save changes", key=f"save_iiv_{_iid}"):
+                    _edited["_id"] = _iid
+                    trial_iivs[idx] = _edited
+                    st.session_state.trial_iiv_inputs = trial_iivs
+                    st.rerun()
+
         # Add IIV form
         with st.expander("➕ Add Parameter Variability"):
-            param_display = st.selectbox("Select Parameter", list(IIV_PARAMETERS.keys()))
-            dist_choice = st.selectbox("Distribution Type", ["LogNormal", "Normal", "Uniform"])
-            
-            c_p1, c_p2 = st.columns(2)
-            dist_params = {}
-            if dist_choice == "LogNormal":
-                with c_p1:
-                    cv = st.number_input("CV (coefficient of variation)", value=0.25, min_value=0.01)
-                    dist_params["cv"] = cv
-                mode = "multiplicative"
-            elif dist_choice == "Normal":
-                with c_p1:
-                    mean = st.number_input("Mean", value=0.0)
-                    dist_params["mean"] = mean
-                with c_p2:
-                    sd = st.number_input("SD (standard deviation)", value=0.1, min_value=0.01)
-                    dist_params["sd"] = sd
-                mode = "additive"
-            else:
-                with c_p1:
-                    lo = st.number_input("Lower Bound", value=0.5)
-                    dist_params["lo"] = lo
-                with c_p2:
-                    hi = st.number_input("Upper Bound", value=1.5)
-                    dist_params["hi"] = hi
-                mode = "replace"
-                
+            _new_iiv = render_iiv_config("new_iiv")
             if st.button("Add Parameter IIV"):
-                trial_iivs.append({
-                    "path": IIV_PARAMETERS[param_display],
-                    "dist_type": dist_choice,
-                    "params": dist_params,
-                    "mode": mode
-                })
+                trial_iivs.append(_new_iiv)
                 st.session_state.trial_iiv_inputs = trial_iivs
-                st.success(f"Added variability to {param_display}!")
+                st.success("Added parameter variability.")
                 st.rerun()
 
         # Run Button
@@ -5538,12 +5558,12 @@ elif st.session_state.current_page == "Interactive Simulator":
             if st.session_state["int_debris_enabled"]:
                 st.session_state["int_debris_u"] = st.number_input(
                     "Scattering weight for intact dead cells (u)",
-                    value=float(st.session_state.get("int_debris_u", 1.0)),
+                    value=float(st.session_state.get("int_debris_u", 0.4)),
                     step=0.1,
                 )
                 st.session_state["int_debris_v"] = st.number_input(
                     "Scattering weight for lysed cell fragments (v)",
-                    value=float(st.session_state.get("int_debris_v", 0.5)),
+                    value=float(st.session_state.get("int_debris_v", 0.2)),
                     step=0.1,
                 )
                 st.session_state["int_debris_kdis"] = st.number_input(
