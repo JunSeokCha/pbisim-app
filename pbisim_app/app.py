@@ -2252,9 +2252,8 @@ with st.sidebar:
 
     if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
         _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
-        _c1, _c2 = st.columns([3, 1])
-        _c1.caption(f"🔑 Anthropic API key set ({_src})")
-        if _c2.button("Change", key="change_api_key", use_container_width=True):
+        st.caption(f"🔑 Anthropic API key set ({_src})")
+        if st.button("Change key", key="change_api_key", use_container_width=True):
             st.session_state._editing_api_key = True
             st.rerun()
     else:
