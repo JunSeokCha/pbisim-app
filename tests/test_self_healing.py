@@ -187,3 +187,16 @@ def test_generate_uses_api_lookup_then_codes():
     ])
     run = agent.generate("simulate carefully", _execute)
     assert run.success is True and run.tool_calls == 1
+
+
+def test_trim_history_bounds_conversation():
+    """Long chats must not grow the API history without limit (memory/cost on the host)."""
+    agent = SimulationAgent(api_key="mock-key")
+    for k in range(12):   # 12 turns, some with a tool exchange
+        agent.history.append({"role": "user", "content": f"turn {k}"})
+        agent.history.append({"role": "assistant", "content": [_blk("tool_use", id=f"t{k}", inp={"code": "GOOD"})]})
+        agent.history.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{k}", "content": "ok"}]})
+    agent._trim_history(max_turns=8)
+    user_prompts = [m for m in agent.history if m["role"] == "user" and isinstance(m["content"], str)]
+    assert len(user_prompts) == 8
+    assert agent.history[0] == {"role": "user", "content": "turn 4"}   # oldest kept, at a clean boundary

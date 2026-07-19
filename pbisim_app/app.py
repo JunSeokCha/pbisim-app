@@ -3281,7 +3281,15 @@ elif st.session_state.current_page == "AI Assistant":
                         st.session_state["_nav_to"] = "Interactive Simulator"
                         st.rerun()
 
+            # Release every figure the tool loop created (the model may have run code several
+            # times; only the displayed set was closed above). Unclosed matplotlib figures
+            # accumulate in the global registry and are a real memory leak on the small
+            # Render container — a prime cause of the app being OOM-killed mid-chat.
+            plt.close("all")
+
             st.session_state.history.append(("assistant", (exec_result, run)))
+            # Bound the on-page chat log so stored figures/results don't grow without limit.
+            st.session_state.history = st.session_state.history[-20:]
 
 
 
