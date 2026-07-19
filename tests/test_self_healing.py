@@ -175,3 +175,15 @@ def test_generate_routes_to_summary_tool():
     assert called.get("yes")
     assert run.tool_calls == 0 and run.result is None and run.configured is False
     assert "cleared" in run.narrative.lower()
+
+
+def test_generate_uses_api_lookup_then_codes():
+    """The built-in pbisim_api_lookup tool grounds the model before it writes code."""
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="l1", name="pbisim_api_lookup", inp={"name": "ModelBuilder.with_phage_params"})]),
+        _resp([_blk("tool_use", id="t1", name="run_pbisim_code", inp={"code": "GOOD"})]),
+        _resp([_blk("text", text="Done.")]),
+    ])
+    run = agent.generate("simulate carefully", _execute)
+    assert run.success is True and run.tool_calls == 1

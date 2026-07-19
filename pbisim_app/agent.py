@@ -73,6 +73,56 @@ _RUN_TOOL = {
     },
 }
 
+# Built-in tool: look up the REAL signature + docstring of a pbisim symbol from the
+# installed package (ground truth, drift-proof) so the model doesn't guess.
+_LOOKUP_TOOL = {
+    "name": "pbisim_api_lookup",
+    "description": (
+        "Look up the REAL signature and docstring of a pbisim API symbol from the installed "
+        "package (always current, never guessed). Call this BEFORE writing code whenever you "
+        "are unsure of an exact signature, argument name, or array shape — e.g. "
+        "'ModelBuilder.with_phage_params', 'PBIModel', 'stationary_phase_ic', "
+        "'BinaryResistanceGenotypes.from_strains', 'StrainSet.to_config'. Pass a dotted name."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string",
+                                "description": "dotted pbisim name, e.g. ModelBuilder.with_phage_params"}},
+        "required": ["name"],
+    },
+}
+
+
+def _pbisim_api_lookup(name: str) -> str:
+    """Resolve a dotted pbisim name and return its real signature + docstring."""
+    import inspect
+    import pbisim
+
+    name = (name or "").strip()
+    if name.startswith("pbisim."):
+        name = name[len("pbisim."):]
+    if not name:
+        return "Give a pbisim name, e.g. 'ModelBuilder.with_phage_params' or 'stationary_phase_ic'."
+
+    obj = pbisim
+    try:
+        for part in name.split("."):
+            obj = getattr(obj, part)
+    except AttributeError:
+        return (f"'{name}' is not in the pbisim public API. Check the name, or run "
+                "`dir(pbisim)` / `inspect.signature(...)` via run_pbisim_code to explore.")
+
+    out = [f"{name}"]
+    try:
+        out[0] += str(inspect.signature(obj))
+    except (TypeError, ValueError):
+        out[0] += f"  (type: {type(obj).__name__})"
+    doc = inspect.getdoc(obj)
+    if doc:
+        out.append(doc[:2000])
+    return "\n".join(out)
+
+
 # Tool the model uses to populate the app's Interactive Simulator (Direct mode) instead
 # of writing throwaway code. Its schema is a bounded subset of the app config; anything it
 # can't express is a signal to fall back to run_pbisim_code.
@@ -206,7 +256,9 @@ _TOOL_INSTRUCTION = (
     "- Something the simulator CANNOT express (parameter/dose SWEEPS, clinical-trial cohorts, "
     "comparing many configurations at once, or bespoke analysis/plots), OR the user "
     "explicitly asks to run it now → use run_pbisim_code: write "
-    "and verify the code, fix any traceback and re-run (a few attempts). Your LAST "
+    "and verify the code, fix any traceback and re-run (a few attempts). If you are unsure "
+    "of any pbisim signature, argument name, or array shape, call pbisim_api_lookup FIRST to "
+    "check the real API — this prevents shape/name mistakes. Your LAST "
     "run_pbisim_code call must be the COMPLETE final script that produces the requested plot "
     "(and any printed values) — do not follow a working script with a separate diagnostic-"
     "only run, or the plot will be lost. Then reply with a concise explanation; do not paste "
@@ -306,7 +358,7 @@ class SimulationAgent:
             {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": _TOOL_INSTRUCTION},
         ]
-        tools = ([_RUN_TOOL]
+        tools = ([_RUN_TOOL, _LOOKUP_TOOL]
                  + ([_CONFIGURE_TOOL] if configure is not None else [])
                  + ([_SUMMARY_TOOL] if summarize is not None else []))
 
@@ -346,6 +398,11 @@ class SimulationAgent:
                         tool_results.append({
                             "type": "tool_result", "tool_use_id": tu.id,
                             "content": summarize(tu.input or {}),
+                        })
+                    elif name == "pbisim_api_lookup":
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": _pbisim_api_lookup((tu.input or {}).get("name", "")),
                         })
                     else:  # run_pbisim_code
                         code = (tu.input or {}).get("code", "")

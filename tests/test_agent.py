@@ -79,3 +79,22 @@ class TestRobustExtraction:
         resp = _parse_response(text)
         assert "```" not in resp.narrative
         assert "Intro." in resp.narrative and "Outro." in resp.narrative
+
+
+class TestApiLookup:
+    """pbisim_api_lookup returns ground-truth signatures (the drift-proof grounding)."""
+
+    def test_method_signature(self):
+        from pbisim_app.agent import _pbisim_api_lookup
+        s = _pbisim_api_lookup("ModelBuilder.with_phage_params")
+        assert "phage_decay_rates" in s   # the arg whose shape the model kept guessing
+
+    def test_function_signature_includes_B0(self):
+        from pbisim_app.agent import _pbisim_api_lookup
+        s = _pbisim_api_lookup("stationary_phase_ic")
+        assert "B0" in s                  # the required arg the model kept omitting
+
+    def test_dotted_prefix_and_missing(self):
+        from pbisim_app.agent import _pbisim_api_lookup
+        assert "from_strains" in _pbisim_api_lookup("pbisim.BinaryResistanceGenotypes.from_strains")
+        assert "not in the pbisim public API" in _pbisim_api_lookup("no_such_symbol_xyz")
