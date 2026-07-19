@@ -126,7 +126,7 @@ def main(argv=None):
             "model": model,
             "summary": summary,
             "cases": [
-                {"id": r.id, "passed": r.passed, "one_shot": r.one_shot,
+                {"id": r.id, "intent": r.intent, "passed": r.passed, "one_shot": r.one_shot,
                  "first_ok": r.first_ok, "self_corrected": r.self_corrected,
                  "attempts": r.attempts, "latency_s": r.latency_s,
                  "failed_checks": r.failed_checks, "usage": r.usage}
