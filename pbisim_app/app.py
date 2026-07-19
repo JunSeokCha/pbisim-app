@@ -1161,9 +1161,10 @@ GROWTH_SIGNALS = {
 # flat rate d that the app used all along; nutrient = starvation d·(1−S/(Ks+S));
 # density = crowding d·min(1, ΣB/K). (No nutrient+density death function exists.)
 DEATH_SIGNALS = {
-    "constant":              "constant_death",
-    "nutrient (starvation)": "nutrient_dependent_death",
-    "density (crowding)":    "density_dependent_death",
+    "constant":                     "constant_death",
+    "nutrient (starvation)":        "nutrient_dependent_death",
+    "density (crowding)":           "density_dependent_death",
+    "nutrient + density":           "nutrient_and_density_death",
 }
 
 
@@ -1266,10 +1267,12 @@ def mode_dormancy_kwargs(dsig="nutrient", rsig="nutrient", ks=0.0, kdorm=0.0):
 
 def death_signal_function(name):
     """Map a death-function name to the pbisim function object."""
-    from pbisim import constant_death, nutrient_dependent_death, density_dependent_death
+    from pbisim import (constant_death, nutrient_dependent_death,
+                        density_dependent_death, nutrient_and_density_death)
     return {"constant_death": constant_death,
             "nutrient_dependent_death": nutrient_dependent_death,
-            "density_dependent_death": density_dependent_death}.get(name, constant_death)
+            "density_dependent_death": density_dependent_death,
+            "nutrient_and_density_death": nutrient_and_density_death}.get(name, constant_death)
 
 
 def death_kwargs():
@@ -1278,7 +1281,7 @@ def death_kwargs():
     rate d, applied regardless of nutrients)."""
     name = st.session_state.get("int_death_function", "constant_death")
     kw = {"death_function": death_signal_function(name)}
-    if name == "density_dependent_death":
+    if name in ("density_dependent_death", "nutrient_and_density_death"):
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
     return kw
 

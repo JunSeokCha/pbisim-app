@@ -530,7 +530,8 @@ def test_death_signal_function_selector():
     from streamlit.testing.v1 import AppTest
     DEATH = {"constant": "constant_death",
              "nutrient (starvation)": "nutrient_dependent_death",
-             "density (crowding)": "density_dependent_death"}
+             "density (crowding)": "density_dependent_death",
+             "nutrient + density": "nutrient_and_density_death"}
     for label, fn in DEATH.items():
         a = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
         a.run()
