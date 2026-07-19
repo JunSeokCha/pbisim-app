@@ -433,11 +433,12 @@ class SimulationAgent:
             del self.history[_entry_len:]
             raise
 
-    def _trim_history(self, max_turns: int = 8) -> None:
-        """Keep the API conversation bounded so long chats don't grow memory/cost without
-        limit (the tool loop appends code, tracebacks, and tool results every turn). Trims
-        whole turns from the front at user-prompt boundaries, preserving each kept turn's
-        tool_use/tool_result pairing and the required leading user message."""
+    def _trim_history(self, max_turns: int = 16) -> None:
+        """Keep the API conversation bounded so a very long chat doesn't grow cost/latency
+        without limit (the tool loop appends code, tracebacks, and tool results every turn).
+        The cap is generous — normal conversations keep full context; only very long ones
+        drop their oldest turns. Trims whole turns from the front at user-prompt boundaries,
+        preserving each kept turn's tool_use/tool_result pairing and the leading user msg."""
         starts = [i for i, m in enumerate(self.history)
                   if m.get("role") == "user" and isinstance(m.get("content"), str)]
         if len(starts) > max_turns:

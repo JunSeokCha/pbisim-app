@@ -372,3 +372,20 @@ def test_sweep_parameters_cover_dormancy_immune_debris():
     c, *_ = apply_sweep_parameter(0.05, p["Dormancy Nutrient Half-saturation (Ks_dorm)"],
                                   cfg, np.array([1e7, 1e7]), np.array([1e6]), 1.0, {})
     assert c.dormancy_monod_constant == 0.05
+
+
+def test_get_od_raises_without_debris_module():
+    """Documents the failure the app's _safe_od guards against: result.get_od() (and the
+    Debris state) raise when the debris ODE wasn't enabled, so OD-trajectory code must
+    catch it rather than assume get_od works."""
+    import numpy as np
+    import pytest
+    from pbisim.builder import ModelBuilder
+    from pbisim.core.model import PBIModel
+    from pbisim.core.solver import solve_ode
+
+    cfg = ModelBuilder(n_bacteria=1, n_phages=0).with_growth_rates(1.2).build()  # no debris
+    m = PBIModel(cfg, initial_B=np.array([1e7]), initial_P=np.array([]), initial_S=1.0)
+    r = solve_ode(m, t_end=5.0, dt=1.0)
+    with pytest.raises(Exception):
+        r.get_od()

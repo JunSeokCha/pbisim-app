@@ -540,6 +540,18 @@ def _init_app_state():
 _init_app_state()
 
 
+def _safe_od(result, total_bacteria):
+    """OD trajectory that never raises. Uses the debris-aware ``get_od()`` when the debris
+    ODE is in the config; otherwise falls back to biomass / conversion factor WITHOUT
+    touching the Debris state (accessing it raises ``KeyError: Debris state not found``
+    when debris isn't enabled). Guards against a session debris-flag vs. result mismatch."""
+    factor = st.session_state.get("int_od_to_cfu_conversion_factor", 2e8) or 1.0
+    try:
+        return result.get_od()
+    except Exception:
+        return np.asarray(total_bacteria, dtype=float) / factor
+
+
 def load_preset_to_state(params: dict):
     """Deep copy preset parameters into st.session_state variables."""
     # 0. Clear old simulation results to prevent dimension mismatch crashes
@@ -3288,8 +3300,9 @@ elif st.session_state.current_page == "AI Assistant":
             plt.close("all")
 
             st.session_state.history.append(("assistant", (exec_result, run)))
-            # Bound the on-page chat log so stored figures/results don't grow without limit.
-            st.session_state.history = st.session_state.history[-20:]
+            # Keep a generous on-page chat log; only drop the oldest turns in very long
+            # sessions (bounds stored figures/results without truncating normal use).
+            st.session_state.history = st.session_state.history[-40:]
 
 
 
@@ -3821,9 +3834,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                         
                         trajectories.append((result.time, total_bacteria, f"Run {k_idx + 1}: {run_label}"))
                         if _od_enabled:
-                            _od = (result.get_od() if hasattr(result, "get_od")
-                                   else (total_bacteria + result.get("Debris"))
-                                   / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
+                            _od = (_safe_od(result, total_bacteria))
                             od_trajectories.append((result.time, _od, f"Run {k_idx + 1}: {run_label}"))
                         progress_bar.progress((k_idx + 1) / M)
                         
@@ -4126,9 +4137,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     _lbl = f"{param1_label} = {val:.2e}"
                     trajectories.append((result.time, total_bacteria, _lbl))
                     if _od_enabled:
-                        _od = (result.get_od() if hasattr(result, "get_od")
-                               else (total_bacteria + result.get("Debris"))
-                               / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
+                        _od = (_safe_od(result, total_bacteria))
                         od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((idx + 1) / len(sweep_values))
 
@@ -4196,9 +4205,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     _lbl = f"Step {k+1}: {_lbl_txt}"
                     trajectories.append((result.time, total_bacteria, _lbl))
                     if _od_enabled:
-                        _od = (result.get_od() if hasattr(result, "get_od")
-                               else (total_bacteria + result.get("Debris"))
-                               / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
+                        _od = (_safe_od(result, total_bacteria))
                         od_trajectories.append((result.time, _od, _lbl))
                     progress_bar.progress((k + 1) / M)
 
@@ -5931,7 +5938,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     fig, ax = plt.subplots(figsize=(8, 4))
                     ax.plot(
                         t,
-                        result.get_od() if hasattr(result, "get_od") else (total_bacteria + result.get("Debris")) / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8),
+                        _safe_od(result, total_bacteria),
                         "C2-",
                         lw=2.5,
                         label="OD (AU)",
