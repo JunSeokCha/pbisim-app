@@ -109,6 +109,7 @@ def create_model_factory(
     base_initial_B: np.ndarray,
     base_initial_P: np.ndarray,
     base_initial_S: float,
+    inherit_debris: bool = True,
     **base_kwargs
 ) -> Callable[[ModelConfig], PBIModel]:
     """
@@ -153,6 +154,10 @@ def create_model_factory(
                 kwargs["initial_D"] = ic.D
             if getattr(ic, "Imm", None) is not None:
                 kwargs["initial_Imm"] = ic.Imm
+            # Inherit the OD/debris accumulated during the pre-run (default), or wash the
+            # dead cells out before treatment (inherit_debris=False).
+            if inherit_debris and getattr(ic, "Debris", None) is not None:
+                kwargs["initial_Debris"] = ic.Debris
 
         return PBIModel(config, initial_B=init_B, initial_P=init_P, initial_S=init_S, **kwargs)
     return factory
@@ -171,6 +176,7 @@ def run_trial_simulation(
     base_initial_B: np.ndarray,
     base_initial_P: np.ndarray,
     base_initial_S: float,
+    inherit_debris: bool = True,
     **base_kwargs
 ):
     """
@@ -191,6 +197,7 @@ def run_trial_simulation(
         base_initial_B=base_initial_B,
         base_initial_P=base_initial_P,
         base_initial_S=base_initial_S,
+        inherit_debris=inherit_debris,
         **base_kwargs
     )
     

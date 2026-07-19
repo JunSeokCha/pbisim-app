@@ -597,6 +597,15 @@ def _next_uid(prefix: str) -> str:
     return f"{prefix}{st.session_state['_uid_counter']}"
 
 
+def _carry_prerun_debris(ic, kwargs):
+    """Carry the OD/debris that accumulated during the stationary-phase pre-run into the
+    treatment model — when the user opts to INHERIT it (default) rather than wash the dead
+    cells out before treatment. No-op when debris isn't tracked (ic.Debris is None) or the
+    'inherit' checkbox is unticked (washout)."""
+    if st.session_state.get("int_prerun_inherit_debris", True) and getattr(ic, "Debris", None) is not None:
+        kwargs["initial_Debris"] = ic.Debris
+
+
 def _safe_od(result, total_bacteria):
     """OD trajectory that never raises. Uses the debris-aware ``get_od()`` when the debris
     ODE is in the config; otherwise falls back to biomass / conversion factor WITHOUT
@@ -656,6 +665,7 @@ def load_preset_to_state(params: dict):
     st.session_state["int_density_total_cells"] = params.get("density_signal_uses_total_cells", False)
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
+    st.session_state["int_prerun_inherit_debris"] = params.get("prerun_inherit_debris", True)
 
     # 3. Immunity settings
     st.session_state["int_immunity_enabled"] = params.get("immunity_enabled", False)
@@ -2065,6 +2075,7 @@ def run_sim_from_gui_params():
             model_kwargs["initial_D"] = ic.D
         if ic.Imm is not None:
             model_kwargs["initial_Imm"] = ic.Imm
+        _carry_prerun_debris(ic, model_kwargs)
 
     model = PBIModel(
         config,
@@ -2183,12 +2194,16 @@ def generate_reproduction_code() -> str:
     ]
 
     if t_prerun > 0:
+        _inherit_debris = (st.session_state.get("int_prerun_inherit_debris", True)
+                           and st.session_state.get("int_debris_enabled", False))
+        _debris_arg = ", initial_Debris=ic.Debris" if _inherit_debris else ""
         code.append(f"# Stationary-phase pre-run ({t_prerun} h) starting from the configured inoculum;")
-        code.append("# carry the full final state — active B, dormant D, nutrient S, immune Imm.")
+        code.append("# carry the full final state — active B, dormant D, nutrient S, immune Imm"
+                     + (", debris." if _inherit_debris else " (dead-cell debris washed out)."))
         code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun}, B0=initial_B)")
         code.append(
             "model = PBIModel(cfg, initial_B=ic.B, initial_P=initial_P, "
-            "initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0))"
+            f"initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0){_debris_arg})"
         )
     else:
         _extra_ic = "".join(f", {k}={rec.render(v)}" for k, v in mkw.items())
@@ -2253,12 +2268,16 @@ def _repro_prerun_lines(indent, t_prerun):
     if not t_prerun:
         return []
     p = indent
-    return [
+    lines = [
         f"{p}ic = stationary_phase_ic(c_k, t_prerun={t_prerun}, B0=ib_k)",
         f"{p}ib_k, is_k = ic.B, max(float(ic.S), 0.0)",
         f"{p}if ic.D is not None: mk_k['initial_D'] = ic.D",
         f"{p}if ic.Imm is not None: mk_k['initial_Imm'] = ic.Imm",
     ]
+    if (st.session_state.get("int_prerun_inherit_debris", True)
+            and st.session_state.get("int_debris_enabled", False)):
+        lines.append(f"{p}if ic.Debris is not None: mk_k['initial_Debris'] = ic.Debris")
+    return lines
 
 
 def generate_param_sweep_reproduction_code() -> str:
@@ -3547,6 +3566,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                             base_initial_B=init_B,
                             base_initial_P=base_P,
                             base_initial_S=init_S,
+                            inherit_debris=st.session_state.get("int_prerun_inherit_debris", True),
                             **model_kwargs
                         )
                         st.session_state.trial_result = trial_result
@@ -4170,6 +4190,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                             mk_k["initial_D"] = ic.D
                         if ic.Imm is not None:
                             mk_k["initial_Imm"] = ic.Imm
+                        _carry_prerun_debris(ic, mk_k)
 
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                     result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
@@ -4248,6 +4269,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                             mk_k["initial_D"] = ic.D
                         if ic.Imm is not None:
                             mk_k["initial_Imm"] = ic.Imm
+                        _carry_prerun_debris(ic, mk_k)
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                     result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
                     total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -4325,6 +4347,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                                 mk_k["initial_D"] = ic.D
                             if ic.Imm is not None:
                                 mk_k["initial_Imm"] = ic.Imm
+                            _carry_prerun_debris(ic, mk_k)
 
                         model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                         result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
@@ -5773,6 +5796,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                 step=4.0,
                 help="Let the bacteria/nutrient system equilibrate without treatments before t=0. Set to 0 to disable."
             )
+            if st.session_state.get("int_t_prerun", 0.0) > 0 and st.session_state.get("int_debris_enabled", False):
+                st.session_state["int_prerun_inherit_debris"] = st.checkbox(
+                    "Inherit bacterial debris from the pre-run",
+                    value=bool(st.session_state.get("int_prerun_inherit_debris", True)),
+                    key="widget_prerun_inherit_debris",
+                    help="On (default): the OD/debris that built up during the pre-run carries into "
+                         "treatment (t=0 starts with a realistic dead-cell background). Off: the dead "
+                         "cells are washed out — treatment starts with zero debris.")
 
         with col2:
             st.markdown("### 🎛️ ODE solver specifics")

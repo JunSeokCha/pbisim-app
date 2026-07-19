@@ -542,3 +542,27 @@ def test_death_signal_function_selector():
         cfg = a.session_state["simulation_config"]
         assert cfg.death_function.__name__ == fn, f"{label}: {cfg.death_function}"
         assert len(a.error) == 0
+
+
+def test_prerun_inherit_debris_checkbox():
+    """The 'Inherit bacterial debris' checkbox appears only when a pre-run AND the debris
+    ODE are both on, and a run with it works."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at.run()
+
+    # debris off -> no checkbox even with a pre-run
+    at.session_state["int_t_prerun"] = 12.0
+    at.session_state["int_debris_enabled"] = False
+    at.run()
+    assert not any("Inherit bacterial debris" in (c.label or "") for c in at.checkbox)
+
+    # debris on + pre-run -> checkbox appears (default ticked) and a run succeeds
+    at.session_state["int_debris_enabled"] = True
+    at.session_state["int_prerun_inherit_debris"] = True
+    at.run()
+    box = [c for c in at.checkbox if "Inherit bacterial debris" in (c.label or "")]
+    assert box and box[0].value is True
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    assert at.session_state["simulation_result"] is not None
