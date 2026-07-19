@@ -128,3 +128,47 @@ def test_multiple_dose_arms_produce_distinct_outcomes():
     hi_p = res["High dose"].get_trajectories("P")[1].max()
     lo_p = res["Low dose"].get_trajectories("P")[1].max()
     assert hi_p > lo_p
+
+
+def test_dose_record_is_editable_inline():
+    """Dose rows are now editable in place (time/amount/route) with a stable id, so an
+    edit sticks and delete doesn't rebind widgets to the wrong row."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at.run()
+    at.session_state["int_doses"] = [
+        {"time": 1.0, "amount": 1e8, "target_type": "phage", "target_idx": 0,
+         "route": "bolus", "duration": 0.0}
+    ]
+    at.run()   # renders the Interactive Simulator incl. the Environment & Dosing tab
+    assert len(at.exception) == 0, at.exception
+    assert "_id" in at.session_state["int_doses"][0]   # stable id assigned
+
+    times = [w for w in at.number_input if (w.label or "") == "Time (h)"]
+    assert times, "an editable dose time input rendered"
+    times[0].set_value(7.0).run()
+    assert at.session_state["int_doses"][0]["time"] == 7.0   # edit persisted
+
+
+def test_trial_arm_is_editable_inline():
+    """Trial arms get an edit expander (rename + reconfigure regimen), keyed by a stable id."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at.run()
+    at.session_state["trial_arms"] = [
+        {"name": "Low dose",
+         "phage": {"on": True, "index": 0, "amount": 1e8, "start": 0.0,
+                   "repeat": False, "interval": 8.0, "n": 1},
+         "abx": {"on": False}}
+    ]
+    at.session_state["current_page_radio"] = "Clinical Trials & Cohorts"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    assert "_id" in at.session_state["trial_arms"][0]
+    assert any((w.label or "") == "Arm name" for w in at.text_input)   # edit form rendered

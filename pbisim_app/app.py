@@ -105,38 +105,44 @@ DOSE_AMOUNT_LABELS = {
 
 
 def render_regimen_config(prefix, items, target, default_amount, unit_label,
-                          default_on=True):
+                          default_on=True, initial=None):
     """Render dose-regimen widgets for one agent and return a config dict.
 
-    Returns ``{"on": False}`` when the agent is not included in this arm, else
+    ``initial`` (an existing config dict) pre-fills the widgets so an arm can be edited
+    in place. Returns ``{"on": False}`` when the agent is not included in this arm, else
     ``{"on": True, "index", "amount", "start", "repeat", "interval", "n"}``.
     """
-    on = st.checkbox(f"Include {target}", value=default_on, key=f"{prefix}_on")
+    init = initial or {}
+    on = st.checkbox(f"Include {target}", value=bool(init.get("on", default_on)), key=f"{prefix}_on")
     if not on:
         return {"on": False}
-    idx = 0
+    idx = int(init.get("index", 0))
     if len(items) > 1:
         idx = st.selectbox(
             f"{target.title()} target", range(len(items)),
+            index=min(idx, len(items) - 1),
             format_func=lambda i: items[i].get("name", f"{target} {i}"),
             key=f"{prefix}_idx",
         )
     c1, c2 = st.columns(2)
     with c1:
-        amount = st.number_input(unit_label, min_value=0.0, value=default_amount,
+        amount = st.number_input(unit_label, min_value=0.0,
+                                 value=float(init.get("amount", default_amount)),
                                  format="%.1e", key=f"{prefix}_amt")
     with c2:
-        start = st.number_input("Start (h)", min_value=0.0, value=0.0, step=1.0,
+        start = st.number_input("Start (h)", min_value=0.0,
+                                value=float(init.get("start", 0.0)), step=1.0,
                                 key=f"{prefix}_start")
-    repeat = st.checkbox("Repeat regimen (qX h × N)", value=False, key=f"{prefix}_rep")
-    interval, n_doses = 8.0, 1
+    repeat = st.checkbox("Repeat regimen (qX h × N)", value=bool(init.get("repeat", False)),
+                         key=f"{prefix}_rep")
+    interval, n_doses = float(init.get("interval", 8.0)), int(init.get("n", 4))
     if repeat:
         c3, c4 = st.columns(2)
         with c3:
-            interval = st.number_input("Interval (h)", min_value=0.5, value=8.0,
+            interval = st.number_input("Interval (h)", min_value=0.5, value=interval,
                                        step=1.0, key=f"{prefix}_int")
         with c4:
-            n_doses = st.number_input("Doses", min_value=1, value=4, step=1,
+            n_doses = st.number_input("Doses", min_value=1, value=n_doses, step=1,
                                       key=f"{prefix}_n")
     return {"on": True, "index": int(idx), "amount": float(amount),
             "start": float(start), "repeat": bool(repeat),
@@ -538,6 +544,13 @@ def _init_app_state():
 
 
 _init_app_state()
+
+
+def _next_uid(prefix: str) -> str:
+    """A session-stable unique id so per-row widget keys (dose / trial-arm editors)
+    survive reorder/delete instead of being re-bound to a different row by list index."""
+    st.session_state["_uid_counter"] = st.session_state.get("_uid_counter", 0) + 1
+    return f"{prefix}{st.session_state['_uid_counter']}"
 
 
 def _safe_od(result, total_bacteria):
@@ -3340,14 +3353,31 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
         if not _tphages and not _tabx:
             st.info("Configure at least one phage or antibiotic in the Interactive Simulator to define dosed arms.")
 
-        # Existing arms
+        # Existing arms — editable in place
         for _ai, _arm in enumerate(list(trial_arms)):
+            _arm.setdefault("_id", _next_uid("arm"))   # stable key across reorder/delete
+            _aid = _arm["_id"]
             _lc, _dc = st.columns([6, 1])
             with _lc:
                 st.markdown(f"**{_arm['name']}** — {arm_regimen_summary(_arm)}")
             with _dc:
-                if st.button("🗑️", key=f"del_arm_{_ai}"):
+                if st.button("🗑️", key=f"del_arm_{_aid}"):
                     trial_arms.pop(_ai)
+                    st.session_state.trial_arms = trial_arms
+                    st.rerun()
+            with st.expander(f"✏️ Edit '{_arm['name']}'", expanded=False):
+                _en = st.text_input("Arm name", value=_arm["name"], key=f"edit_arm_name_{_aid}")
+                _ep, _ea = {"on": False}, {"on": False}
+                if _tphages:
+                    st.markdown("**Phage dosing**")
+                    _ep = render_regimen_config(f"edit_arm_p_{_aid}", _tphages, "phage",
+                                                1e9, "Amount (PFU)", initial=_arm.get("phage"))
+                if _tabx:
+                    st.markdown("**Antibiotic dosing**")
+                    _ea = render_regimen_config(f"edit_arm_a_{_aid}", _tabx, "antibiotic",
+                                                10.0, "Amount (mg)", initial=_arm.get("abx"))
+                if st.button("💾 Save changes", key=f"save_arm_{_aid}"):
+                    _arm["name"], _arm["phage"], _arm["abx"] = _en, _ep, _ea
                     st.session_state.trial_arms = trial_arms
                     st.rerun()
 
@@ -5535,21 +5565,39 @@ elif st.session_state.current_page == "Interactive Simulator":
 
             with sub_col1:
                 st.markdown("#### Active Dosing Events")
-                # Display active doses
+                if doses:
+                    st.caption("Edit time / amount / route inline; 🗑️ removes a row. "
+                               "To change the target, delete and re-add.")
+                _routes = ["bolus", "infusion"]
                 for idx, dose in enumerate(doses):
-                    c_t1, c_t2, c_t3, c_t4 = st.columns([2, 3, 2, 1])
+                    dose.setdefault("_id", _next_uid("dose"))  # stable key across reorder/delete
+                    _did = dose["_id"]
+                    c_t1, c_t2, c_t3, c_t4 = st.columns([2, 3, 3, 1])
                     with c_t1:
-                        st.text(f"t={dose['time']}h")
+                        dose["time"] = st.number_input(
+                            "Time (h)", min_value=0.0, value=float(dose.get("time", 0.0)),
+                            step=1.0, key=f"dose_time_{_did}", label_visibility="collapsed")
                     with c_t2:
-                        tgt_lbl = f"{dose['target_type']} (Index {dose['target_idx']})"
-                        st.text(f"{dose['amount']:.1e} to {tgt_lbl}")
+                        dose["amount"] = st.number_input(
+                            f"Amount → {dose['target_type']} #{dose['target_idx']}",
+                            min_value=0.0, value=float(dose.get("amount", 0.0)), format="%.2e",
+                            key=f"dose_amt_{_did}", label_visibility="collapsed")
+                        st.caption(f"→ {dose['target_type']} #{dose['target_idx']}")
                     with c_t3:
-                        st.text(f"Route: {dose['route']}")
+                        dose["route"] = st.selectbox(
+                            "Route", _routes, index=_routes.index(dose.get("route", "bolus")),
+                            key=f"dose_route_{_did}", label_visibility="collapsed")
+                        if dose["route"] == "infusion":
+                            dose["duration"] = st.number_input(
+                                "Infusion duration (h)", min_value=0.1,
+                                value=float(dose.get("duration") or 2.0), step=0.5,
+                                key=f"dose_dur_{_did}")
                     with c_t4:
-                        if st.button("🗑️", key=f"del_dose_{idx}"):
+                        if st.button("🗑️", key=f"del_dose_{_did}"):
                             doses.pop(idx)
                             st.session_state.int_doses = doses
                             st.rerun()
+                st.session_state.int_doses = doses  # persist inline edits
 
                 st.markdown("#### Add Single Dose Event")
                 with st.expander("➕ Define Single Dosing Event"):
