@@ -156,3 +156,22 @@ def test_configure_error_lets_model_fall_back_to_code():
     run = agent.generate("do something", _execute, configure=configure)
     assert run.configured is False
     assert run.tool_calls == 1 and run.success is True
+
+
+def test_generate_routes_to_summary_tool():
+    """Phase 3: to interpret results the model calls get_simulation_summary, reads the
+    metrics, and answers — running no code and configuring nothing."""
+    called = {}
+    def summarize(inp):
+        called["yes"] = True
+        return "Total bacteria: start 1e7, end 5e2. Time to clearance: 12.0 h."
+
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="s1", name="get_simulation_summary", inp={})]),
+        _resp([_blk("text", text="Your infection cleared by ~12 h — the phage drove it down.")]),
+    ])
+    run = agent.generate("why did it clear?", _execute, summarize=summarize)
+    assert called.get("yes")
+    assert run.tool_calls == 0 and run.result is None and run.configured is False
+    assert "cleared" in run.narrative.lower()

@@ -174,9 +174,28 @@ _CONFIGURE_TOOL = {
 }
 
 
+# Tool the model uses to read the user's current simulation results before interpreting.
+_SUMMARY_TOOL = {
+    "name": "get_simulation_summary",
+    "description": (
+        "Read a compact summary of the user's CURRENT simulation results (the run showing "
+        "in the Interactive Simulator): outcome metrics such as initial/final/nadir "
+        "bacteria, time to clearance, 2-log-reduction time, per-strain final densities and "
+        "resistant fraction, free phage, immune level, and OD. Call this WHENEVER the user "
+        "asks you to interpret or discuss their results ('why did resistance win?', 'did it "
+        "clear?', 'what's the outcome?', 'explain this'). Returns text; no input needed."
+    ),
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+
 _TOOL_INSTRUCTION = (
     "Choose the right response for the user's request:\n"
-    "- QUESTION / CHAT / EXPLAIN / INTERPRET → answer directly in plain text; call NO tool.\n"
+    "- INTERPRET / discuss the user's CURRENT results ('did it clear?', 'why did resistance "
+    "win?', 'explain the outcome') → call get_simulation_summary to read the metrics, then "
+    "explain in plain English. Do NOT re-run a simulation just to interpret existing results.\n"
+    "- QUESTION / CHAT / EXPLAIN (general, not about the current run) → answer directly in "
+    "plain text; call NO tool.\n"
     "- SET UP a model the app's Interactive Simulator supports → call configure_simulator. "
     "This covers ALL THREE builder modes: 'direct' (explicit strain list), 'strainset' "
     "(named strains + a custom mutation graph), and 'brg' (binary resistance genotypes from "
@@ -269,15 +288,17 @@ class SimulationAgent:
 
         return _parse_response(raw_text)
 
-    def generate(self, user_message: str, execute, configure=None, max_tool_calls: int = 6) -> AgentRun:
+    def generate(self, user_message: str, execute, configure=None, summarize=None,
+                 max_tool_calls: int = 6) -> AgentRun:
         """Agentic generation. The model decides what the request needs and, within one
-        turn, either answers directly (no tool), populates the app's Interactive Simulator
-        via ``configure_simulator`` (``configure`` handler), or writes and runs code via
-        ``run_pbisim_code`` (``execute``), self-correcting until it works.
+        turn: answers directly (no tool), reads the current results via
+        ``get_simulation_summary`` (``summarize`` handler) to interpret them, populates the
+        app's Interactive Simulator via ``configure_simulator`` (``configure`` handler), or
+        writes and runs code via ``run_pbisim_code`` (``execute``), self-correcting.
 
-        ``execute`` maps ``code:str -> ExecutionResult``. ``configure`` (optional) maps a
-        config dict -> a short text summary (and applies it as a side effect); when None,
-        only the code tool is offered. Returns an :class:`AgentRun`.
+        ``execute`` maps ``code:str -> ExecutionResult``. ``configure`` maps a config dict
+        -> summary (applies as a side effect). ``summarize`` maps ``{} -> results text``.
+        Optional handlers, when None, simply aren't offered. Returns an :class:`AgentRun`.
         """
         _entry_len = len(self.history)   # roll back to here if this turn fails
         self.history.append({"role": "user", "content": user_message})
@@ -285,7 +306,9 @@ class SimulationAgent:
             {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": _TOOL_INSTRUCTION},
         ]
-        tools = [_RUN_TOOL] + ([_CONFIGURE_TOOL] if configure is not None else [])
+        tools = ([_RUN_TOOL]
+                 + ([_CONFIGURE_TOOL] if configure is not None else [])
+                 + ([_SUMMARY_TOOL] if summarize is not None else []))
 
         last_code, last_result, tool_calls, transcript = "", None, 0, []
         results_hist = []
@@ -318,6 +341,11 @@ class SimulationAgent:
                         tool_results.append({
                             "type": "tool_result", "tool_use_id": tu.id,
                             "content": summary, "is_error": is_err,
+                        })
+                    elif name == "get_simulation_summary" and summarize is not None:
+                        tool_results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "content": summarize(tu.input or {}),
                         })
                     else:  # run_pbisim_code
                         code = (tu.input or {}).get("code", "")

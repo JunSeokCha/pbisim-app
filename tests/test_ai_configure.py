@@ -26,7 +26,7 @@ class _ConfiguringAgent:
         self.history = []
         self.last_usage = None
 
-    def generate(self, prompt, execute, configure=None, max_tool_calls=6):
+    def generate(self, prompt, execute, configure=None, summarize=None, max_tool_calls=6):
         summary = configure(self.config)
         return AgentRun(f"Set it up — {summary}", "", None, False, 0, (),
                         configured=not summary.upper().startswith("ERROR"))
@@ -105,3 +105,40 @@ def test_configure_strainset_mode_builds():
     assert ss["int_transitions"] == [{"from": "WT", "to": "mutant", "rate": 1e-7}]
     _run_simulator(at)   # StrainSet + mutation graph actually builds + solves
     assert at.session_state["simulation_config"] is not None
+
+
+class _SummarizingAgent:
+    """Fake agent: generate() calls the real summarize handler and returns its text."""
+    def __init__(self):
+        self.client = SimpleNamespace(api_key="x")
+        self.model = "claude-opus-4-8"
+        self.history = []
+        self.last_usage = None
+
+    def generate(self, prompt, execute, configure=None, summarize=None, max_tool_calls=6):
+        text = summarize({})
+        return AgentRun(f"Here is what happened:\n{text}", "", None, False, 0, ())
+
+
+def test_summary_reads_current_results():
+    """Phase 3: after a sim runs, get_simulation_summary returns real metrics for the model."""
+    at = _configure({
+        "builder_mode": "direct",
+        "strains": [{"name": "WT", "growth_rate": 1.2, "initial_B": 1e7}],
+        "phages": [{"name": "P0", "burst_sizes": 80, "adsorption_rates": [5e-8]},],
+        "doses": [{"time": 0.0, "amount": 1e8, "target_type": "phage", "target_idx": 0}],
+        "t_end": 24.0,
+    })
+    _run_simulator(at)   # produces simulation_result
+    assert at.session_state["simulation_result"] is not None
+
+    at.session_state["current_page_radio"] = "AI Assistant"
+    at.session_state.agent = _SummarizingAgent()
+    at.run()
+    at.chat_input[0].set_value("interpret the results").run()
+    assert len(at.exception) == 0, at.exception
+
+    # the rendered answer contains the real summary metrics
+    md = " ".join((m.value or "") for m in at.markdown)
+    assert "Total bacteria" in md
+    assert "clearance" in md.lower()

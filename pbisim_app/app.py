@@ -801,6 +801,74 @@ def apply_ai_configuration(config: dict) -> str:
         return f"ERROR applying configuration: {e}"
 
 
+def summarize_current_results(_inp=None) -> str:
+    """Handler for the assistant's ``get_simulation_summary`` tool: a compact metrics
+    summary of the current Interactive Simulator result, for the model to interpret."""
+    res = st.session_state.get("simulation_result")
+    cfg = st.session_state.get("simulation_config")
+    if res is None or cfg is None:
+        return ("No simulation results are available yet — ask the user to run a simulation "
+                "in the Interactive Simulator (or set one up and run it) first.")
+    try:
+        t = np.asarray(res.time, dtype=float)
+        total = np.asarray(res.sum_prefixes("B", "D", "I", "H"), dtype=float)
+        lines = [f"Current simulation ({st.session_state.get('int_builder_mode', '?')}), "
+                 f"t = {t[0]:.1f}–{t[-1]:.1f} h."]
+        lines.append(
+            f"Total bacteria (CFU/mL): start {total[0]:.2e}, end {total[-1]:.2e}, "
+            f"nadir {total.min():.2e}, peak {total.max():.2e} "
+            f"({'net decline' if total[-1] < total[0] else 'net growth/regrowth'})."
+        )
+        try:
+            from pbisim import time_to_clearance, time_to_log_reduction
+            thr = st.session_state.get("int_extinction_threshold", 1.0) or 1.0
+            tc = time_to_clearance(res, threshold=thr)
+            t2 = time_to_log_reduction(res, n_logs=2.0)
+            lines.append(
+                f"Time to clearance (<{thr:g}): {('%.1f h' % tc) if tc is not None else 'NOT cleared'}. "
+                f"Time to 2-log reduction: {('%.1f h' % t2) if t2 is not None else 'not reached'}."
+            )
+        except Exception:
+            pass
+        # per-strain final active bacteria + non-WT fraction
+        n = int(getattr(cfg, "n_bacteria", 0) or 0)
+        names = [s.get("name", f"Strain {i}") for i, s in enumerate(st.session_state.get("int_strains", []))]
+        finals = []
+        for i in range(n):
+            try:
+                bi = float(np.asarray(res.get(f"B{i}"))[-1])
+            except Exception:
+                bi = float("nan")
+            finals.append((names[i] if i < len(names) else f"Strain {i}", bi))
+        if finals:
+            lines.append("Final active bacteria per strain: "
+                         + ", ".join(f"{nm} {bi:.2e}" for nm, bi in finals) + ".")
+            tot_active = sum(b for _, b in finals if b == b)
+            if n >= 2 and tot_active > 0:
+                res_frac = sum(b for _, b in finals[1:] if b == b) / tot_active
+                lines.append(f"Non-first-strain fraction of active bacteria at end: {100 * res_frac:.1f}%.")
+        try:
+            p = np.asarray(res.sum_prefixes("P"), dtype=float)
+            lines.append(f"Free phage (PFU/mL): end {p[-1]:.2e}, peak {p.max():.2e}.")
+        except Exception:
+            pass
+        if st.session_state.get("int_immunity_enabled", False):
+            try:
+                imm = np.asarray(res.get("Imm"), dtype=float)
+                lines.append(f"Immune level: end {imm[-1]:.2e}, peak {imm.max():.2e}.")
+            except Exception:
+                pass
+        if st.session_state.get("int_debris_enabled", False):
+            try:
+                od = np.asarray(res.get_od(), dtype=float)
+                lines.append(f"Optical density: end {od[-1]:.3g}, peak {od.max():.3g}.")
+            except Exception:
+                pass
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Could not summarize the results: {e}"
+
+
 # ── Scenario snapshots (Tier 1: full-config save / load / export / import) ─────
 # A "scenario" is everything needed to reproduce a simulation: the builder mode,
 # strains / phages / antibiotics, pairwise adsorption, dosing, nutrient, immune,
@@ -3176,7 +3244,11 @@ elif st.session_state.current_page == "AI Assistant":
         run = None
         try:
             with st.spinner("Claude is thinking..."):
-                run = st.session_state.agent.generate(prompt, execute_code, configure=apply_ai_configuration)
+                run = st.session_state.agent.generate(
+                    prompt, execute_code,
+                    configure=apply_ai_configuration,
+                    summarize=summarize_current_results,
+                )
         except Exception as e:
             st.error(f"❌ AI Assistant Error: {e}")
             st.info("💡 If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
