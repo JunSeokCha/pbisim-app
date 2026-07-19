@@ -653,6 +653,7 @@ def load_preset_to_state(params: dict):
     st.session_state["int_growth_function"] = _gf
     st.session_state["int_track_nutrients"] = _gf in ("monod_growth", "monod_logistic_growth")
     st.session_state["int_death_function"] = params.get("death_function_name", "constant_death")
+    st.session_state["int_density_total_cells"] = params.get("density_signal_uses_total_cells", False)
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
 
@@ -1216,6 +1217,10 @@ def growth_nutrient_kwargs():
         "track_nutrients": nutrient_based,
         "monod_constant": st.session_state.get("int_monod_constant", 0.3),
         "recycle_fraction": st.session_state.get("int_recycle_fraction", 0.0),
+        # density signals (dormancy/resuscitation/death) count active B, or all cell
+        # states (B+I+D+H) when this is on. Forwarded to with_nutrient (Direct) and
+        # to_config (BRG/StrainSet), and captured by the repro recorder automatically.
+        "density_signal_uses_total_cells": st.session_state.get("int_density_total_cells", False),
     }
     if nutrient_based:
         kw["s_in"] = st.session_state.get("int_s_in", 0.0)
@@ -4541,6 +4546,17 @@ elif st.session_state.current_page == "Interactive Simulator":
                  "deplete);  density = crowding d·min(1, ΣB/K). Note: starvation death only separates "
                  "stationary from death phase when nutrients persist at a low plateau (recycling).")
         st.session_state["int_death_function"] = DEATH_SIGNALS[_dth_choice]
+
+        # What "density" counts for ALL density signals (dormancy / resuscitation / death).
+        st.session_state["int_density_total_cells"] = st.checkbox(
+            "Density signals count all cell states (B + I + D + H)",
+            value=bool(st.session_state.get("int_density_total_cells", False)),
+            key="widget_density_total_cells",
+            help="Off (default): density-dependent signals use ACTIVE bacteria only, "
+                 "min(1, ΣB/K). On: they use TOTAL cell density including infected (I), "
+                 "dormant (D) and hibernating (H) cells — so all compartments count toward "
+                 "crowding. Applies to every density / nutrient+density dormancy, "
+                 "resuscitation and death signal.")
 
         st.markdown("---")
         col1, col2 = st.columns(2)
