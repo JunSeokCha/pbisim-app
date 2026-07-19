@@ -92,18 +92,27 @@ def main(argv=None):
                 if not step["success"]:
                     with open(os.path.join(args.dump_dir, f"{case.id}.exec{k}.error.txt"), "w") as fh:
                         fh.write(f"# execution {k} failed:\n{step['error']}\n\n# code was:\n{step['code']}")
-        # ✓ first try · ⟳ self-corrected · ✗ failed
-        flag = "✓" if res.first_ok and res.passed else ("⟳" if res.passed else "✗")
+        # code: ✓ first try · ⟳ self-corrected · ✗ failed ; chat: 💬 answered · ✗ failed
+        if getattr(res, "intent", "code") == "chat":
+            flag = "💬" if res.passed else "✗"
+        else:
+            flag = "✓" if res.first_ok and res.passed else ("⟳" if res.passed else "✗")
         fails = ("  fail: " + ", ".join(res.failed_checks)) if res.failed_checks else ""
-        print(f"[{i:2d}/{len(cases)}] {flag} {case.id:22s} "
-              f"exec={res.attempts} first_ok={str(res.first_ok):5s} {res.latency_s:5.1f}s{fails}")
+        print(f"[{i:2d}/{len(cases)}] {flag} {case.id:22s} [{getattr(res, 'intent', 'code')}] "
+              f"exec={res.attempts} {res.latency_s:5.1f}s{fails}")
 
     summary = summarize(results)
+    _code = [r for r in results if r.intent == "code"]
+    _chat = [r for r in results if r.intent == "chat"]
     print("\n" + "=" * 66)
-    print(f"first-pass success : {summary['first_pass_pct']:5.1f}%  "
-          f"({sum(r.first_ok for r in results)}/{summary['n_cases']})   <- true one-shot")
-    print(f"self-corrected     : {summary['self_corrected_pct']:5.1f}%  "
-          f"(first run failed, fixed in-turn)")
+    print(f"code cases ({summary['n_code']}):")
+    print(f"  first-pass success : {summary['first_pass_pct']:5.1f}%  "
+          f"({sum(r.first_ok for r in _code)}/{summary['n_code']})   <- true one-shot")
+    print(f"  self-corrected     : {summary['self_corrected_pct']:5.1f}%  (first run failed, fixed in-turn)")
+    if _chat:
+        print(f"chat cases ({summary['n_chat']}):")
+        print(f"  answered w/o code  : {summary['chat_pass_pct']:5.1f}%  "
+              f"({sum(r.passed for r in _chat)}/{summary['n_chat']})   <- routing")
     print(f"overall success    : {summary['overall_pct']:5.1f}%  "
           f"({sum(r.passed for r in results)}/{summary['n_cases']})")
     print(f"mean executions    : {summary['mean_attempts']:.2f}")

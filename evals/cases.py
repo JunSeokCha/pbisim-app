@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from evals.checks import (
     runs_ok, has_figure, stdout_contains, stdout_contains_any, code_contains,
-    uses_cfu_sum_prefixes,
+    uses_cfu_sum_prefixes, no_code_run,
 )
 
 
@@ -22,6 +22,7 @@ class EvalCase:
     prompt: str
     checks: list = field(default_factory=list)
     tags: tuple = ()
+    intent: str = "code"   # "code" (writes+runs a sim) | "chat" (answers, no code)
 
 
 CASES = [
@@ -138,6 +139,23 @@ CASES = [
         "phage treatment and plot both.",
         [runs_ok(), has_figure()],
         tags=("core",),
+    ),
+
+    # ── chat / Q&A: the copilot should ANSWER, not run a simulation (Phase 1 routing) ──
+    EvalCase(
+        "q_adsorption",
+        "What is a realistic adsorption rate for a lytic phage, and what are its units?",
+        [no_code_run()], tags=("qa",), intent="chat",
+    ),
+    EvalCase(
+        "q_burst_meaning",
+        "Explain what phage burst size means and give a typical value.",
+        [no_code_run()], tags=("qa",), intent="chat",
+    ),
+    EvalCase(
+        "q_immune_resistance",
+        "Why can phage-resistant bacteria sometimes still be cleared by the host immune system?",
+        [no_code_run()], tags=("qa",), intent="chat",
     ),
 ]
 

@@ -45,6 +45,7 @@ class CaseResult:
     usage: dict = field(default_factory=dict)
     first_ok: bool = True   # did the FIRST execution succeed (the true one-shot analog)
     transcript: tuple = ()  # per-execution {code, success, error, figures}
+    intent: str = "code"    # "code" | "chat" — segments the metrics
 
     @property
     def failed_checks(self):
@@ -85,6 +86,7 @@ def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter
         usage=_usage_dict(getattr(agent, "last_usage", None)),
         first_ok=bool(first_ok),
         transcript=transcript,
+        intent=getattr(case, "intent", "code"),
     )
 
 
@@ -97,11 +99,19 @@ def summarize(results) -> dict:
     in_tok = sum((r.usage.get("input_tokens") or 0) for r in results)
     out_tok = sum((r.usage.get("output_tokens") or 0) for r in results)
     cache_read = sum((r.usage.get("cache_read_input_tokens") or 0) for r in results)
+    # Segment by intent: first-pass/self-corrected only make sense for code cases; chat
+    # cases (Q&A) are scored purely on passing their checks (answered without running code).
+    code = [r for r in results if r.intent == "code"]
+    chat = [r for r in results if r.intent == "chat"]
+    nc = len(code) or 1
     return {
         "n_cases": len(results),
-        "one_shot_pct": 100.0 * sum(r.one_shot for r in results) / n,
-        "first_pass_pct": 100.0 * sum(r.first_ok for r in results) / n,   # first execution succeeded
-        "self_corrected_pct": 100.0 * sum(r.self_corrected for r in results) / n,
+        "n_code": len(code),
+        "n_chat": len(chat),
+        "one_shot_pct": 100.0 * sum(r.one_shot for r in code) / nc,
+        "first_pass_pct": 100.0 * sum(r.first_ok for r in code) / nc,      # code: first execution clean
+        "self_corrected_pct": 100.0 * sum(r.self_corrected for r in code) / nc,
+        "chat_pass_pct": (100.0 * sum(r.passed for r in chat) / len(chat)) if chat else None,
         "overall_pct": 100.0 * sum(r.passed for r in results) / n,
         "mean_attempts": _mean([r.attempts for r in results]),
         "mean_latency_s": _mean([r.latency_s for r in results]),

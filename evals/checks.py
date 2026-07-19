@@ -50,6 +50,16 @@ def stdout_contains_any(substrs):
     return _c
 
 
+def no_code_run():
+    """The assistant answered WITHOUT generating/running a simulation (chat / interpret
+    intent) — i.e. it routed to a text answer, not the code path."""
+    def _c(code, result):
+        ok = not (code or "").strip()
+        return ok, ("" if ok else "expected a text answer, but a simulation was run")
+    _c.__name__ = "no_code_run"
+    return _c
+
+
 def code_contains(substr: str):
     """Generated code contains the literal ``substr``."""
     def _c(code, result):

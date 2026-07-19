@@ -246,3 +246,31 @@ def test_stdout_contains_any():
     r = ExecutionResult(success=True, figures=["f"], stdout="2-log reduction at 3.1 h", error="")
     assert checks.stdout_contains_any(["clear", "reduction"])("c", r)[0] is True
     assert checks.stdout_contains_any(["clear", "nope"])("c", r)[0] is False
+
+
+def test_no_code_run_check():
+    ok_res = ExecutionResult(success=False, figures=[], stdout="", error="")
+    assert checks.no_code_run()("", ok_res)[0] is True
+    assert checks.no_code_run()("x = solve_ode()", ok_res)[0] is False
+
+
+class _ChatFakeAgent:
+    """Fake agent that answers in text with no code (chat/interpret intent)."""
+    last_usage = None
+    def generate(self, prompt, execute, **kw):
+        return AgentRun("A realistic lytic-phage adsorption rate is ~1e-8 mL/PFU/h.",
+                        "", None, False, 0, ())
+
+
+def test_run_case_chat_intent_segments():
+    chat_case = CASES[0].__class__("q", "what's a realistic rate?",
+                                   [checks.no_code_run()], intent="chat")
+    res = run_case(chat_case, _ChatFakeAgent(), execute_code, clock=lambda: 0.0)
+    assert res.passed and res.intent == "chat"
+
+    # summarize keeps code vs chat separate
+    code_r = CaseResult("c", True, True, 1, 1.0, [("runs_ok", True, "")], first_ok=True, intent="code")
+    s = summarize([res, code_r])
+    assert s["n_code"] == 1 and s["n_chat"] == 1
+    assert s["first_pass_pct"] == 100.0          # over the single code case
+    assert s["chat_pass_pct"] == 100.0           # the chat case answered w/o code
