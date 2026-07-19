@@ -79,17 +79,29 @@ _RUN_TOOL = {
 _CONFIGURE_TOOL = {
     "name": "configure_simulator",
     "description": (
-        "Populate the app's Interactive Simulator (Direct/ModelBuilder mode) from a "
-        "structured configuration so the user sees the widgets filled in and can tweak & "
-        "run it. Use for STANDARD setups: strains, phages, antibiotics, a dose schedule, "
-        "and basic nutrient/immunity/dormancy/OD options. Phage arrays are per-phage "
-        "scalars; adsorption_rates is per-strain (length = number of strains, 0 = resistant). "
-        "Do NOT use for BRG genotype lattices, StrainSet mutation graphs, sweeps, or custom "
-        "analysis — use run_pbisim_code for those."
+        "Populate the app's Interactive Simulator from a structured configuration so the "
+        "user sees the widgets filled in and can tweak & run it. Covers ALL THREE builder "
+        "modes — set builder_mode:\n"
+        "- 'direct' (default): an explicit list of strains + phages + antibiotics + doses. "
+        "adsorption_rates is per-strain (length = #strains; 0 = resistant).\n"
+        "- 'strainset': explicitly named strains with a custom mutation_graph "
+        "(from→to→rate edges between strain names).\n"
+        "- 'brg': binary resistance genotypes — ONE base strain (strains[0]) plus phages "
+        "and antibiotics acting as resistance loci; the 2^n genotypes are generated "
+        "automatically. Give each phage adsorption_s (susceptible) / adsorption_r "
+        "(resistant) and each antibiotic emax_s/emax_r/ec50_s/ec50_r; optionally set "
+        "equilibrium_ic + total_bacteria.\n"
+        "Use this whenever the request fits the app (any of the three modes). Only fall "
+        "back to run_pbisim_code for parameter/dose SWEEPS, clinical-trial cohorts, or "
+        "bespoke analysis/plots the Interactive Simulator can't express."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
+            "builder_mode": {
+                "type": "string", "enum": ["direct", "brg", "strainset"],
+                "description": "which Interactive Simulator mode to set up (default 'direct')",
+            },
             "strains": {
                 "type": "array", "minItems": 1,
                 "items": {"type": "object", "properties": {
@@ -101,6 +113,7 @@ _CONFIGURE_TOOL = {
                     "dormancy_rate": {"type": "number"},
                     "resuscitation_rate": {"type": "number"},
                 }, "required": ["name"]},
+                "description": "strain list (direct/strainset); for 'brg', strains[0] is the base strain",
             },
             "phages": {
                 "type": "array",
@@ -112,8 +125,12 @@ _CONFIGURE_TOOL = {
                     "initial_P": {"type": "number", "description": "PFU/mL at t=0"},
                     "adsorption_rates": {
                         "type": "array", "items": {"type": "number"},
-                        "description": "per-strain adsorption (length = #strains); 0 = strain resistant to this phage",
+                        "description": "DIRECT/STRAINSET: per-strain adsorption (length = #strains); 0 = resistant",
                     },
+                    "adsorption_s": {"type": "number", "description": "BRG: adsorption of susceptible genotype"},
+                    "adsorption_r": {"type": "number", "description": "BRG: adsorption of resistant genotype (often 0)"},
+                    "fitness_cost": {"type": "number", "description": "BRG: fitness cost of resistance to this phage"},
+                    "mu": {"type": "number", "description": "BRG: mutation rate to resistance for this phage"},
                 }, "required": ["name"]},
             },
             "antibiotics": {
@@ -122,8 +139,21 @@ _CONFIGURE_TOOL = {
                     "name": {"type": "string"},
                     "emax": {"type": "number"}, "ec50": {"type": "number"},
                     "k_elim": {"type": "number", "description": "elimination rate h^-1"},
+                    "emax_r": {"type": "number", "description": "BRG: Emax on the resistant genotype"},
+                    "ec50_r": {"type": "number", "description": "BRG: EC50 on the resistant genotype"},
+                    "fitness_cost": {"type": "number", "description": "BRG: fitness cost of resistance"},
+                    "mu": {"type": "number", "description": "BRG: mutation rate to resistance"},
                 }, "required": ["name"]},
             },
+            "mutation_graph": {
+                "type": "array",
+                "description": "STRAINSET: strain→strain mutation edges (names must match strains)",
+                "items": {"type": "object", "properties": {
+                    "from": {"type": "string"}, "to": {"type": "string"}, "rate": {"type": "number"},
+                }, "required": ["from", "to", "rate"]},
+            },
+            "equilibrium_ic": {"type": "boolean", "description": "BRG: seed genotype densities from the replicator equilibrium"},
+            "total_bacteria": {"type": "number", "description": "BRG: total CFU/mL for the equilibrium IC"},
             "doses": {
                 "type": "array",
                 "items": {"type": "object", "properties": {
@@ -147,15 +177,16 @@ _CONFIGURE_TOOL = {
 _TOOL_INSTRUCTION = (
     "Choose the right response for the user's request:\n"
     "- QUESTION / CHAT / EXPLAIN / INTERPRET → answer directly in plain text; call NO tool.\n"
-    "- SET UP a standard model the app's Interactive Simulator supports (bacterial strains, "
-    "phages, antibiotics, a dose schedule, and basic nutrient/immunity/dormancy/OD options, "
-    "in Direct/ModelBuilder mode) → call configure_simulator. This populates the app's own "
-    "widgets so the user can see, tweak, and run it (editable + reproducible). Prefer this "
-    "over writing code whenever the request fits the simulator. After configuring, tell the "
-    "user it's ready in the Interactive Simulator.\n"
-    "- Something the simulator CANNOT express (binary-genotype BRG lattices, custom StrainSet "
-    "mutation graphs, parameter/dose SWEEPS, comparing many configurations, or bespoke "
-    "analysis/plots), OR the user explicitly asks to run it now → use run_pbisim_code: write "
+    "- SET UP a model the app's Interactive Simulator supports → call configure_simulator. "
+    "This covers ALL THREE builder modes: 'direct' (explicit strain list), 'strainset' "
+    "(named strains + a custom mutation graph), and 'brg' (binary resistance genotypes from "
+    "a base strain + phage/antibiotic loci). It populates the app's own widgets so the user "
+    "can see, tweak, and run it (editable + reproducible). Prefer this over writing code "
+    "whenever the request fits the simulator. After configuring, tell the user it's ready in "
+    "the Interactive Simulator.\n"
+    "- Something the simulator CANNOT express (parameter/dose SWEEPS, clinical-trial cohorts, "
+    "comparing many configurations at once, or bespoke analysis/plots), OR the user "
+    "explicitly asks to run it now → use run_pbisim_code: write "
     "and verify the code, fix any traceback and re-run (a few attempts). Your LAST "
     "run_pbisim_code call must be the COMPLETE final script that produces the requested plot "
     "(and any printed values) — do not follow a working script with a separate diagnostic-"

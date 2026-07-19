@@ -752,15 +752,51 @@ def configure_summary(config: dict) -> str:
 
 def apply_ai_configuration(config: dict) -> str:
     """Handler for the assistant's ``configure_simulator`` tool: populate the Interactive
-    Simulator (Direct mode) from the model's structured config via load_preset_to_state.
-    Returns a summary for the model, or an ``ERROR ...`` string (which the model reads as
-    a signal to fall back to run_pbisim_code)."""
+    Simulator from the model's structured config via load_preset_to_state, then set the
+    chosen builder mode (Direct / BRG / StrainSet). Returns a summary for the model, or an
+    ``ERROR ...`` string (which the model reads as a signal to fall back to run_pbisim_code)."""
     try:
-        if not config.get("strains"):
+        strains = config.get("strains") or []
+        if not strains:
             return "ERROR: configuration needs at least one strain."
-        load_preset_to_state(config)                       # fills defaults, Direct mode
-        st.session_state["int_builder_mode"] = "Direct (ModelBuilder)"
-        return "Configured the Interactive Simulator (Direct mode): " + configure_summary(config)
+        mode = (config.get("builder_mode") or "direct").lower()
+
+        # Shared entities + globals (this also resets to Direct and clears mode-specific keys).
+        load_preset_to_state(config)
+
+        if mode == "brg":
+            base = strains[0]
+            st.session_state["int_builder_mode"] = "Binary Genotypes (BRG)"
+            st.session_state["int_brg_base_growth"] = base.get("growth_rate", 1.2)
+            st.session_state["int_brg_base_ratio"] = base.get("bacteria_to_resource_ratio", 1e9)
+            _dorm = bool(base.get("dormancy_enabled", False))
+            st.session_state["int_brg_dormancy_enabled"] = _dorm
+            st.session_state["int_brg_dorm_rate"] = base.get("dormancy_rate", 0.001)
+            st.session_state["int_brg_resus_rate"] = base.get("resuscitation_rate", 0.1)
+            st.session_state["int_brg_diff_rate"] = base.get("dormancy_diffusion_rate", 0.05)
+            st.session_state["int_brg_death_rate_B"] = base.get("death_rate_B", 0.0)
+            st.session_state["int_brg_death_rate_D"] = base.get("death_rate_D", 0.0)
+            st.session_state["int_brg_use_eq_ic"] = bool(config.get("equilibrium_ic", False))
+            st.session_state["int_brg_eq_total_B"] = config.get("total_bacteria", 1e7)
+            n_phg, n_abx = len(config.get("phages") or []), len(config.get("antibiotics") or [])
+            summary = (f"Binary Genotypes (BRG): base strain '{base.get('name', 'WT')}' with "
+                       f"{n_phg} phage locus/loci + {n_abx} antibiotic locus/loci "
+                       f"({2 ** (n_phg + n_abx)} genotypes)")
+        elif mode == "strainset":
+            st.session_state["int_builder_mode"] = "Custom Strains & Graph (StrainSet)"
+            edges = [
+                {"from": g.get("from", ""), "to": g.get("to", ""), "rate": g.get("rate", 0.0)}
+                for g in (config.get("mutation_graph") or [])
+                if g.get("from") and g.get("to")
+            ]
+            st.session_state["int_transitions"] = edges
+            summary = (f"Custom Strains (StrainSet): {len(strains)} named strain(s), "
+                       f"{len(edges)} mutation edge(s)")
+        else:  # direct
+            st.session_state["int_builder_mode"] = "Direct (ModelBuilder)"
+            summary = configure_summary(config)
+
+        return f"Configured the Interactive Simulator — {summary}; t_end={config.get('t_end', 48.0)} h."
     except Exception as e:
         return f"ERROR applying configuration: {e}"
 
