@@ -2241,12 +2241,41 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚙️ AI Settings")
 
-    api_key = st.text_input(
-        "Anthropic API Key",
-        value=os.environ.get("ANTHROPIC_API_KEY", ""),
-        type="password",
-        help="Required ONLY for the AI Assistant. Local simulation runs entirely offline.",
-    )
+    # API key — the masked field is a browser "password" input; re-rendering it on every
+    # navigation/rerun makes Chrome repeatedly offer to save/update the password. So once a
+    # key is set we do NOT render the field: we show a compact status + a Change button, and
+    # only render the input when there is no key (or the user clicks Change). No password
+    # field in the DOM during normal use → no repeated Chrome prompt.
+    _env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if "api_key" not in st.session_state:
+        st.session_state.api_key = _env_key
+
+    if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
+        _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
+        _c1, _c2 = st.columns([3, 1])
+        _c1.caption(f"🔑 Anthropic API key set ({_src})")
+        if _c2.button("Change", key="change_api_key", use_container_width=True):
+            st.session_state._editing_api_key = True
+            st.rerun()
+    else:
+        _entered = st.text_input(
+            "Anthropic API Key",
+            value="",
+            type="password",
+            key="api_key_field",
+            help="Required ONLY for the AI Assistant. Local simulation runs entirely offline. "
+                 "Once set, the field is hidden so your browser stops prompting to save it.",
+        )
+        if _entered:
+            st.session_state.api_key = _entered
+            st.session_state._editing_api_key = False
+            st.rerun()
+        if st.session_state.api_key and st.button("Clear key", key="clear_api_key", use_container_width=True):
+            st.session_state.api_key = ""
+            st.session_state._editing_api_key = False
+            st.rerun()
+
+    api_key = st.session_state.api_key
     if api_key:
         if st.session_state.agent.client.api_key != api_key:
             st.session_state.agent.client.api_key = api_key
