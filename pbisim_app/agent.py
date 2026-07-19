@@ -73,14 +73,17 @@ _RUN_TOOL = {
 }
 
 _TOOL_INSTRUCTION = (
-    "You have a run_pbisim_code tool. Always use it to run your simulation code and "
-    "verify it executes without error and produces the requested plot BEFORE giving your "
-    "final answer. If it fails, read the traceback, fix the code, and run it again "
-    "(up to a few attempts). Your LAST run_pbisim_code call must be the COMPLETE final "
-    "script that produces the requested plot (and any printed values) — do not follow a "
-    "working script with a separate diagnostic-only run, or the plot will be lost. "
-    "Only after it succeeds, reply with a concise explanation of the result. Do not paste "
-    "the code in your final message — the app captures it from your last tool call."
+    "You have a run_pbisim_code tool for running simulations.\n"
+    "- If the user is asking a QUESTION or wants to CHAT / EXPLAIN / INTERPRET, answer "
+    "directly in plain text and do NOT call the tool.\n"
+    "- If the user wants to BUILD, RUN, PLOT, SWEEP, or COMPUTE a simulation result, use "
+    "run_pbisim_code to write and verify the code, fixing any traceback and re-running "
+    "(a few attempts). Your LAST run_pbisim_code call must be the COMPLETE final script "
+    "that produces the requested plot (and any printed values) — do not follow a working "
+    "script with a separate diagnostic-only run, or the plot will be lost. After it "
+    "succeeds, reply with a concise explanation. Do not paste the code in your final "
+    "message — the app captures it from your last tool call.\n"
+    "Only simulate when the user is actually asking for a simulation; otherwise just talk."
 )
 
 

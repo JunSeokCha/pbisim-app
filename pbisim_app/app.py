@@ -3067,15 +3067,15 @@ elif st.session_state.current_page == "AI Assistant":
                         st.code(exec_result.error, language="text")
 
     # input
-    if prompt := st.chat_input("Ex: simulate 1 wild-type strain and 1 phage with burst size 50 and adsorption 1e-8..."):
+    if prompt := st.chat_input("Ask a question, or describe a simulation to run (e.g. 'what's a realistic adsorption rate?' or 'simulate 1 strain + 1 phage, burst 50')..."):
         st.chat_message("user").markdown(prompt)
 
-        # Agentic generation: the model writes code, runs it in the sandbox via the
-        # run_pbisim_code tool, and self-corrects within this single turn before
-        # answering. Replaces the old blind-generate + app-level retry loop.
+        # Agentic generation: the model decides whether the request is a question (answer
+        # directly) or a simulation (write + run + self-correct code via run_pbisim_code),
+        # and only runs code when a simulation is actually asked for.
         run = None
         try:
-            with st.spinner("Claude is building and testing the simulation..."):
+            with st.spinner("Claude is thinking..."):
                 run = st.session_state.agent.generate(prompt, execute_code)
         except Exception as e:
             st.error(f"❌ AI Assistant Error: {e}")

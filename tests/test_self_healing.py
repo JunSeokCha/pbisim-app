@@ -102,3 +102,17 @@ def test_generate_recovers_figure_from_earlier_run():
     run = agent.generate("plot it", execute)
     assert run.success is True
     assert len(run.result.figures) == 1   # figure recovered from the earlier run
+
+
+def test_generate_answers_question_without_running_code():
+    """Intent routing (Phase 1): a question the model answers in text — with no tool_use —
+    must return the answer and run NO code (result None, tool_calls 0)."""
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("text", text="A realistic lytic-phage adsorption rate is ~1e-8 mL/PFU/h.")]),
+    ])
+    run = agent.generate("what's a realistic adsorption rate?", _execute)
+    assert run.tool_calls == 0
+    assert run.result is None      # nothing was simulated
+    assert run.code == ""
+    assert "adsorption" in run.narrative.lower()
