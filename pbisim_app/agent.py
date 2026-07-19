@@ -47,7 +47,8 @@ class AgentRun(NamedTuple):
     code: str            # the last code the model executed
     result: object       # executor.ExecutionResult of that code (figures, stdout, error)
     success: bool        # did the final executed code run cleanly
-    tool_calls: int      # number of run_pbisim_code calls (1 = no self-correction)
+    tool_calls: int      # number of run_pbisim_code calls (1 = ran code once)
+    transcript: tuple = ()  # per-run ({code, success, error, figures}); [0] = the FIRST execution
 
 
 # Tool the model uses to run and iterate on its code inside a single turn.
@@ -168,7 +169,7 @@ class SimulationAgent:
             {"type": "text", "text": _TOOL_INSTRUCTION},
         ]
 
-        last_code, last_result, tool_calls = "", None, 0
+        last_code, last_result, tool_calls, transcript = "", None, 0, []
         try:
             for _ in range(max_tool_calls):
                 response = self.client.messages.create(
@@ -183,13 +184,15 @@ class SimulationAgent:
                     narrative = "".join(getattr(b, "text", "") for b in response.content
                                         if getattr(b, "type", None) == "text").strip()
                     ok = bool(last_result and last_result.success)
-                    return AgentRun(narrative, last_code, last_result, ok, tool_calls)
+                    return AgentRun(narrative, last_code, last_result, ok, tool_calls, tuple(transcript))
 
                 tool_results = []
                 for tu in tool_uses:
                     code = (tu.input or {}).get("code", "")
                     result = execute(code) if code else _no_code_execution_result()
                     last_code, last_result, tool_calls = code, result, tool_calls + 1
+                    transcript.append({"code": code, "success": bool(result.success),
+                                       "error": result.error, "figures": len(result.figures)})
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tu.id,
@@ -203,7 +206,7 @@ class SimulationAgent:
             return AgentRun(
                 "Reached the maximum number of code-execution attempts."
                 + ("" if ok else " The last attempt still errored."),
-                last_code, last_result, ok, tool_calls,
+                last_code, last_result, ok, tool_calls, tuple(transcript),
             )
         except Exception:
             # Roll the whole turn back — leaving a partial tool exchange (an assistant

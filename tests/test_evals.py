@@ -98,17 +98,19 @@ class _FakeAgent:
         self.last_usage = None
 
     def generate(self, prompt, execute, max_tool_calls=6):
-        last_code, last_result, n = "", None, 0
+        last_code, last_result, n, transcript = "", None, 0, []
         for _ in range(max_tool_calls):
             code = self._codes[min(self.calls, len(self._codes) - 1)]
             self.calls += 1
             n += 1
             last_code = code
             last_result = execute(code) if code else _fake_no_code()
+            transcript.append({"code": code, "success": bool(last_result.success),
+                               "error": last_result.error, "figures": len(last_result.figures)})
             if last_result.success:
                 break
         ok = bool(last_result and last_result.success)
-        return AgentRun("narrative", last_code, last_result, ok, n)
+        return AgentRun("narrative", last_code, last_result, ok, n, tuple(transcript))
 
 
 def _fake_no_code():
@@ -139,12 +141,15 @@ def _simple_case():
 def test_run_case_one_shot():
     res = run_case(_simple_case(), _FakeAgent([_GOOD_CODE]), execute_code, clock=lambda: 0.0)
     assert res.passed and res.one_shot and res.attempts == 1
+    assert res.first_ok and not res.self_corrected
 
 
 def test_run_case_recovers_after_retry():
     agent = _FakeAgent([_BAD_CODE, _GOOD_CODE])   # fails once, then fixes it
     res = run_case(_simple_case(), agent, execute_code, max_retries=3, clock=lambda: 0.0)
     assert res.passed and not res.one_shot and res.attempts == 2
+    # the true one-shot metric: first execution failed, model self-corrected
+    assert res.first_ok is False and res.self_corrected is True
 
 
 def test_run_case_exhausts_retries():
@@ -162,13 +167,15 @@ def test_run_case_no_code():
 def test_summarize():
     rows = [("runs_ok", True, "")]
     results = [
-        CaseResult("a", True, True, 1, 2.0, rows),
-        CaseResult("b", True, False, 2, 4.0, rows),
-        CaseResult("c", False, False, 4, 6.0, rows),
+        CaseResult("a", True, True, 1, 2.0, rows, first_ok=True),       # first try
+        CaseResult("b", True, False, 2, 4.0, rows, first_ok=False),     # self-corrected
+        CaseResult("c", False, False, 4, 6.0, rows, first_ok=False),    # failed
     ]
     s = summarize(results)
     assert s["n_cases"] == 3
     assert round(s["one_shot_pct"], 1) == 33.3
+    assert round(s["first_pass_pct"], 1) == 33.3      # only "a" ran clean first
+    assert round(s["self_corrected_pct"], 1) == 33.3  # only "b" recovered
     assert round(s["overall_pct"], 1) == 66.7
     assert s["mean_attempts"] == (1 + 2 + 4) / 3
 
@@ -219,6 +226,7 @@ def test_generate_tool_loop_self_corrects():
     assert run.tool_calls == 2          # ran code twice (self-corrected once)
     assert "sum_prefixes" in run.code   # kept the good code
     assert "result" in run.narrative.lower()
+    assert run.transcript[0]["success"] is False and run.transcript[1]["success"] is True
 
 
 def test_generate_respects_tool_budget():

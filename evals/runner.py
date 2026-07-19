@@ -36,17 +36,24 @@ def _usage_dict(usage):
 class CaseResult:
     id: str
     passed: bool
-    one_shot: bool          # passed AND on the first attempt
-    attempts: int           # 1 = no retries
+    one_shot: bool          # passed AND the model ran code exactly once (tool_calls==1)
+    attempts: int           # number of code executions (tool_calls)
     latency_s: float
     check_rows: list        # list of (name, ok, msg)
     code: str = ""
     error: str = ""
     usage: dict = field(default_factory=dict)
+    first_ok: bool = True   # did the FIRST execution succeed (the true one-shot analog)
+    transcript: tuple = ()  # per-execution {code, success, error, figures}
 
     @property
     def failed_checks(self):
         return [name for name, ok, _ in self.check_rows if not ok]
+
+    @property
+    def self_corrected(self):
+        """The model's first execution failed but it fixed it in-turn."""
+        return self.passed and not self.first_ok
 
 
 def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter) -> CaseResult:
@@ -64,6 +71,8 @@ def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter
     result = run.result if run.result is not None else _no_code_result()
     rows, passed = run_checks(case.checks, run.code, result)
     attempts = max(1, run.tool_calls)
+    transcript = getattr(run, "transcript", ()) or ()
+    first_ok = transcript[0]["success"] if transcript else result.success
     return CaseResult(
         id=case.id,
         passed=passed,
@@ -74,6 +83,8 @@ def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter
         code=run.code,
         error=result.error,
         usage=_usage_dict(getattr(agent, "last_usage", None)),
+        first_ok=bool(first_ok),
+        transcript=transcript,
     )
 
 
@@ -89,6 +100,8 @@ def summarize(results) -> dict:
     return {
         "n_cases": len(results),
         "one_shot_pct": 100.0 * sum(r.one_shot for r in results) / n,
+        "first_pass_pct": 100.0 * sum(r.first_ok for r in results) / n,   # first execution succeeded
+        "self_corrected_pct": 100.0 * sum(r.self_corrected for r in results) / n,
         "overall_pct": 100.0 * sum(r.passed for r in results) / n,
         "mean_attempts": _mean([r.attempts for r in results]),
         "mean_latency_s": _mean([r.latency_s for r in results]),

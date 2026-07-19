@@ -50,6 +50,7 @@ def test_generate_self_corrects_within_one_turn():
     # user, assistant(tool_use), tool_result, assistant(tool_use), tool_result, assistant(text)
     assert len(agent.history) == 6
     assert agent.history[0] == {"role": "user", "content": "simulate something"}
+    assert run.transcript[0]["success"] is False and run.transcript[1]["success"] is True
 
 
 def test_generate_respects_tool_budget():

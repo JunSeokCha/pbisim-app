@@ -82,29 +82,35 @@ def main(argv=None):
         results.append(res)
         plt.close("all")  # release figures produced during execution
         if args.dump_dir:
+            # Full per-execution transcript, so we can see WHY a case ran code twice
+            # (a real first-attempt error vs. the model voluntarily re-running).
             with open(os.path.join(args.dump_dir, f"{case.id}.py"), "w") as fh:
-                fh.write(f"# case: {case.id}  passed={res.passed}  attempts={res.attempts}\n")
-                fh.write(f"# prompt: {case.prompt}\n")
+                fh.write(f"# case: {case.id}  passed={res.passed}  first_ok={res.first_ok}  "
+                         f"executions={res.attempts}\n# prompt: {case.prompt}\n")
                 fh.write(f"# failed checks: {res.failed_checks}\n\n{res.code}\n")
-            if res.error:
-                with open(os.path.join(args.dump_dir, f"{case.id}.error.txt"), "w") as fh:
-                    fh.write(res.error)
-        flag = "✓" if res.passed else ("~" if res.one_shot else "✗")
+            for k, step in enumerate(res.transcript, 1):
+                if not step["success"]:
+                    with open(os.path.join(args.dump_dir, f"{case.id}.exec{k}.error.txt"), "w") as fh:
+                        fh.write(f"# execution {k} failed:\n{step['error']}\n\n# code was:\n{step['code']}")
+        # ✓ first try · ⟳ self-corrected · ✗ failed
+        flag = "✓" if res.first_ok and res.passed else ("⟳" if res.passed else "✗")
         fails = ("  fail: " + ", ".join(res.failed_checks)) if res.failed_checks else ""
         print(f"[{i:2d}/{len(cases)}] {flag} {case.id:22s} "
-              f"attempts={res.attempts} {res.latency_s:5.1f}s{fails}")
+              f"exec={res.attempts} first_ok={str(res.first_ok):5s} {res.latency_s:5.1f}s{fails}")
 
     summary = summarize(results)
-    print("\n" + "=" * 60)
-    print(f"one-shot success : {summary['one_shot_pct']:5.1f}%  "
-          f"({sum(r.one_shot for r in results)}/{summary['n_cases']})")
-    print(f"overall success  : {summary['overall_pct']:5.1f}%  "
+    print("\n" + "=" * 66)
+    print(f"first-pass success : {summary['first_pass_pct']:5.1f}%  "
+          f"({sum(r.first_ok for r in results)}/{summary['n_cases']})   <- true one-shot")
+    print(f"self-corrected     : {summary['self_corrected_pct']:5.1f}%  "
+          f"(first run failed, fixed in-turn)")
+    print(f"overall success    : {summary['overall_pct']:5.1f}%  "
           f"({sum(r.passed for r in results)}/{summary['n_cases']})")
-    print(f"mean attempts    : {summary['mean_attempts']:.2f}")
-    print(f"mean latency     : {summary['mean_latency_s']:.1f}s")
-    print(f"tokens (in/out)  : {summary['total_input_tokens']}/{summary['total_output_tokens']} "
+    print(f"mean executions    : {summary['mean_attempts']:.2f}")
+    print(f"mean latency       : {summary['mean_latency_s']:.1f}s")
+    print(f"tokens (in/out)    : {summary['total_input_tokens']}/{summary['total_output_tokens']} "
           f"(cache-read {summary['total_cache_read_tokens']})")
-    print("=" * 60)
+    print("=" * 66)
 
     if args.json_path:
         payload = {
@@ -112,6 +118,7 @@ def main(argv=None):
             "summary": summary,
             "cases": [
                 {"id": r.id, "passed": r.passed, "one_shot": r.one_shot,
+                 "first_ok": r.first_ok, "self_corrected": r.self_corrected,
                  "attempts": r.attempts, "latency_s": r.latency_s,
                  "failed_checks": r.failed_checks, "usage": r.usage}
                 for r in results
