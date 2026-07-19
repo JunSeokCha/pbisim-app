@@ -3046,7 +3046,7 @@ elif st.session_state.current_page == "AI Assistant":
             exec_result, agent_resp = val
             with st.chat_message("assistant"):
                 st.markdown(agent_resp.narrative)
-                if agent_resp.assumptions and show_assumptions:
+                if getattr(agent_resp, "assumptions", "") and show_assumptions:
                     with st.expander("👁️ Model Assumptions"):
                         st.markdown(agent_resp.assumptions)
                 if agent_resp.code and show_code:
@@ -3070,55 +3070,27 @@ elif st.session_state.current_page == "AI Assistant":
     if prompt := st.chat_input("Ex: simulate 1 wild-type strain and 1 phage with burst size 50 and adsorption 1e-8..."):
         st.chat_message("user").markdown(prompt)
 
-        # Call agent
-        agent_resp = None
-        initial_history_len = len(st.session_state.agent.history)
+        # Agentic generation: the model writes code, runs it in the sandbox via the
+        # run_pbisim_code tool, and self-corrects within this single turn before
+        # answering. Replaces the old blind-generate + app-level retry loop.
+        run = None
         try:
-            with st.spinner("Claude is thinking..."):
-                agent_resp = st.session_state.agent.ask(prompt)
+            with st.spinner("Claude is building and testing the simulation..."):
+                run = st.session_state.agent.generate(prompt, execute_code)
         except Exception as e:
             st.error(f"❌ AI Assistant Error: {e}")
             st.info("💡 If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
 
-        if agent_resp is not None:
-            exec_result = None
-            if agent_resp.code:
-                with st.spinner("Executing simulation..."):
-                    exec_result = execute_code(agent_resp.code)
-
-                # Self-healing loop
-                max_retries = 3
-                retry_count = 0
-                while not exec_result.success and retry_count < max_retries:
-                    retry_count += 1
-                    with st.spinner(f"Code execution failed. Attempting self-healing (attempt {retry_count}/{max_retries})..."):
-                        healing_prompt = (
-                            f"The generated code failed to execute with the following error:\n"
-                            f"```text\n{exec_result.error}\n```\n"
-                            f"Please correct the code to resolve this error. Ensure you only output the corrected Python code block and necessary narrative/assumptions."
-                        )
-                        try:
-                            agent_resp = st.session_state.agent.ask(healing_prompt)
-                            exec_result = execute_code(agent_resp.code)
-                        except Exception as e:
-                            st.warning(f"Self-healing attempt {retry_count} failed to query the agent: {e}")
-                            break
-
-                # Clean up history if execution failed
-                if not exec_result.success:
-                    del st.session_state.agent.history[initial_history_len:]
-
-            # Render response
+        if run is not None:
+            exec_result = run.result
             with st.chat_message("assistant"):
-                st.markdown(agent_resp.narrative)
-                if agent_resp.assumptions and show_assumptions:
-                    with st.expander("👁️ Model Assumptions"):
-                        st.markdown(agent_resp.assumptions)
-                if agent_resp.code and show_code:
-                    with st.expander("🐍 Generated python code"):
-                        st.code(agent_resp.code, language="python")
+                st.markdown(run.narrative or "_(no explanation returned)_")
+                if run.code and show_code:
+                    _n = run.tool_calls
+                    with st.expander(f"🐍 Generated python code · {_n} execution{'s' if _n != 1 else ''}"):
+                        st.code(run.code, language="python")
 
-                if exec_result:
+                if exec_result is not None:
                     if exec_result.success:
                         for fig in exec_result.figures:
                             st.pyplot(fig)
@@ -3127,10 +3099,10 @@ elif st.session_state.current_page == "AI Assistant":
                             with st.expander("📄 Print outputs"):
                                 st.text(exec_result.stdout)
                     else:
-                        st.error("Execution failed:")
-                        st.code(exec_result.error, language="text")
+                        st.error("The code still failed after self-correction:")
+                        st.code(exec_result.error or "", language="text")
 
-            st.session_state.history.append(("assistant", (exec_result, agent_resp)))
+            st.session_state.history.append(("assistant", (exec_result, run)))
 
 
 

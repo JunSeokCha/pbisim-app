@@ -35,6 +35,52 @@ class AgentResponse(NamedTuple):
     raw_text: str        # full model response (for debugging)
 
 
+class AgentRun(NamedTuple):
+    """Result of an agentic (tool-using) generation.
+
+    Unlike AgentResponse (single blind generation), this is produced by the model
+    running its own code via the ``run_pbisim_code`` tool and correcting itself within
+    one turn. ``result`` is the ExecutionResult of the last code the model ran (holds
+    the figures/stdout to display); ``tool_calls`` counts how many times it ran code.
+    """
+    narrative: str       # the model's final explanation (after the code worked)
+    code: str            # the last code the model executed
+    result: object       # executor.ExecutionResult of that code (figures, stdout, error)
+    success: bool        # did the final executed code run cleanly
+    tool_calls: int      # number of run_pbisim_code calls (1 = no self-correction)
+
+
+# Tool the model uses to run and iterate on its code inside a single turn.
+_RUN_TOOL = {
+    "name": "run_pbisim_code",
+    "description": (
+        "Execute Python code in the pbisim sandbox and return its stdout, the number of "
+        "matplotlib figures it created, and the full traceback if it raised. Use this to "
+        "TEST and DEBUG your simulation code before answering: call it, read the result, "
+        "and if it errored or produced no figure, fix the code and call it again. The "
+        "sandbox already has the full pbisim API, numpy (np) and matplotlib (plt) loaded. "
+        "When the code runs cleanly and produces the requested plot, stop calling the tool "
+        "and give your final plain-English explanation."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "Complete, self-contained pbisim Python code."}
+        },
+        "required": ["code"],
+    },
+}
+
+_TOOL_INSTRUCTION = (
+    "You have a run_pbisim_code tool. Always use it to run your simulation code and "
+    "verify it executes without error and produces the requested plot BEFORE giving your "
+    "final answer. If it fails, read the traceback, fix the code, and run it again "
+    "(up to a few attempts). Only after it succeeds, reply with a concise explanation of "
+    "the result. Do not paste the code in your final message — the app captures it from "
+    "your last tool call."
+)
+
+
 class SimulationAgent:
     """
     Wraps the Claude API to translate natural-language queries into
@@ -106,9 +152,88 @@ class SimulationAgent:
 
         return _parse_response(raw_text)
 
+    def generate(self, user_message: str, execute, max_tool_calls: int = 6) -> AgentRun:
+        """Agentic generation: the model writes code, runs it via the ``run_pbisim_code``
+        tool (``execute`` — typically ``executor.execute_code``), reads the result, and
+        self-corrects within this single turn until the code runs and plots, then gives a
+        final explanation. Returns an :class:`AgentRun` with the last executed code, its
+        ExecutionResult (figures/stdout), and how many times it ran code.
+
+        ``execute`` maps ``code:str -> ExecutionResult`` (``.success/.figures/.stdout/.error``).
+        """
+        _entry_len = len(self.history)   # roll back to here if this turn fails
+        self.history.append({"role": "user", "content": user_message})
+        system = [
+            {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": _TOOL_INSTRUCTION},
+        ]
+
+        last_code, last_result, tool_calls = "", None, 0
+        try:
+            for _ in range(max_tool_calls):
+                response = self.client.messages.create(
+                    model=self.model, max_tokens=self.max_tokens,
+                    system=system, tools=[_RUN_TOOL], messages=self.history,
+                )
+                self.last_usage = getattr(response, "usage", None)
+                self.history.append({"role": "assistant", "content": response.content})
+
+                tool_uses = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
+                if not tool_uses:
+                    narrative = "".join(getattr(b, "text", "") for b in response.content
+                                        if getattr(b, "type", None) == "text").strip()
+                    ok = bool(last_result and last_result.success)
+                    return AgentRun(narrative, last_code, last_result, ok, tool_calls)
+
+                tool_results = []
+                for tu in tool_uses:
+                    code = (tu.input or {}).get("code", "")
+                    result = execute(code) if code else _no_code_execution_result()
+                    last_code, last_result, tool_calls = code, result, tool_calls + 1
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": _format_tool_result(result),
+                        "is_error": not result.success,
+                    })
+                self.history.append({"role": "user", "content": tool_results})
+
+            # Ran out of tool budget — return the best (last) attempt.
+            ok = bool(last_result and last_result.success)
+            return AgentRun(
+                "Reached the maximum number of code-execution attempts."
+                + ("" if ok else " The last attempt still errored."),
+                last_code, last_result, ok, tool_calls,
+            )
+        except Exception:
+            # Roll the whole turn back — leaving a partial tool exchange (an assistant
+            # tool_use with no matching tool_result) would break the next API call.
+            del self.history[_entry_len:]
+            raise
+
     def reset(self) -> None:
         """Clear conversation history (start a new simulation session)."""
         self.history.clear()
+
+
+def _no_code_execution_result():
+    from pbisim_app.executor import ExecutionResult
+    return ExecutionResult(success=False, figures=[], stdout="",
+                           error="the tool call contained no code")
+
+
+def _format_tool_result(result) -> str:
+    """Compact textual feedback the model reads after running code."""
+    parts = [f"figures_created: {len(result.figures)}"]
+    out = (result.stdout or "").strip()
+    if out:
+        parts.append("stdout:\n" + out[:2000])
+    if result.success:
+        parts.append("status: SUCCESS")
+    else:
+        err = (result.error or "").strip()
+        parts.append("status: ERROR (fix the code and run it again)\n" + err[-2500:])
+    return "\n".join(parts)
 
 
 # Any fenced block: captures an optional language tag and the body.

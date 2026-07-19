@@ -14,14 +14,6 @@ from dataclasses import dataclass, field
 
 from evals.checks import run_checks
 
-# Mirrors the self-healing prompt in app.py so the harness measures the real loop.
-HEALING_PROMPT = (
-    "The generated code failed to execute with the following error:\n"
-    "```text\n{error}\n```\n"
-    "Please correct the code to resolve this error. Ensure you only output the "
-    "corrected Python code block and necessary narrative/assumptions."
-)
-
 
 def _no_code_result():
     from pbisim_app.executor import ExecutionResult
@@ -58,21 +50,20 @@ class CaseResult:
 
 
 def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter) -> CaseResult:
-    """Run one EvalCase end-to-end and score it. ``agent`` needs an ``.ask(str)`` returning
-    an object with ``.code``; ``execute`` maps code → ExecutionResult-like object."""
+    """Run one EvalCase through the agent's tool-use loop and score it.
+
+    ``agent.generate(prompt, execute, max_tool_calls)`` runs the code-and-self-correct
+    loop and returns an AgentRun (``.code``, ``.result``, ``.tool_calls``). ``attempts``
+    is the number of code executions (1 = solved without self-correction). ``max_retries``
+    maps to ``max_tool_calls = max_retries + 1`` to match the old loop's budget.
+    """
     t0 = clock()
-    resp = agent.ask(case.prompt)
-    result = execute(resp.code) if getattr(resp, "code", "") else _no_code_result()
-
-    retries = 0
-    while not result.success and retries < max_retries:
-        retries += 1
-        resp = agent.ask(HEALING_PROMPT.format(error=result.error))
-        result = execute(resp.code) if getattr(resp, "code", "") else _no_code_result()
-
+    run = agent.generate(case.prompt, execute, max_tool_calls=max_retries + 1)
     latency = clock() - t0
-    rows, passed = run_checks(case.checks, getattr(resp, "code", ""), result)
-    attempts = 1 + retries
+
+    result = run.result if run.result is not None else _no_code_result()
+    rows, passed = run_checks(case.checks, run.code, result)
+    attempts = max(1, run.tool_calls)
     return CaseResult(
         id=case.id,
         passed=passed,
@@ -80,7 +71,7 @@ def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter
         attempts=attempts,
         latency_s=latency,
         check_rows=rows,
-        code=getattr(resp, "code", ""),
+        code=run.code,
         error=result.error,
         usage=_usage_dict(getattr(agent, "last_usage", None)),
     )

@@ -1,91 +1,84 @@
-"""Unit tests for the self-healing execution loop and history rollback logic."""
+"""Tests for the agentic self-correction loop (SimulationAgent.generate).
+
+The old app-level "self-healing" retry loop was replaced by an in-turn tool-use loop:
+the model runs its code via the run_pbisim_code tool, sees the traceback, and fixes it
+within a single turn. These tests mock the Claude client (no API) and drive that loop.
+"""
 
 import pytest
 from unittest.mock import MagicMock
+
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import ExecutionResult
 
 
-def test_self_healing_logic_success_after_retry():
-    """Test that if code execution fails initially but succeeds after a retry, the history is retained."""
+def _blk(btype, text=None, id=None, inp=None):
+    b = MagicMock()
+    b.type, b.text, b.id, b.input = btype, text, id, inp
+    return b
+
+
+def _resp(content):
+    r = MagicMock()
+    r.content = content
+    r.usage = None
+    return r
+
+
+def _execute(code):
+    """Fake sandbox: code containing GOOD succeeds, anything else raises."""
+    if "GOOD" in code:
+        return ExecutionResult(success=True, figures=["fig"], stdout="ok", error="")
+    return ExecutionResult(success=False, figures=[], stdout="", error="Boom traceback")
+
+
+def test_generate_self_corrects_within_one_turn():
+    """A failing first attempt is fixed after the model sees the traceback; generate
+    returns the working code + a full, well-formed history for the next turn."""
     agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="t1", inp={"code": "BAD"})]),
+        _resp([_blk("tool_use", id="t2", inp={"code": "GOOD"})]),
+        _resp([_blk("text", text="Here is the result.")]),
+    ])
 
-    mock_resp1 = MagicMock()
-    mock_resp1.content = [MagicMock(text="```python\ncode1\n```\nNarrative 1\nAssumptions:\n- test")]
+    run = agent.generate("simulate something", _execute)
 
-    mock_resp2 = MagicMock()
-    mock_resp2.content = [MagicMock(text="```python\ncode2\n```\nNarrative 2\nAssumptions:\n- test")]
-
-    agent.client.messages.create = MagicMock(side_effect=[mock_resp1, mock_resp2])
-
-    initial_history_len = len(agent.history)
-
-    # 1. Initial ask
-    agent_resp = agent.ask("initial prompt")
-    assert len(agent.history) == 2
-    assert agent.history[0]["content"] == "initial prompt"
-
-    # Mock execution result: first fails, second succeeds
-    exec_results = [
-        ExecutionResult(success=False, figures=[], stdout="", error="SyntaxError"),
-        ExecutionResult(success=True, figures=[], stdout="OK", error="")
-    ]
-
-    exec_idx = 0
-    exec_result = exec_results[exec_idx]
-    exec_idx += 1
-
-    max_retries = 3
-    retry_count = 0
-    while not exec_result.success and retry_count < max_retries:
-        retry_count += 1
-        healing_prompt = f"Failed with {exec_result.error}"
-        agent_resp = agent.ask(healing_prompt)
-        exec_result = exec_results[exec_idx]
-        exec_idx += 1
-
-    if not exec_result.success:
-        del agent.history[initial_history_len:]
-
-    assert retry_count == 1
-    assert exec_result.success
-    # History contains: initial user, initial assistant, healing user, healing assistant
-    assert len(agent.history) == 4
-    assert agent.history[2]["content"] == "Failed with SyntaxError"
+    assert run.success is True
+    assert run.tool_calls == 2          # ran once, corrected, ran again
+    assert run.code == "GOOD"
+    # user, assistant(tool_use), tool_result, assistant(tool_use), tool_result, assistant(text)
+    assert len(agent.history) == 6
+    assert agent.history[0] == {"role": "user", "content": "simulate something"}
 
 
-def test_self_healing_logic_all_fail_rollback():
-    """Test that if code execution fails even after all retries, the history is rolled back to clean."""
+def test_generate_respects_tool_budget():
+    """If the model never fixes the code, generate stops at max_tool_calls (no infinite
+    loop) and reports the failing result."""
     agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="t1", inp={"code": "BAD"})]),
+        _resp([_blk("tool_use", id="t2", inp={"code": "BAD"})]),
+    ])
+    run = agent.generate("simulate", _execute, max_tool_calls=2)
+    assert run.success is False
+    assert run.tool_calls == 2
 
-    # Mock client to return responses for 4 calls (1 initial + 3 retries)
-    mock_responses = []
-    for i in range(4):
-        resp = MagicMock()
-        resp.content = [MagicMock(text=f"```python\ncode{i}\n```\nNarrative {i}\nAssumptions:\n- test")]
-        mock_responses.append(resp)
 
-    agent.client.messages.create = MagicMock(side_effect=mock_responses)
+def test_generate_rolls_back_history_on_api_error():
+    """An exception mid-turn must leave history exactly as it was before the turn —
+    never a dangling tool_use without its tool_result."""
+    agent = SimulationAgent(api_key="mock-key")
+    agent.history.append({"role": "user", "content": "earlier turn"})
+    agent.history.append({"role": "assistant", "content": "earlier reply"})
+    before = list(agent.history)
 
-    initial_history_len = len(agent.history)
+    # Fails on the 2nd API call — after a tool_use/tool_result pair is already in history.
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="t1", inp={"code": "BAD"})]),
+        RuntimeError("api down"),
+    ])
+    with pytest.raises(RuntimeError):
+        agent.generate("new prompt", _execute)
 
-    # 1. Initial ask
-    agent_resp = agent.ask("initial prompt")
-
-    # All execution results fail
-    exec_result = ExecutionResult(success=False, figures=[], stdout="", error="RuntimeError")
-
-    max_retries = 3
-    retry_count = 0
-    while not exec_result.success and retry_count < max_retries:
-        retry_count += 1
-        healing_prompt = f"Failed with {exec_result.error}"
-        agent_resp = agent.ask(healing_prompt)
-        exec_result = ExecutionResult(success=False, figures=[], stdout="", error="RuntimeError")
-
-    if not exec_result.success:
-        del agent.history[initial_history_len:]
-
-    # History should be rolled back to its initial length (0)
-    assert len(agent.history) == initial_history_len
-    assert len(agent.history) == 0
+    assert agent.history == before   # whole turn rolled back

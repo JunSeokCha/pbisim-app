@@ -86,22 +86,33 @@ def test_cases_wellformed():
 
 
 # ── run_case loop, driven by a fake agent (no API) ──────────────────────────────
-class _Resp:
-    def __init__(self, code):
-        self.code = code
+from pbisim_app.agent import AgentRun
 
 
 class _FakeAgent:
-    """Returns the queued code strings in order (one per .ask call)."""
+    """Simulates SimulationAgent.generate's tool loop offline: runs the queued code
+    strings (repeating the last one) until one succeeds or the tool budget is spent."""
     def __init__(self, codes):
         self._codes = list(codes)
         self.calls = 0
         self.last_usage = None
 
-    def ask(self, prompt):
-        code = self._codes[min(self.calls, len(self._codes) - 1)]
-        self.calls += 1
-        return _Resp(code)
+    def generate(self, prompt, execute, max_tool_calls=6):
+        last_code, last_result, n = "", None, 0
+        for _ in range(max_tool_calls):
+            code = self._codes[min(self.calls, len(self._codes) - 1)]
+            self.calls += 1
+            n += 1
+            last_code = code
+            last_result = execute(code) if code else _fake_no_code()
+            if last_result.success:
+                break
+        ok = bool(last_result and last_result.success)
+        return AgentRun("narrative", last_code, last_result, ok, n)
+
+
+def _fake_no_code():
+    return ExecutionResult(success=False, figures=[], stdout="", error="no code")
 
 
 _GOOD_CODE = (
@@ -160,3 +171,64 @@ def test_summarize():
     assert round(s["one_shot_pct"], 1) == 33.3
     assert round(s["overall_pct"], 1) == 66.7
     assert s["mean_attempts"] == (1 + 2 + 4) / 3
+
+
+# ── the REAL agent.generate tool loop, with a mocked Claude client (no API) ──
+
+from pbisim_app.agent import SimulationAgent
+
+
+class _Blk:
+    def __init__(self, type, text=None, id=None, inp=None):
+        self.type, self.text, self.id, self.input = type, text, id, inp
+
+
+class _MsgResp:
+    def __init__(self, content):
+        self.content = content
+        self.usage = None
+
+
+class _FakeMessages:
+    def __init__(self, responses):
+        self._responses = responses
+        self.calls = 0
+
+    def create(self, **kw):
+        r = self._responses[self.calls]
+        self.calls += 1
+        return r
+
+
+class _FakeClient:
+    def __init__(self, responses):
+        self.messages = _FakeMessages(responses)
+
+
+def test_generate_tool_loop_self_corrects():
+    """generate() must run tool code, feed the traceback back, self-correct, and return
+    the working code + its result — all within one turn."""
+    agent = SimulationAgent(api_key="x")
+    agent.client = _FakeClient([
+        _MsgResp([_Blk("tool_use", id="t1", inp={"code": _BAD_CODE})]),    # first: fails
+        _MsgResp([_Blk("tool_use", id="t2", inp={"code": _GOOD_CODE})]),   # fixed after seeing error
+        _MsgResp([_Blk("text", text="Here is the simulation result.")]),   # final answer, no tool
+    ])
+    run = agent.generate("simulate something", execute_code)
+    assert run.success is True
+    assert run.tool_calls == 2          # ran code twice (self-corrected once)
+    assert "sum_prefixes" in run.code   # kept the good code
+    assert "result" in run.narrative.lower()
+
+
+def test_generate_respects_tool_budget():
+    """If the model never fixes the code, generate stops at max_tool_calls and reports
+    the failing result (no infinite loop)."""
+    agent = SimulationAgent(api_key="x")
+    agent.client = _FakeClient([
+        _MsgResp([_Blk("tool_use", id="t1", inp={"code": _BAD_CODE})]),
+        _MsgResp([_Blk("tool_use", id="t2", inp={"code": _BAD_CODE})]),
+    ])
+    run = agent.generate("simulate", execute_code, max_tool_calls=2)
+    assert run.success is False
+    assert run.tool_calls == 2
