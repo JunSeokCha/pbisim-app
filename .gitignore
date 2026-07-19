@@ -9,3 +9,11 @@ venv/
 *.log
 .pytest_cache/
 .streamlit/secrets.toml
+.ipynb_checkpoints/
+
+# Local eval-harness runs and scratch artifacts (not part of the repo)
+eval_out*/
+after_*.json
+phase*.json
+*.png
+*.pkl
