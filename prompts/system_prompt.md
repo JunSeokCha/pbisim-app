@@ -36,13 +36,13 @@ builder.with_growth_rates([1.0, 0.9])             # strain 0: 1.0 h⁻¹, strain
 
 ### `.with_phage_params(...)`
 ```python
-# All arrays must have shape (n_bacteria, n_phages)
-# adsorption_rates[strain_i, phage_j] — set to 0 for resistant strains
+# adsorption_rates, burst_sizes, latent_periods are PER (strain, phage) PAIR — shape (n_bacteria, n_phages).
+# phage_decay_rates is PER PHAGE — shape (n_phages,), NOT (n_bacteria, n_phages). This is the #1 shape mistake.
 builder.with_phage_params(
-    adsorption_rates = np.array([[1e-8],  [0.0]]),   # shape (2,1): strain 0 susceptible, strain 1 resistant
-    burst_sizes      = np.array([[100],   [0]]),      # phage progeny per lysis event
-    latent_periods   = np.array([[0.5],   [0.5]]),    # hours; irrelevant if adsorption=0
-    phage_decay_rates= np.array([[0.02],  [0.02]]),   # optional: h⁻¹ phage degradation
+    adsorption_rates = np.array([[1e-8],  [0.0]]),   # (n_bacteria, n_phages): strain 0 susceptible, strain 1 resistant (0)
+    burst_sizes      = np.array([[100],   [100]]),   # (n_bacteria, n_phages): phage progeny per lysis event
+    latent_periods   = np.array([[0.5],   [0.5]]),   # (n_bacteria, n_phages): hours; irrelevant where adsorption=0
+    phage_decay_rates= np.array([0.02]),             # (n_phages,) — ONE value per phage, regardless of n_bacteria
 )
 ```
 
@@ -96,6 +96,8 @@ model = PBIModel(
 )
 ```
 
+- `initial_B`, `initial_P`, `initial_S` are all **REQUIRED positional/keyword args** — always pass them.
+- **Antibiotic-only or any model with no phages: still pass `initial_P=np.array([])`** (an empty array), NOT omit it. Omitting it raises `PBIModel.__init__() missing 1 required positional argument: 'initial_P'`.
 - `initial_S=1.0` is the default (nutrient replete).
 - "moderately nutrient scarce at 20%" → `initial_S=0.2`
 

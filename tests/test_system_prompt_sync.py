@@ -136,3 +136,29 @@ def test_strainset_to_config_required_args():
     for name in ("n_latent", "n_depth", "phage_decay_rates", "imm_decay_rate",
                  "imm_stim50", "imm_kill50", "monod_constant", "recycle_fraction"):
         assert name in params, f"StrainSet.to_config lost parameter '{name}' (see §18)"
+
+
+# ── 7. §2/§3 shape contracts the model kept getting wrong (eval-driven) ────────
+
+def test_with_phage_params_decay_is_per_phage():
+    """§2: phage_decay_rates has shape (n_phages,), NOT (n_bacteria, n_phages).
+    The example teaches this; guard that the documented shape actually builds."""
+    import numpy as np
+    from pbisim.builder import ModelBuilder
+    (ModelBuilder(n_bacteria=2, n_phages=1)
+        .with_growth_rates([1.2, 1.1])
+        .with_phage_params(
+            adsorption_rates=np.array([[1e-8], [0.0]]),
+            burst_sizes=np.array([[100], [100]]),
+            latent_periods=np.array([[0.5], [0.5]]),
+            phage_decay_rates=np.array([0.02]),   # (n_phages,)
+        ))
+
+
+def test_pbimodel_no_phage_takes_empty_initial_P():
+    """§3: initial_P is required even with no phages — pass np.array([])."""
+    import numpy as np
+    from pbisim.builder import ModelBuilder
+    from pbisim.core.model import PBIModel
+    cfg = ModelBuilder(n_bacteria=1, n_phages=0).with_growth_rates(1.2).build()
+    PBIModel(cfg, initial_B=np.array([1e7]), initial_P=np.array([]), initial_S=1.0)
