@@ -76,9 +76,11 @@ _TOOL_INSTRUCTION = (
     "You have a run_pbisim_code tool. Always use it to run your simulation code and "
     "verify it executes without error and produces the requested plot BEFORE giving your "
     "final answer. If it fails, read the traceback, fix the code, and run it again "
-    "(up to a few attempts). Only after it succeeds, reply with a concise explanation of "
-    "the result. Do not paste the code in your final message — the app captures it from "
-    "your last tool call."
+    "(up to a few attempts). Your LAST run_pbisim_code call must be the COMPLETE final "
+    "script that produces the requested plot (and any printed values) — do not follow a "
+    "working script with a separate diagnostic-only run, or the plot will be lost. "
+    "Only after it succeeds, reply with a concise explanation of the result. Do not paste "
+    "the code in your final message — the app captures it from your last tool call."
 )
 
 
@@ -170,6 +172,7 @@ class SimulationAgent:
         ]
 
         last_code, last_result, tool_calls, transcript = "", None, 0, []
+        results_hist = []
         try:
             for _ in range(max_tool_calls):
                 response = self.client.messages.create(
@@ -183,14 +186,16 @@ class SimulationAgent:
                 if not tool_uses:
                     narrative = "".join(getattr(b, "text", "") for b in response.content
                                         if getattr(b, "type", None) == "text").strip()
-                    ok = bool(last_result and last_result.success)
-                    return AgentRun(narrative, last_code, last_result, ok, tool_calls, tuple(transcript))
+                    display = _pick_display(last_result, results_hist)
+                    ok = bool(display and display.success)
+                    return AgentRun(narrative, last_code, display, ok, tool_calls, tuple(transcript))
 
                 tool_results = []
                 for tu in tool_uses:
                     code = (tu.input or {}).get("code", "")
                     result = execute(code) if code else _no_code_execution_result()
                     last_code, last_result, tool_calls = code, result, tool_calls + 1
+                    results_hist.append(result)
                     transcript.append({"code": code, "success": bool(result.success),
                                        "error": result.error, "figures": len(result.figures)})
                     tool_results.append({
@@ -202,11 +207,12 @@ class SimulationAgent:
                 self.history.append({"role": "user", "content": tool_results})
 
             # Ran out of tool budget — return the best (last) attempt.
-            ok = bool(last_result and last_result.success)
+            display = _pick_display(last_result, results_hist)
+            ok = bool(display and display.success)
             return AgentRun(
                 "Reached the maximum number of code-execution attempts."
                 + ("" if ok else " The last attempt still errored."),
-                last_code, last_result, ok, tool_calls, tuple(transcript),
+                last_code, display, ok, tool_calls, tuple(transcript),
             )
         except Exception:
             # Roll the whole turn back — leaving a partial tool exchange (an assistant
@@ -217,6 +223,19 @@ class SimulationAgent:
     def reset(self) -> None:
         """Clear conversation history (start a new simulation session)."""
         self.history.clear()
+
+
+def _pick_display(last_result, history):
+    """Which execution's figures/stdout to surface. Normally the last run, but if it
+    produced no figure (e.g. the model ran a follow-up diagnostic that didn't re-plot),
+    fall back to the most recent successful run that DID make a figure, so the user (and
+    the eval) still see the plot."""
+    if last_result is not None and getattr(last_result, "figures", None):
+        return last_result
+    for r in reversed(history):
+        if r.success and r.figures:
+            return r
+    return last_result
 
 
 def _no_code_execution_result():

@@ -39,6 +39,17 @@ def stdout_contains(substr: str):
     return _c
 
 
+def stdout_contains_any(substrs):
+    """Printed output contains at least one of ``substrs`` (case-insensitive)."""
+    subs = tuple(substrs)
+    def _c(code, result):
+        low = (result.stdout or "").lower()
+        ok = any(s.lower() in low for s in subs)
+        return ok, ("" if ok else f"stdout contains none of {subs}")
+    _c.__name__ = f"stdout_contains_any({subs})"
+    return _c
+
+
 def code_contains(substr: str):
     """Generated code contains the literal ``substr``."""
     def _c(code, result):

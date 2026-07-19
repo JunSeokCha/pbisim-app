@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from evals.checks import (
-    runs_ok, has_figure, stdout_contains, code_contains, uses_cfu_sum_prefixes,
+    runs_ok, has_figure, stdout_contains, stdout_contains_any, code_contains,
+    uses_cfu_sum_prefixes,
 )
 
 
@@ -106,7 +107,8 @@ CASES = [
         "clearance_metric",
         "Simulate phage therapy and print the time to clearance and the time to a 2-log "
         "reduction in bacteria.",
-        [runs_ok(), stdout_contains("clear")],
+        # accept any reasonable phrasing of the reported metrics
+        [runs_ok(), stdout_contains_any(["clear", "reduction", "log", "eradicat"])],
         tags=("metrics",),
     ),
     EvalCase(

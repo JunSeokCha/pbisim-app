@@ -83,3 +83,22 @@ def test_generate_rolls_back_history_on_api_error():
         agent.generate("new prompt", _execute)
 
     assert agent.history == before   # whole turn rolled back
+
+
+def test_generate_recovers_figure_from_earlier_run():
+    """If the model's LAST execution makes no figure (e.g. a follow-up print-only run),
+    generate must surface the figure from the earlier run that did plot."""
+    def execute(code):
+        if "PLOT" in code:
+            return ExecutionResult(success=True, figures=["fig"], stdout="", error="")
+        return ExecutionResult(success=True, figures=[], stdout="value=1", error="")
+
+    agent = SimulationAgent(api_key="mock-key")
+    agent.client.messages.create = MagicMock(side_effect=[
+        _resp([_blk("tool_use", id="t1", inp={"code": "PLOT the sim"})]),   # makes the figure
+        _resp([_blk("tool_use", id="t2", inp={"code": "print stuff"})]),    # no figure
+        _resp([_blk("text", text="Done.")]),
+    ])
+    run = agent.generate("plot it", execute)
+    assert run.success is True
+    assert len(run.result.figures) == 1   # figure recovered from the earlier run

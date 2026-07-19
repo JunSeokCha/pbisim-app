@@ -240,3 +240,9 @@ def test_generate_respects_tool_budget():
     run = agent.generate("simulate", execute_code, max_tool_calls=2)
     assert run.success is False
     assert run.tool_calls == 2
+
+
+def test_stdout_contains_any():
+    r = ExecutionResult(success=True, figures=["f"], stdout="2-log reduction at 3.1 h", error="")
+    assert checks.stdout_contains_any(["clear", "reduction"])("c", r)[0] is True
+    assert checks.stdout_contains_any(["clear", "nope"])("c", r)[0] is False
