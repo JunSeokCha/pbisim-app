@@ -8,7 +8,7 @@ def render():
     st.caption("Configure custom variables, build mathematical parameters, and solve the ODE.")
 
     st.markdown(
-        "<div class='info-banner'>🛠️ Configure your biological layers using "
+        "<div class='info-banner'>Configure your biological layers using "
         "the tabs below, then scroll to the bottom and click <b>Run Simulation</b>!</div>",
         unsafe_allow_html=True,
     )
@@ -710,7 +710,7 @@ def render():
                                         key=f"ss_ads_dorm_input_{i}_{p_idx}"
                                     )
 
-                # 🔄 Transitions graph editor
+                # Transitions graph editor
                 st.markdown("#### Mutation Graph (Transitions)")
                 transitions = st.session_state.get("int_transitions", [])
                 

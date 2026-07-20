@@ -16,7 +16,7 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
 
     st.markdown(
-        "<div class='info-banner'>💊 Sweeps are based on the biological model currently configured in the "
+        "<div class='info-banner'>Sweeps are based on the biological model currently configured in the "
         "<b>Interactive Simulator</b>. Change biological parameters (e.g. growth rates, adsorption) there first.</div>",
         unsafe_allow_html=True,
     )
