@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import time
 
 # Force the non-interactive backend BEFORE importing pyplot. On a headless server
 # (e.g. the Render container) a GUI backend used from Streamlit's script thread
@@ -359,14 +360,29 @@ if theme_mode == "Light":
     .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
     .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
 
-    /* Buttons: flat teal, no gradient/lift */
+    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
     div.stButton > button {
-      background: var(--teal); color:#fff; border:1px solid var(--teal);
       border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
-      transition: background .15s ease;
+      transition: all .15s ease;
     }
-    div.stButton > button:hover { background: var(--teal-d); border-color: var(--teal-d);
-      transform:none; box-shadow:none; }
+    div.stButton > button[kind="secondary"],
+    div.stButton > button[data-testid$="secondary"] {
+      background: var(--card); color: var(--ink); border:1px solid var(--border);
+    }
+    div.stButton > button[kind="secondary"]:hover,
+    div.stButton > button[data-testid$="secondary"]:hover {
+      border-color: var(--teal); color: var(--teal);
+    }
+    div.stButton > button[kind="primary"],
+    div.stButton > button[data-testid$="primary"],
+    div.stButton > button[data-testid$="primaryFormSubmit"] {
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
+    }
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[data-testid$="primary"]:hover,
+    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
+      background: var(--teal-d); border-color: var(--teal-d);
+    }
 
     .preset-card { background: var(--panel); border:1px solid var(--border);
       border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
@@ -431,14 +447,29 @@ else:
     .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
     .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
 
-    /* Buttons: flat teal, no gradient/lift */
+    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
     div.stButton > button {
-      background: var(--teal); color:#fff; border:1px solid var(--teal);
       border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
-      transition: background .15s ease;
+      transition: all .15s ease;
     }
-    div.stButton > button:hover { background: var(--teal-d); border-color: var(--teal-d);
-      transform:none; box-shadow:none; }
+    div.stButton > button[kind="secondary"],
+    div.stButton > button[data-testid$="secondary"] {
+      background: var(--card); color: var(--ink); border:1px solid var(--border);
+    }
+    div.stButton > button[kind="secondary"]:hover,
+    div.stButton > button[data-testid$="secondary"]:hover {
+      border-color: var(--teal); color: var(--teal);
+    }
+    div.stButton > button[kind="primary"],
+    div.stButton > button[data-testid$="primary"],
+    div.stButton > button[data-testid$="primaryFormSubmit"] {
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
+    }
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[data-testid$="primary"]:hover,
+    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
+      background: var(--teal-d); border-color: var(--teal-d);
+    }
 
     .preset-card { background: var(--panel); border:1px solid var(--border);
       border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
@@ -3099,7 +3130,7 @@ elif st.session_state.current_page == "Calibration":
             # data in session_state so the visualization stays alive across page
             # navigation (and reruns) until it is explicitly re-run or the dataset
             # is cleared.
-            if st.button("Overlay model on data", key="fit_overlay", width="stretch"):
+            if st.button("Overlay model on data", key="fit_overlay", width="stretch", type="primary"):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
                     _B0 = float(np.sum(_iB))
@@ -3427,7 +3458,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Run Parallel Clinical Trial", width="stretch"):
+        if st.button("Run Parallel Clinical Trial", width="stretch", type="primary"):
             with st.spinner("Generating cohort populations & simulating treatment arms..."):
                 try:
                     # 1. Compile nominal base config
@@ -3682,7 +3713,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     }
 
         st.markdown("<br>", unsafe_allow_html=True)
-        run_sweep = st.button("Run Dose-Response Sweep", width="stretch")
+        run_sweep = st.button("Run Dose-Response Sweep", width="stretch", type="primary")
 
     with col_run:
         st.markdown("### Sweep Results")
@@ -4018,7 +4049,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
             spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
-            run_sweep = st.button("Run 1D Sweep", width="stretch")
+            run_sweep = st.button("Run 1D Sweep", width="stretch", type="primary")
 
         elif sweep_type == "2D Sweep":
             param1_label = st.selectbox("Select Parameter 1 (X-axis)", param_labels, key="p1_sweep_label")
@@ -4046,7 +4077,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 steps2 = st.number_input("P2 Steps", min_value=2, max_value=10, value=3, key="p2_steps")
             spacing2 = st.selectbox("P2 Spacing", ["Linear", "Logarithmic"], key="p2_spacing")
 
-            run_sweep = st.button("Run 2D Sweep", width="stretch")
+            run_sweep = st.button("Run 2D Sweep", width="stretch", type="primary")
 
         else:  # Coupled (linked) sweep
             st.caption(
@@ -4064,7 +4095,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     key=f"pc_series_{_ci}",
                     placeholder="e.g. 0, 0.5, 1",
                 )
-            run_sweep = st.button("Run Coupled Sweep", width="stretch")
+            run_sweep = st.button("Run Coupled Sweep", width="stretch", type="primary")
 
     with col_run:
         st.markdown("### Sweep Results")
@@ -5764,12 +5795,14 @@ elif st.session_state.current_page == "Interactive Simulator":
 
     # ──── Run Button ──────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Run Simulation", width="stretch"):
+    if st.button("Run Simulation", width="stretch", type="primary"):
         with st.spinner("Assembling model equations & integrating..."):
             try:
                 _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
                 warn_if_prerun_collapses(_pc_cfg, _pc_B0)
+                _t0 = time.perf_counter()
                 result, config = run_sim_from_gui_params()
+                st.session_state.sim_runtime = time.perf_counter() - _t0
                 st.session_state.simulation_result = result
                 st.session_state.simulation_config = config
                 st.success("Simulation finished successfully!")
@@ -5782,8 +5815,6 @@ elif st.session_state.current_page == "Interactive Simulator":
     if st.session_state.simulation_result is not None:
         result = st.session_state.simulation_result
         config = st.session_state.simulation_config
-
-        st.markdown("## Simulation Results")
 
         # 1. Calculate Metrics
         total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -5800,8 +5831,40 @@ elif st.session_state.current_page == "Interactive Simulator":
         )
         t_log_red = time_to_log_reduction(result, n_logs=2.0)
 
+        # Peak free-phage titre
+        _phage_tot = np.asarray(result.sum_prefixes("P"), dtype=float)
+        peak_phage = float(_phage_tot.max()) if _phage_tot.size else 0.0
+        peak_phage_t = float(result.time[int(np.argmax(_phage_tot))]) if _phage_tot.size else 0.0
+
+        # Outcome classification for the results header badge
+        _b0 = float(total_bacteria[0]) if len(total_bacteria) else 0.0
+        _bend = float(total_bacteria[-1]) if len(total_bacteria) else 0.0
+        if t_clear is not None:
+            _outcome, _obg, _ofg = "Cleared", "var(--teal)", "#fff"
+        elif _b0 > 0 and _bend <= _b0 * 0.1:
+            _outcome, _obg, _ofg = "Suppressed", "var(--teal-tint)", "var(--teal)"
+        elif _b0 > 0 and nadir_val <= _b0 * 0.1 and _bend > nadir_val * 10:
+            _outcome, _obg, _ofg = "Regrowth", "#f3e4cf", "#8a5a1a"
+        else:
+            _outcome, _obg, _ofg = "Uncontrolled", "#f4dedb", "#9b3b33"
+
+        # Results header bar: title + solver/runtime meta + outcome badge
+        _rt = st.session_state.get("sim_runtime")
+        _meta = f"t = 0–{result.time[-1]:.0f} h · {st.session_state.get('int_solver_method', 'BDF')}"
+        if _rt is not None:
+            _meta += f" · {_rt:.2f} s"
+        st.markdown(
+            "<div style='display:flex;align-items:center;justify-content:space-between;margin:2px 0 14px'>"
+            "<div><div style='font-size:1.25rem;font-weight:600;color:var(--ink)'>Simulation results</div>"
+            f"<div class='section-label' style='margin-top:3px'>{_meta}</div></div>"
+            f"<div style='background:{_obg};color:{_ofg};padding:6px 14px;border-radius:6px;"
+            f"font-weight:600;font-size:13px'>{_outcome}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
         # Render Metrics in Columns
-        m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+        m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
         with m_col1:
             st.markdown(
                 f"""
@@ -5858,6 +5921,17 @@ elif st.session_state.current_page == "Interactive Simulator":
                     <div class="metric-label">Resistant fraction</div>
                     <div class="metric-value">{final_res_frac*100:.1f}%</div>
                     <div class="metric-sub">at t_end={result.time[-1]}h</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with m_col6:
+            st.markdown(
+                f"""
+                <div class="metric-container">
+                    <div class="metric-label">Peak Phage Titre</div>
+                    <div class="metric-value">{peak_phage:.2e}</div>
+                    <div class="metric-sub">PFU/mL at t={peak_phage_t:.1f}h</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
