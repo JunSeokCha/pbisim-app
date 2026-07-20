@@ -2558,14 +2558,11 @@ with st.sidebar:
                     st.error(f"API Diagnostics Failed: {e}")
                     st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
 
-    st.markdown("---")
-    st.markdown("### Appearance")
-    st.session_state["theme_mode"] = st.selectbox(
-        "Theme Mode",
-        ["Light", "Dark"],
-        index=["Light", "Dark"].index(st.session_state.get("theme_mode", "Light")),
-        key="theme_mode_selectbox"
-    )
+    # Dark mode is deferred: the redesign targets the (light-only) mockup, and the
+    # dark CSS branch still has contrast issues. Force light and hide the toggle so
+    # nobody lands on the broken dark state; the dark CSS is kept dormant for a
+    # future one-shot dark pass. Re-expose the selectbox here to bring it back.
+    st.session_state["theme_mode"] = "Light"
 
     st.markdown("---")
     if st.button("Reset Environment"):
@@ -3207,6 +3204,47 @@ elif st.session_state.current_page == "Calibration":
                 _ax.grid(True, alpha=0.15)
                 st.pyplot(_fig)
                 plt.close(_fig)
+
+                # Pooled fit-quality tiles (RMSE + R² across all series, model
+                # interpolated onto the observation times; log₁₀ space when the
+                # observable is logged).
+                _obs_all, _pred_all = [], []
+                for _s in _ovr["series"]:
+                    _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
+                    _ov = np.asarray(_s["obs_value"], dtype=float)
+                    if _ovr["log"]:
+                        _pt = np.log10(np.maximum(_pt, 1e-30))
+                        _ov = np.log10(np.maximum(_ov, 1e-30))
+                    _obs_all.append(_ov)
+                    _pred_all.append(np.asarray(_pt, dtype=float))
+                if _obs_all:
+                    _oa = np.concatenate(_obs_all)
+                    _pa = np.concatenate(_pred_all)
+                    _mask = np.isfinite(_oa) & np.isfinite(_pa)
+                    _oa, _pa = _oa[_mask], _pa[_mask]
+                    _rmse_agg = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
+                    _ss_tot = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
+                    _r2 = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _ss_tot) if _ss_tot > 0 else float("nan")
+                    _q1, _q2 = st.columns(2)
+                    _rmse_lbl = "RMSE (log₁₀)" if _ovr["log"] else "RMSE"
+                    _q1.markdown(
+                        f"""<div class="metric-container">
+                            <div class="metric-label">{_rmse_lbl}</div>
+                            <div class="metric-value">{_rmse_agg:.3f}</div>
+                            <div class="metric-sub">across {_oa.size} points</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                    _q2.markdown(
+                        f"""<div class="metric-container">
+                            <div class="metric-label">R²</div>
+                            <div class="metric-value">{_r2:.3f}</div>
+                            <div class="metric-sub">observed vs predicted</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("<br>", unsafe_allow_html=True)
+
                 st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _ovr["log"] else "") +
                             f", vs {_ovr['stat_label']})")
                 st.dataframe(pd.DataFrame(_ovr["metrics"]), width="stretch", hide_index=True)
@@ -3578,7 +3616,37 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 )
                 
             clearance_threshold = st.session_state.get("int_extinction_threshold", 100.0)
-            
+
+            # Cure-rate summary tiles (one per arm; eradication = reached clearance by t_end)
+            try:
+                _arm_names = list(result.arm_names)
+            except Exception:
+                _arm_names = []
+            if _arm_names and len(_arm_names) <= 6:
+                _tiles = st.columns(len(_arm_names))
+                for _col, _arm in zip(_tiles, _arm_names):
+                    try:
+                        _pats = [r for r in result[_arm].results if r is not None]
+                        _tt = [time_to_clearance(r, threshold=clearance_threshold) for r in _pats]
+                        _cured = [t for t in _tt if t is not None]
+                        _rate = (len(_cured) / len(_pats) * 100.0) if _pats else 0.0
+                        _median = float(np.median(_cured)) if _cured else None
+                        _sub = (f"{len(_cured)}/{len(_pats)} cured · median {_median:.0f} h"
+                                if _median is not None else f"{len(_cured)}/{len(_pats)} cured")
+                    except Exception:
+                        _rate, _sub = 0.0, "n/a"
+                    _col.markdown(
+                        f"""
+                        <div class="metric-container">
+                            <div class="metric-label">Cure rate · {_arm}</div>
+                            <div class="metric-value">{_rate:.0f}%</div>
+                            <div class="metric-sub">{_sub}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("<br>", unsafe_allow_html=True)
+
             # Raw PKPD time trajectories (CFU + PFU) per arm
             st.markdown("#### PK/PD trajectories (median & IQR per arm)")
             fig_cfu = plot_pkpd_trajectories_plotly(
