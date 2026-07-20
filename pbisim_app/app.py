@@ -2476,118 +2476,118 @@ with st.sidebar:
     st.session_state.current_page = st.session_state.current_page_radio
 
     st.markdown("---")
-    st.markdown("### AI Settings")
+    with st.expander("AI & model settings", expanded=False):
 
-    # API key — the masked field is a browser "password" input; re-rendering it on every
-    # navigation/rerun makes Chrome repeatedly offer to save/update the password. So once a
-    # key is set we do NOT render the field: we show a compact status + a Change button, and
-    # only render the input when there is no key (or the user clicks Change). No password
-    # field in the DOM during normal use → no repeated Chrome prompt.
-    _env_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if "api_key" not in st.session_state:
-        st.session_state.api_key = _env_key
+        # API key — the masked field is a browser "password" input; re-rendering it on every
+        # navigation/rerun makes Chrome repeatedly offer to save/update the password. So once a
+        # key is set we do NOT render the field: we show a compact status + a Change button, and
+        # only render the input when there is no key (or the user clicks Change). No password
+        # field in the DOM during normal use → no repeated Chrome prompt.
+        _env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if "api_key" not in st.session_state:
+            st.session_state.api_key = _env_key
 
-    if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
-        _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
-        st.caption(f"Anthropic API key set ({_src})")
-        if st.button("Change key", key="change_api_key", width="stretch"):
-            st.session_state._editing_api_key = True
-            st.rerun()
-    else:
-        _entered = st.text_input(
-            "Anthropic API Key",
-            value="",
-            type="password",
-            key="api_key_field",
-            help="Required ONLY for the AI Assistant. Local simulation runs entirely offline. "
-                 "Once set, the field is hidden so your browser stops prompting to save it.",
-        )
-        if _entered:
-            st.session_state.api_key = _entered
-            st.session_state._editing_api_key = False
-            st.rerun()
-        if st.session_state.api_key and st.button("Clear key", key="clear_api_key", width="stretch"):
-            st.session_state.api_key = ""
-            st.session_state._editing_api_key = False
-            st.rerun()
+        if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
+            _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
+            st.caption(f"Anthropic API key set ({_src})")
+            if st.button("Change key", key="change_api_key", width="stretch"):
+                st.session_state._editing_api_key = True
+                st.rerun()
+        else:
+            _entered = st.text_input(
+                "Anthropic API Key",
+                value="",
+                type="password",
+                key="api_key_field",
+                help="Required ONLY for the AI Assistant. Local simulation runs entirely offline. "
+                     "Once set, the field is hidden so your browser stops prompting to save it.",
+            )
+            if _entered:
+                st.session_state.api_key = _entered
+                st.session_state._editing_api_key = False
+                st.rerun()
+            if st.session_state.api_key and st.button("Clear key", key="clear_api_key", width="stretch"):
+                st.session_state.api_key = ""
+                st.session_state._editing_api_key = False
+                st.rerun()
 
-    api_key = st.session_state.api_key
-    if api_key:
-        if st.session_state.agent.client.api_key != api_key:
-            st.session_state.agent.client.api_key = api_key
-            st.session_state.api_models_list = []
-    else:
-        if st.session_state.agent.client.api_key != "":
-            st.session_state.agent.client.api_key = ""
-            st.session_state.api_models_list = []
+        api_key = st.session_state.api_key
+        if api_key:
+            if st.session_state.agent.client.api_key != api_key:
+                st.session_state.agent.client.api_key = api_key
+                st.session_state.api_models_list = []
+        else:
+            if st.session_state.agent.client.api_key != "":
+                st.session_state.agent.client.api_key = ""
+                st.session_state.api_models_list = []
 
-    # Fetch models dynamically if API key is present and list is empty
-    if st.session_state.agent.client.api_key and not st.session_state.api_models_list:
+        # Fetch models dynamically if API key is present and list is empty
+        if st.session_state.agent.client.api_key and not st.session_state.api_models_list:
+            try:
+                models_page = st.session_state.agent.client.models.list()
+                fetched_ids = [m.id for m in models_page.data]
+                if fetched_ids:
+                    st.session_state.api_models_list = fetched_ids
+            except Exception:
+                # Store sentinel to prevent repeated API calls failing in loop
+                st.session_state.api_models_list = ["__FAILED__"]
+
+        default_model_ops = [
+            "claude-opus-4-8",          # default — strongest for one-shot code generation
+            "claude-sonnet-4-6",        # faster / cheaper
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-fable-5",
+        ]
+
+        if st.session_state.api_models_list and st.session_state.api_models_list != ["__FAILED__"]:
+            model_ops = list(st.session_state.api_models_list)
+        else:
+            model_ops = list(default_model_ops)
+
+        current_agent_model = st.session_state.agent.model
+        is_custom = current_agent_model not in model_ops
+
+        if "Custom Model ID..." not in model_ops:
+            model_ops.append("Custom Model ID...")
+
         try:
-            models_page = st.session_state.agent.client.models.list()
-            fetched_ids = [m.id for m in models_page.data]
-            if fetched_ids:
-                st.session_state.api_models_list = fetched_ids
-        except Exception:
-            # Store sentinel to prevent repeated API calls failing in loop
-            st.session_state.api_models_list = ["__FAILED__"]
+            if is_custom:
+                idx = model_ops.index("Custom Model ID...")
+            else:
+                idx = model_ops.index(current_agent_model)
+        except ValueError:
+            idx = 0
 
-    default_model_ops = [
-        "claude-opus-4-8",          # default — strongest for one-shot code generation
-        "claude-sonnet-4-6",        # faster / cheaper
-        "claude-sonnet-4-5-20250929",
-        "claude-haiku-4-5-20251001",
-        "claude-opus-4-7",
-        "claude-opus-4-6",
-        "claude-fable-5",
-    ]
+        selected_model = st.selectbox(
+            "Claude Model",
+            model_ops,
+            index=idx,
+            help="Choose the Claude model to power the AI Assistant."
+        )
 
-    if st.session_state.api_models_list and st.session_state.api_models_list != ["__FAILED__"]:
-        model_ops = list(st.session_state.api_models_list)
-    else:
-        model_ops = list(default_model_ops)
-
-    current_agent_model = st.session_state.agent.model
-    is_custom = current_agent_model not in model_ops
-
-    if "Custom Model ID..." not in model_ops:
-        model_ops.append("Custom Model ID...")
-
-    try:
-        if is_custom:
-            idx = model_ops.index("Custom Model ID...")
+        if selected_model == "Custom Model ID...":
+            custom_model = st.text_input("Enter Model ID", value=current_agent_model if is_custom else "claude-3-5-haiku-latest")
+            st.session_state.agent.model = custom_model
         else:
-            idx = model_ops.index(current_agent_model)
-    except ValueError:
-        idx = 0
+            st.session_state.agent.model = selected_model
 
-    selected_model = st.selectbox(
-        "Claude Model",
-        model_ops,
-        index=idx,
-        help="Choose the Claude model to power the AI Assistant."
-    )
-
-    if selected_model == "Custom Model ID...":
-        custom_model = st.text_input("Enter Model ID", value=current_agent_model if is_custom else "claude-3-5-haiku-latest")
-        st.session_state.agent.model = custom_model
-    else:
-        st.session_state.agent.model = selected_model
-
-    if st.button("Test API Key & List Models", key="test_api_key_btn"):
-        if not st.session_state.agent.client.api_key:
-            st.error("Please enter an Anthropic API Key first in the sidebar.")
-        else:
-            with st.spinner("Connecting to Anthropic..."):
-                try:
-                    models_page = st.session_state.agent.client.models.list()
-                    model_ids = [m.id for m in models_page.data]
-                    st.success("API Key is valid!")
-                    st.markdown("**Authorized Models for this Key:**")
-                    st.write(model_ids)
-                except Exception as e:
-                    st.error(f"API Diagnostics Failed: {e}")
-                    st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
+        if st.button("Test API Key & List Models", key="test_api_key_btn"):
+            if not st.session_state.agent.client.api_key:
+                st.error("Please enter an Anthropic API Key first in the sidebar.")
+            else:
+                with st.spinner("Connecting to Anthropic..."):
+                    try:
+                        models_page = st.session_state.agent.client.models.list()
+                        model_ids = [m.id for m in models_page.data]
+                        st.success("API Key is valid!")
+                        st.markdown("**Authorized Models for this Key:**")
+                        st.write(model_ids)
+                    except Exception as e:
+                        st.error(f"API Diagnostics Failed: {e}")
+                        st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
 
     # Dark mode is deferred: the redesign targets the (light-only) mockup, and the
     # dark CSS branch still has contrast issues. Force light and hide the toggle so
@@ -3056,7 +3056,7 @@ elif st.session_state.current_page == "Calibration":
                     _bc = st.columns(3)
                     with _bc[0]:
                         st.session_state["int_brg_base_growth"] = st.number_input(
-                            "Growth rate (1/h)", value=float(st.session_state.get("int_brg_base_growth", 1.2)),
+                            "Growth rate (h⁻¹)", value=float(st.session_state.get("int_brg_base_growth", 1.2)),
                             format="%g", key="fit_edit_brg_growth")
                     with _bc[1]:
                         st.session_state["int_brg_base_ratio"] = st.number_input(
@@ -3064,7 +3064,7 @@ elif st.session_state.current_page == "Calibration":
                             format="%.2e", key="fit_edit_brg_ratio")
                     with _bc[2]:
                         st.session_state["int_brg_death_rate_B"] = st.number_input(
-                            "Natural death (1/h)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)),
+                            "Natural death rate (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)),
                             format="%g", key="fit_edit_brg_death")
                     if st.session_state.get("int_brg_use_eq_ic", False):
                         st.session_state["int_brg_eq_total_B"] = st.number_input(
@@ -4711,7 +4711,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc2:
                             strains[i]["growth_rate"] = st.number_input(
-                                "Growth rate r (h⁻¹)",
+                                "Growth rate (h⁻¹)",
                                 value=float(strains[i]["growth_rate"]),
                                 step=0.1,
                                 key=f"str_growth_{i}",
@@ -4725,7 +4725,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.",
                         )
                         strains[i]["death_rate_B"] = st.number_input(
-                            "Natural death rate dB (h⁻¹)",
+                            "Natural death rate (h⁻¹)",
                             value=float(strains[i].get("death_rate_B", 0.0)),
                             step=0.01,
                             key=f"str_death_{i}",
@@ -4762,7 +4762,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 )
                             with cd4:
                                 strains[i]["death_rate_D"] = st.number_input(
-                                    "Dormant death rate dD (h⁻¹)",
+                                    "Dormant death rate (h⁻¹)",
                                     value=float(strains[i].get("death_rate_D", 0.0)),
                                     step=0.01,
                                     key=f"str_death_d_{i}",
@@ -4804,7 +4804,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 )
                             if _dsig_i in ("density", "nutrient+density") or _rsig_i in ("density", "nutrient+density"):
                                 strains[i]["dormancy_carrying_capacity"] = st.number_input(
-                                    "Dormancy density threshold (K_dorm)",
+                                    "Dormancy density threshold (CFU·mL⁻¹)",
                                     value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
                                     min_value=0.0, format="%.2e", key=f"str_dcc_{i}",
                                     help="Density threshold (CFU/mL) for the density dormancy signal "
@@ -4875,7 +4875,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc4:
                             phages[i]["burst_sizes"] = st.number_input(
-                                "Burst size Y (PFU/cell)",
+                                "Burst size (PFU/cell)",
                                 value=float(phages[i]["burst_sizes"]),
                                 step=10.0,
                                 key=f"phg_burst_{i}",
@@ -4900,14 +4900,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                             ads_dorm_key = f"ads_dorm_{s_idx}_{i}"
                             # suscept ads
                             st.session_state[ads_key] = st.number_input(
-                                f"Adsorption to {strains[s_idx]['name']} (mL/h)",
+                                f"Adsorption to {strains[s_idx]['name']} (mL·h⁻¹)",
                                 value=float(st.session_state.get(ads_key, 1e-8 if s_idx == 0 else 0.0)),
                                 format="%.1e",
                                 key=f"ads_input_{s_idx}_{i}",
                             )
                             # dormant ads
                             st.session_state[ads_dorm_key] = st.number_input(
-                                f"Adsorption to dormant {strains[s_idx]['name']} (mL/h)",
+                                f"Adsorption to dormant {strains[s_idx]['name']} (mL·h⁻¹)",
                                 value=float(st.session_state.get(ads_dorm_key, 0.0)),
                                 format="%.1e",
                                 key=f"ads_dorm_input_{s_idx}_{i}",
@@ -4952,10 +4952,10 @@ elif st.session_state.current_page == "Interactive Simulator":
                             pk1, pk2 = st.columns(2)
                             with pk1:
                                 phages[i]["Vc"] = st.number_input("Central volume (Vc mL)", value=float(phages[i].get("Vc", 5000.0)), key=f"phg_vc_{i}")
-                                phages[i]["k_elim"] = st.number_input("Elimination rate (k_elim h^-1)", value=float(phages[i].get("k_elim", 0.2)), key=f"phg_kelim_{i}")
+                                phages[i]["k_elim"] = st.number_input("Elimination rate k_elim (h⁻¹)", value=float(phages[i].get("k_elim", 0.2)), key=f"phg_kelim_{i}")
                             with pk2:
-                                phages[i]["k_in"] = st.number_input("Inflow rate (k_in h^-1)", value=float(phages[i].get("k_in", 0.1)), key=f"phg_kin_{i}")
-                                phages[i]["k_out"] = st.number_input("Outflow rate (k_out h^-1)", value=float(phages[i].get("k_out", 0.05)), key=f"phg_kout_{i}")
+                                phages[i]["k_in"] = st.number_input("Inflow rate k_in (h⁻¹)", value=float(phages[i].get("k_in", 0.1)), key=f"phg_kin_{i}")
+                                phages[i]["k_out"] = st.number_input("Outflow rate k_out (h⁻¹)", value=float(phages[i].get("k_out", 0.05)), key=f"phg_kout_{i}")
                             
                             phages[i]["Km_elim"] = st.number_input(
                                 "Elimination Km",
@@ -5004,13 +5004,13 @@ elif st.session_state.current_page == "Interactive Simulator":
             with col1:
                 st.markdown("### Base Bacteria (WT)")
                 st.session_state["int_brg_base_growth"] = st.number_input(
-                    "Base growth rate (r)", value=float(st.session_state.get("int_brg_base_growth", 1.2)), step=0.1
+                    "Base growth rate (h⁻¹)", value=float(st.session_state.get("int_brg_base_growth", 1.2)), step=0.1
                 )
                 st.session_state["int_brg_base_ratio"] = st.number_input(
                     "Resource consumption ratio", value=float(st.session_state.get("int_brg_base_ratio", 1e9)), format="%.1e"
                 )
                 st.session_state["int_brg_death_rate_B"] = st.number_input(
-                    "Natural death rate dB (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
+                    "Natural death rate (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
                 )
                 st.session_state["int_brg_dormancy_enabled"] = st.checkbox(
                     "Enable Dormancy", value=st.session_state.get("int_brg_dormancy_enabled", False)
@@ -5032,7 +5032,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                         help="Number of dormancy-depth compartments for all genotypes.",
                     )
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
-                        "Dormant death rate dD (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
+                        "Dormant death rate (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                     )
                     _bds = canonical_signal(st.session_state.get("int_brg_dorm_signal", "nutrient"))
                     _brs = canonical_signal(st.session_state.get("int_brg_resus_signal", "nutrient"))
@@ -5053,7 +5053,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             help="Defaults to the growth Monod constant (inherited); change to decouple.")
                     if _bds2 in ("density", "nutrient+density") or _brs2 in ("density", "nutrient+density"):
                         st.session_state["int_brg_dorm_kdorm"] = st.number_input(
-                            "Dormancy density threshold (K_dorm)",
+                            "Dormancy density threshold (CFU·mL⁻¹)",
                             value=float(st.session_state.get("int_brg_dorm_kdorm", 1e8)),
                             min_value=0.0, format="%.2e",
                             help="Density threshold (CFU/mL) for the density dormancy signal. 0 inherits growth K.")
@@ -5132,10 +5132,10 @@ elif st.session_state.current_page == "Interactive Simulator":
                             bpk1, bpk2 = st.columns(2)
                             with bpk1:
                                 phages[idx]["Vc"] = st.number_input("Central volume (Vc mL)", value=float(phages[idx].get("Vc", 5000.0)), key=f"brg_phg_vc_{idx}")
-                                phages[idx]["k_elim"] = st.number_input("Elimination rate (k_elim h^-1)", value=float(phages[idx].get("k_elim", 0.2)), key=f"brg_phg_kelim_{idx}")
+                                phages[idx]["k_elim"] = st.number_input("Elimination rate k_elim (h⁻¹)", value=float(phages[idx].get("k_elim", 0.2)), key=f"brg_phg_kelim_{idx}")
                             with bpk2:
-                                phages[idx]["k_in"] = st.number_input("Inflow rate (k_in h^-1)", value=float(phages[idx].get("k_in", 0.1)), key=f"brg_phg_kin_{idx}")
-                                phages[idx]["k_out"] = st.number_input("Outflow rate (k_out h^-1)", value=float(phages[idx].get("k_out", 0.05)), key=f"brg_phg_kout_{idx}")
+                                phages[idx]["k_in"] = st.number_input("Inflow rate k_in (h⁻¹)", value=float(phages[idx].get("k_in", 0.1)), key=f"brg_phg_kin_{idx}")
+                                phages[idx]["k_out"] = st.number_input("Outflow rate k_out (h⁻¹)", value=float(phages[idx].get("k_out", 0.05)), key=f"brg_phg_kout_{idx}")
                             phages[idx]["Km_elim"] = st.number_input(
                                 "Elimination Km",
                                 value=float(phages[idx].get("Km_elim", 0.0)),
@@ -5213,13 +5213,13 @@ elif st.session_state.current_page == "Interactive Simulator":
                     with st.expander(f"Strain {i}: {strains[i]['name']}", expanded=True):
                         strains[i]["name"] = st.text_input("Strain name", value=strains[i]["name"], key=f"ss_str_name_{i}")
                         strains[i]["initial_B"] = st.number_input("Initial count B₀ (CFU·mL⁻¹)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
-                        strains[i]["growth_rate"] = st.number_input("Growth rate r (h⁻¹)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
+                        strains[i]["growth_rate"] = st.number_input("Growth rate (h⁻¹)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
                         strains[i]["bacteria_to_resource_ratio"] = st.number_input(
                             "Bacteria-to-resource ratio", value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
                             format="%.2e", key=f"ss_str_ratio_{i}",
                             help="Bacteria produced per unit resource consumed (yield). Governs how fast "
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.")
-                        strains[i]["death_rate_B"] = st.number_input("Natural death rate dB (h⁻¹)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
+                        strains[i]["death_rate_B"] = st.number_input("Natural death rate (h⁻¹)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
                         if strains[i]["dormancy_enabled"]:
@@ -5227,7 +5227,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             strains[i]["dormancy_rate"] = st.number_input("Dormancy rate (h⁻¹)", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
                             strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate (h⁻¹)", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
                             strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion (h⁻¹)", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
-                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate dD (h⁻¹)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
+                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate (h⁻¹)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
                             _sds = canonical_signal(strains[i].get("dormancy_signal", "nutrient"))
                             _srs = canonical_signal(strains[i].get("resuscitation_signal", "nutrient"))
                             strains[i]["dormancy_signal"] = st.selectbox(
@@ -5245,7 +5245,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                     help="Defaults to the growth Monod constant (inherited); change to decouple.")
                             if _sds2 in ("density", "nutrient+density") or _srs2 in ("density", "nutrient+density"):
                                 strains[i]["dormancy_carrying_capacity"] = st.number_input(
-                                    "Dormancy density threshold (K_dorm)",
+                                    "Dormancy density threshold (CFU·mL⁻¹)",
                                     value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
                                     min_value=0.0, format="%.2e", key=f"ss_str_dcc_{i}",
                                     help="Density threshold (CFU/mL). 0 inherits growth K.")
@@ -5255,14 +5255,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                             for p_idx in range(len(phages)):
                                 p_name = phages[p_idx]["name"]
                                 st.session_state[f"ads_{i}_{p_idx}"] = st.number_input(
-                                    f"Adsorption of {p_name} (mL/h)",
+                                    f"Adsorption of {p_name} (mL·h⁻¹)",
                                     value=float(st.session_state.get(f"ads_{i}_{p_idx}", 1e-8 if i == 0 else 0.0)),
                                     format="%.1e",
                                     key=f"ss_ads_input_{i}_{p_idx}"
                                 )
                                 if strains[i]["dormancy_enabled"]:
                                     st.session_state[f"ads_dorm_{i}_{p_idx}"] = st.number_input(
-                                        f"Dormant adsorption of {p_name} (mL/h)",
+                                        f"Dormant adsorption of {p_name} (mL·h⁻¹)",
                                         value=float(st.session_state.get(f"ads_dorm_{i}_{p_idx}", 0.0)),
                                         format="%.1e",
                                         key=f"ss_ads_dorm_input_{i}_{p_idx}"
@@ -5315,7 +5315,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     with st.expander(f"Phage {idx}: {phages[idx]['name']}", expanded=True):
                         phages[idx]["name"] = st.text_input("Phage name", value=phages[idx]["name"], key=f"ss_phg_name_{idx}")
                         phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
-                        phages[idx]["burst_sizes"] = st.number_input("Burst size Y (PFU/cell)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
+                        phages[idx]["burst_sizes"] = st.number_input("Burst size (PFU/cell)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx].get("latent_periods", 0.5)), step=0.1, key=f"ss_phg_latent_{idx}")
                         phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
@@ -5351,10 +5351,10 @@ elif st.session_state.current_page == "Interactive Simulator":
                             spk1, spk2 = st.columns(2)
                             with spk1:
                                 phages[idx]["Vc"] = st.number_input("Central volume (Vc mL)", value=float(phages[idx].get("Vc", 5000.0)), key=f"ss_phg_vc_{idx}")
-                                phages[idx]["k_elim"] = st.number_input("Elimination rate (k_elim h^-1)", value=float(phages[idx].get("k_elim", 0.2)), key=f"ss_phg_kelim_{idx}")
+                                phages[idx]["k_elim"] = st.number_input("Elimination rate k_elim (h⁻¹)", value=float(phages[idx].get("k_elim", 0.2)), key=f"ss_phg_kelim_{idx}")
                             with spk2:
-                                phages[idx]["k_in"] = st.number_input("Inflow rate (k_in h^-1)", value=float(phages[idx].get("k_in", 0.1)), key=f"ss_phg_kin_{idx}")
-                                phages[idx]["k_out"] = st.number_input("Outflow rate (k_out h^-1)", value=float(phages[idx].get("k_out", 0.05)), key=f"ss_phg_kout_{idx}")
+                                phages[idx]["k_in"] = st.number_input("Inflow rate k_in (h⁻¹)", value=float(phages[idx].get("k_in", 0.1)), key=f"ss_phg_kin_{idx}")
+                                phages[idx]["k_out"] = st.number_input("Outflow rate k_out (h⁻¹)", value=float(phages[idx].get("k_out", 0.05)), key=f"ss_phg_kout_{idx}")
                             phages[idx]["Km_elim"] = st.number_input(
                                 "Elimination Km",
                                 value=float(phages[idx].get("Km_elim", 0.0)),
@@ -5421,7 +5421,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             key=f"abx_vc_{i}",
                         )
                         antibiotics[i]["k_elim"] = st.number_input(
-                            "Clearance (k_elim h^-1)",
+                            "Clearance k_elim (h⁻¹)",
                             value=float(antibiotics[i]["k_elim"]),
                             step=0.05,
                             key=f"abx_kelim_{i}",
