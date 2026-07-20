@@ -294,9 +294,10 @@ def arm_regimen_summary(arm):
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
+_FAVICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAzMiAzMic+PHJlY3Qgd2lkdGg9JzMyJyBoZWlnaHQ9JzMyJyByeD0nNicgZmlsbD0nIzBkN2E2OCcvPjx0ZXh0IHg9JzE2JyB5PScyMycgZm9udC1mYW1pbHk9J21vbm9zcGFjZScgZm9udC1zaXplPScyMicgZm9udC13ZWlnaHQ9JzYwMCcgZmlsbD0nI2ZmZmZmZicgdGV4dC1hbmNob3I9J21pZGRsZSc+JiM5NjY7PC90ZXh0Pjwvc3ZnPg=="
 st.set_page_config(
     page_title="pbisim — Phage-Bacteria Simulation Control Center",
-    page_icon="",
+    page_icon=_FAVICON,
     layout="wide",
 )
 
@@ -307,202 +308,9 @@ if "theme_mode" not in st.session_state:
 
 theme_mode = st.session_state["theme_mode"]
 
-FONT_FACE_CSS = """
-@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Regular.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Medium.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:600;font-display:swap;src:url('app/static/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Regular.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Medium.woff2') format('woff2');}
-"""
-
-if theme_mode == "Light":
-    css_content = """
-    :root{
-      --canvas:#faf9f5; --panel:#f6f8f7; --card:#ffffff; --border:#e4e8e6;
-      --hair:#eef1f0; --ink:#16211f; --muted:#66756f; --label:#93a09b;
-      --teal:#0d7a68; --teal-d:#0a6355; --teal-tint:#eef3f1; --accent:#5457a6;
-    }
-
-    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
-      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-
-    .stApp { background: var(--canvas); color: var(--ink); }
-    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
-
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
-    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
-    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
-
-    /* Headings: solid ink, no gradient */
-    h1, h2, h3, h4 {
-      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
-      -webkit-text-fill-color: var(--ink); background: none;
-    }
-    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
-
-    /* Mono for data / values / code */
-    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
-      font-family:'IBM Plex Mono', ui-monospace, monospace;
-    }
-
-    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
-      color: var(--label); font-weight:600; }
-
-    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
-      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
-    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
-      border-bottom:1px solid var(--hair); padding-bottom:8px; }
-
-    /* Expanders read as cards (strain/phage/arm blocks group as units) */
-    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
-      background: var(--card); margin-bottom:10px; }
-    [data-testid="stExpander"] summary { font-weight:600; }
-    [data-testid="stExpander"] summary:hover { color: var(--teal); }
-
-    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
-      border:1px solid var(--border); border-radius:6px; }
-    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
-      text-transform:uppercase; letter-spacing:0.13em; }
-    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
-    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
-
-    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
-    div.stButton > button {
-      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
-      transition: all .15s ease;
-    }
-    div.stButton > button[kind="secondary"],
-    div.stButton > button[data-testid$="secondary"] {
-      background: var(--card); color: var(--ink); border:1px solid var(--border);
-    }
-    div.stButton > button[kind="secondary"]:hover,
-    div.stButton > button[data-testid$="secondary"]:hover {
-      border-color: var(--teal); color: var(--teal);
-    }
-    div.stButton > button[kind="primary"],
-    div.stButton > button[data-testid$="primary"],
-    div.stButton > button[data-testid$="primaryFormSubmit"] {
-      background: var(--teal); color:#fff; border:1px solid var(--teal);
-    }
-    div.stButton > button[kind="primary"]:hover,
-    div.stButton > button[data-testid$="primary"]:hover,
-    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
-      background: var(--teal-d); border-color: var(--teal-d);
-    }
-
-    .preset-card { background: var(--panel); border:1px solid var(--border);
-      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
-    .preset-card:hover { border-color: var(--teal); }
-
-    section[data-testid="stSidebar"] { background: var(--panel);
-      border-right:1px solid var(--border); }
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] label { color: var(--ink); }
-
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
-      font-weight:600; }
-    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
-    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
-
-    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
-      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
-    """
-else:
-    css_content = """
-    :root{
-      --canvas:#111a17; --panel:#17211d; --card:#1b2723; --border:#2c3a35;
-      --hair:#26332f; --ink:#e9efec; --muted:#9aa8a2; --label:#7c8a85;
-      --teal:#159b83; --teal-d:#12876f; --teal-tint:#16261f; --accent:#8184b8;
-    }
-
-    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
-      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-
-    .stApp { background: var(--canvas); color: var(--ink); }
-    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
-
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
-    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
-    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
-
-    /* Headings: solid ink, no gradient */
-    h1, h2, h3, h4 {
-      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
-      -webkit-text-fill-color: var(--ink); background: none;
-    }
-    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
-
-    /* Mono for data / values / code */
-    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
-      font-family:'IBM Plex Mono', ui-monospace, monospace;
-    }
-
-    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
-      color: var(--label); font-weight:600; }
-
-    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
-      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
-    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
-      border-bottom:1px solid var(--hair); padding-bottom:8px; }
-
-    /* Expanders read as cards (strain/phage/arm blocks group as units) */
-    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
-      background: var(--card); margin-bottom:10px; }
-    [data-testid="stExpander"] summary { font-weight:600; }
-    [data-testid="stExpander"] summary:hover { color: var(--teal); }
-
-    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
-      border:1px solid var(--border); border-radius:6px; }
-    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
-      text-transform:uppercase; letter-spacing:0.13em; }
-    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
-    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
-
-    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
-    div.stButton > button {
-      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
-      transition: all .15s ease;
-    }
-    div.stButton > button[kind="secondary"],
-    div.stButton > button[data-testid$="secondary"] {
-      background: var(--card); color: var(--ink); border:1px solid var(--border);
-    }
-    div.stButton > button[kind="secondary"]:hover,
-    div.stButton > button[data-testid$="secondary"]:hover {
-      border-color: var(--teal); color: var(--teal);
-    }
-    div.stButton > button[kind="primary"],
-    div.stButton > button[data-testid$="primary"],
-    div.stButton > button[data-testid$="primaryFormSubmit"] {
-      background: var(--teal); color:#fff; border:1px solid var(--teal);
-    }
-    div.stButton > button[kind="primary"]:hover,
-    div.stButton > button[data-testid$="primary"]:hover,
-    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
-      background: var(--teal-d); border-color: var(--teal-d);
-    }
-
-    .preset-card { background: var(--panel); border:1px solid var(--border);
-      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
-    .preset-card:hover { border-color: var(--teal); }
-
-    section[data-testid="stSidebar"] { background: var(--panel);
-      border-right:1px solid var(--border); }
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] label { color: var(--ink); }
-
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
-      font-weight:600; }
-    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
-    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
-
-    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
-      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
-    """
-
-st.markdown(f"<style>{FONT_FACE_CSS}{css_content}</style>", unsafe_allow_html=True)
+# App styling — loaded once from static/styles.css (light theme; dark deferred).
+with open(os.path.join(os.path.dirname(__file__), "static", "styles.css"), encoding="utf-8") as _f:
+    st.markdown(f"<style>{_f.read()}</style>", unsafe_allow_html=True)
 
 
 # ── State Initialization ──────────────────────────────────────────────────────
@@ -2620,7 +2428,7 @@ if st.session_state.current_page == "Library":
 
     st.markdown("## Scenarios")
     st.markdown(
-        "<div class='info-banner'>💡 A scenario captures your <b>entire</b> configuration. "
+        "<div class='info-banner'>A scenario captures your <b>entire</b> configuration. "
         "Loading one configures the <b>Interactive Simulator</b> and applies across all pages "
         "(sweeps, clinical trials). Export to JSON to keep a portable personal library.</div>",
         unsafe_allow_html=True,
@@ -2699,7 +2507,7 @@ if st.session_state.current_page == "Library":
     else:
         st.info("No saved scenarios yet — configure a simulation, then save it above.")
 
-    # ── 🧬 Parts (composable building blocks) ────────────────────────────────
+    # ── Parts (composable building blocks) ────────────────────────────────
     st.markdown("---")
     st.markdown("## Parts")
     st.caption(
@@ -3368,7 +3176,7 @@ elif st.session_state.current_page == "AI Assistant":
                     with st.expander("Model Assumptions"):
                         st.markdown(agent_resp.assumptions)
                 if agent_resp.code and show_code:
-                    with st.expander("🐍 Generated python code"):
+                    with st.expander("Generated python code"):
                         st.code(agent_resp.code, language="python")
 
                 # Show figures and outputs
@@ -3409,7 +3217,7 @@ elif st.session_state.current_page == "AI Assistant":
                 st.markdown(run.narrative or "_(no explanation returned)_")
                 if run.code and show_code:
                     _n = run.tool_calls
-                    with st.expander(f"🐍 Generated python code · {_n} execution{'s' if _n != 1 else ''}"):
+                    with st.expander(f"Generated python code · {_n} execution{'s' if _n != 1 else ''}"):
                         st.code(run.code, language="python")
 
                 if exec_result is not None:
@@ -3450,7 +3258,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
     st.caption("Generate a virtual population (VPOP), apply statistical variability (IIV), and run matching parallel arms.")
     
     st.markdown(
-        "<div class='info-banner'>🧬 Virtual Cohort simulations use the current biological model configured "
+        "<div class='info-banner'>Virtual Cohort simulations use the current biological model configured "
         "in the <b>Interactive Simulator</b> tab as the baseline 'nominal patient'. Change parameters there first.</div>",
         unsafe_allow_html=True,
     )
@@ -3705,7 +3513,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             st.plotly_chart(fig_pfu, width="stretch")
 
             # Step survival plot
-            st.markdown("#### ⏳ Step-Survival (Kaplan-Meier)")
+            st.markdown("#### Step-Survival (Kaplan-Meier)")
             fig_km = plot_kaplan_meier_plotly(result, endpoint=endpoint_choice, t_end=trial_t_end, threshold=clearance_threshold, n_logs=2.0)
             st.plotly_chart(fig_km, width="stretch")
 
@@ -4066,7 +3874,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
         else:
             st.info("Configure the sweep on the left and click **Run Dose-Response Sweep** to view results.")
 
-    with st.expander("🐍 View Python Reproduction Code"):
+    with st.expander("View Python Reproduction Code"):
         st.caption("Standalone script that reproduces this sweep — the recorded base "
                    "model plus a loop rebuilding the per-run dose schedule exactly as the app does.")
         try:
@@ -4561,7 +4369,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
         else:
             st.info("Configure parameters and click **Run Sweep** to start the analysis.")
 
-    with st.expander("🐍 View Python Reproduction Code"):
+    with st.expander("View Python Reproduction Code"):
         st.caption("Standalone script that reproduces this sweep — the recorded base model "
                    "plus a loop calling the app's own apply_sweep_parameter per value. "
                    "(1D sweeps only.)")
@@ -6238,5 +6046,5 @@ elif st.session_state.current_page == "Interactive Simulator":
                 width="stretch",
             )
 
-        with st.expander("🐍 View Python Reproduction Code"):
+        with st.expander("View Python Reproduction Code"):
             st.code(rep_code, language="python")
