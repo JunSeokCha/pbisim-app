@@ -29,8 +29,20 @@ optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md
 pbisim-app/
 ├── pbisim_app/
 │   ├── __init__.py          package docstring / launch instructions
-│   ├── app.py     (~3640)   Streamlit UI — 6 pages (see below), custom CSS,
-│   │                        self-healing AI loop, all simulation and trial logic.
+│   ├── app.py     (~410)    THIN ENTRY: favicon/page_config, load styles.css,
+│   │                        session init, sidebar, and a dispatch that imports the
+│   │                        matching views/*.py and calls render(). (Was ~6050 lines;
+│   │                        split 2026-07-20.)
+│   ├── common.py  (~2300)   ALL shared helpers, the _ReproRecorder class, constants,
+│   │                        and the st.number_input precision monkeypatch. Re-exports
+│   │                        everything via __all__ (119 names) → a view needs only
+│   │                        `from pbisim_app.common import *`.
+│   ├── views/               One render() module per page (NOT Streamlit's reserved
+│   │                        pages/): library, calibration, assistant, trials,
+│   │                        dose_response, param_sweeps, simulator.
+│   ├── static/              Bundled IBM Plex woff2 (served at /app/static/) + styles.css.
+│   ├── viz_helper.py        plot_axis_controls + apply_axis_mpl/apply_axis_plotly
+│   │                        (log/linear + axis-limit controls, both backends).
 │   ├── agent.py   (~126)    SimulationAgent (wraps anthropic.Anthropic),
 │   │                        AgentResponse, _parse_response() (regex extraction).
 │   ├── executor.py(~155)    execute_code(): sandboxed namespace, exec()s
