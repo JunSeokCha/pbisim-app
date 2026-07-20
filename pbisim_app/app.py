@@ -305,245 +305,160 @@ if "theme_mode" not in st.session_state:
 
 theme_mode = st.session_state["theme_mode"]
 
+FONT_FACE_CSS = """
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Regular.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Medium.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:600;font-display:swap;src:url('app/static/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Regular.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Medium.woff2') format('woff2');}
+"""
+
 if theme_mode == "Light":
     css_content = """
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+    :root{
+      --canvas:#faf9f5; --panel:#f6f8f7; --card:#ffffff; --border:#e4e8e6;
+      --hair:#eef1f0; --ink:#16211f; --muted:#66756f; --label:#93a09b;
+      --teal:#0d7a68; --teal-d:#0a6355; --teal-tint:#eef3f1; --accent:#5457a6;
     }
-    
-    .stApp {
-        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-        color: #0f172a !important;
+
+    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
+      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
-    /* Force light colors on text labels */
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p, .stApp [data-testid="stWidgetLabel"] p {
-        color: #1e293b !important;
+
+    .stApp { background: var(--canvas); color: var(--ink); }
+    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
+
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
+    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
+    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
+
+    /* Headings: solid ink, no gradient */
+    h1, h2, h3, h4 {
+      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
+      -webkit-text-fill-color: var(--ink); background: none;
     }
-    
-    input, select, textarea, [data-baseweb="select"] div {
-        color: #0f172a !important;
+    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
+
+    /* Mono for data / values / code */
+    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
+      font-family:'IBM Plex Mono', ui-monospace, monospace;
     }
-    
-    h1, h2, h3 {
-        background: linear-gradient(90deg, #059669 0%, #2563eb 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-    }
-    
-    .card {
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-        backdrop-filter: blur(12px);
-    }
-    
-    .card h4 {
-        margin-top: 0;
-        color: #0f172a !important;
-        font-weight: 700;
-        border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-        padding-bottom: 8px;
-    }
-    
-    .metric-container {
-        text-align: center;
-        background: rgba(255, 255, 255, 0.9);
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #475569 !important;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #059669 !important;
-        margin-top: 4px;
-    }
-    .metric-sub {
-        font-size: 0.8rem;
-        color: #64748b !important;
-        margin-top: 2px;
-    }
-    
+
+    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
+      color: var(--label); font-weight:600; }
+
+    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
+      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
+    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
+      border-bottom:1px solid var(--hair); padding-bottom:8px; }
+
+    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
+      border:1px solid var(--border); border-radius:6px; }
+    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
+      text-transform:uppercase; letter-spacing:0.13em; }
+    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
+    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
+
+    /* Buttons: flat teal, no gradient/lift */
     div.stButton > button {
-        background: linear-gradient(90deg, #10b981 0%, #059669 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2) !important;
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
+      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
+      transition: background .15s ease;
     }
-    div.stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3) !important;
-    }
-    
-    .preset-card {
-        background: rgba(255, 255, 255, 0.7);
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        border-radius: 12px;
-        padding: 18px;
-        height: 100%;
-        transition: border 0.2s ease;
-    }
-    .preset-card:hover {
-        border-color: rgba(37, 99, 235, 0.5);
-    }
-    
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {
-        color: #1e293b !important;
-    }
-    
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
-        color: #0f172a !important;
-        font-weight: 600 !important;
-    }
-    
-    .info-banner {
-        background: rgba(37, 99, 235, 0.08);
-        border-left: 4px solid #2563eb;
-        padding: 12px 16px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-        color: #1e293b !important;
-    }
+    div.stButton > button:hover { background: var(--teal-d); border-color: var(--teal-d);
+      transform:none; box-shadow:none; }
+
+    .preset-card { background: var(--panel); border:1px solid var(--border);
+      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
+    .preset-card:hover { border-color: var(--teal); }
+
+    section[data-testid="stSidebar"] { background: var(--panel);
+      border-right:1px solid var(--border); }
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label { color: var(--ink); }
+
+    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
+      font-weight:600; }
+    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
+    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
+
+    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
+      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
     """
 else:
     css_content = """
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+    :root{
+      --canvas:#111a17; --panel:#17211d; --card:#1b2723; --border:#2c3a35;
+      --hair:#26332f; --ink:#e9efec; --muted:#9aa8a2; --label:#7c8a85;
+      --teal:#159b83; --teal-d:#12876f; --teal-tint:#16261f; --accent:#8184b8;
     }
-    
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        color: #f8fafc !important;
+
+    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
+      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p, .stApp [data-testid="stWidgetLabel"] p {
-        color: #f1f5f9 !important;
+
+    .stApp { background: var(--canvas); color: var(--ink); }
+    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
+
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
+    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
+    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
+
+    /* Headings: solid ink, no gradient */
+    h1, h2, h3, h4 {
+      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
+      -webkit-text-fill-color: var(--ink); background: none;
     }
-    
-    input, select, textarea, [data-baseweb="select"] div {
-        color: #f8fafc !important;
+    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
+
+    /* Mono for data / values / code */
+    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
+      font-family:'IBM Plex Mono', ui-monospace, monospace;
     }
-    
-    h1, h2, h3 {
-        background: linear-gradient(90deg, #10b981 0%, #3b82f6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-    }
-    
-    .card {
-        background: rgba(30, 41, 59, 0.45);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-        backdrop-filter: blur(12px);
-    }
-    
-    .card h4 {
-        margin-top: 0;
-        color: #f1f5f9 !important;
-        font-weight: 700;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        padding-bottom: 8px;
-    }
-    
-    .metric-container {
-        text-align: center;
-        background: rgba(15, 23, 42, 0.4);
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.03);
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #94a3b8 !important;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #10b981 !important;
-        margin-top: 4px;
-    }
-    .metric-sub {
-        font-size: 0.8rem;
-        color: #64748b !important;
-        margin-top: 2px;
-    }
-    
+
+    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
+      color: var(--label); font-weight:600; }
+
+    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
+      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
+    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
+      border-bottom:1px solid var(--hair); padding-bottom:8px; }
+
+    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
+      border:1px solid var(--border); border-radius:6px; }
+    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
+      text-transform:uppercase; letter-spacing:0.13em; }
+    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
+    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
+
+    /* Buttons: flat teal, no gradient/lift */
     div.stButton > button {
-        background: linear-gradient(90deg, #10b981 0%, #059669 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2) !important;
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
+      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
+      transition: background .15s ease;
     }
-    div.stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3) !important;
-    }
-    
-    .preset-card {
-        background: rgba(30, 41, 59, 0.35);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 18px;
-        height: 100%;
-        transition: border 0.2s ease;
-    }
-    .preset-card:hover {
-        border-color: rgba(59, 130, 246, 0.5);
-    }
-    
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {
-        color: #f1f5f9 !important;
-    }
-    
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
-        color: #f1f5f9 !important;
-        font-weight: 600 !important;
-    }
-    
-    .info-banner {
-        background: rgba(59, 130, 246, 0.1);
-        border-left: 4px solid #3b82f6;
-        padding: 12px 16px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-    }
+    div.stButton > button:hover { background: var(--teal-d); border-color: var(--teal-d);
+      transform:none; box-shadow:none; }
+
+    .preset-card { background: var(--panel); border:1px solid var(--border);
+      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
+    .preset-card:hover { border-color: var(--teal); }
+
+    section[data-testid="stSidebar"] { background: var(--panel);
+      border-right:1px solid var(--border); }
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label { color: var(--ink); }
+
+    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
+      font-weight:600; }
+    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
+    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
+
+    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
+      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
     """
 
-st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+st.markdown(f"<style>{FONT_FACE_CSS}{css_content}</style>", unsafe_allow_html=True)
 
 
 # ── State Initialization ──────────────────────────────────────────────────────
@@ -2458,7 +2373,7 @@ def generate_dose_sweep_reproduction_code() -> str:
 
 # ── Sidebar Settings ──────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🦠 pbisim App")
+    st.title("pbisim")
 
     # Apply any pending programmatic navigation (from Load buttons, etc.) BEFORE
     # the radio is instantiated — a keyed widget's value can only be set prior to
@@ -2624,7 +2539,7 @@ if _flash:
 
 # ── Library Page (Scenarios + Parts) ──────────────────────────────────────────
 if st.session_state.current_page == "Library":
-    st.title("📚 Library")
+    st.title("Library")
     st.caption("Reusable building blocks. **Scenarios** = whole configurations; "
                "**Parts** = individual bacteria / phages / antibiotics you compose.")
 
@@ -2828,7 +2743,7 @@ if st.session_state.current_page == "Library":
 
 # ── Calibration Page (Phase A: data upload + overlay + fit metric) ────────────
 elif st.session_state.current_page == "Calibration":
-    st.title("📐 Calibration — data overlay")
+    st.title("Calibration — data overlay")
     st.caption(
         "Upload experimental data and overlay the **current model's** prediction (configured in "
         "the Interactive Simulator) on the observations. Tune parameters there to match; a "
@@ -3296,7 +3211,7 @@ elif st.session_state.current_page == "Calibration":
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────
 elif st.session_state.current_page == "AI Assistant":
-    st.title("💬 AI Simulation Assistant")
+    st.title("AI Simulation Assistant")
     st.caption("Instruct Claude to design, simulate, and analyze phage therapy setups using natural language.")
 
     # Check key
@@ -3394,7 +3309,7 @@ elif st.session_state.current_page == "AI Assistant":
 
 # ── Clinical Trials & Cohorts Page ────────────────────────────────────────────
 elif st.session_state.current_page == "Clinical Trials & Cohorts":
-    st.title("👥 Clinical Trials & cohort Simulator")
+    st.title("Clinical Trials & Cohort Simulator")
     st.caption("Generate a virtual population (VPOP), apply statistical variability (IIV), and run matching parallel arms.")
     
     st.markdown(
@@ -3665,7 +3580,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
 # ── Dose-Response Sweeps Page ──────────────────────────────────────────────────
 elif st.session_state.current_page == "Dose-Response Sweeps":
-    st.title("📈 Dose-Response Simulator")
+    st.title("Dose-Response Simulator")
     st.caption("Perform multi-drug dose-response sweeps with MOI scaling, vector padding, and raw time-series visualization.")
 
     # Keep the sweep controls alive across navigation (re-seed before they render).
@@ -3995,7 +3910,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 
 # ── Parameter Sweeps Page ──────────────────────────────────────────────────────
 elif st.session_state.current_page == "Parameter Sweeps":
-    st.title("📊 Model Parameter Sweeps")
+    st.title("Model Parameter Sweeps")
     st.caption("Sweep any model parameter in 1D or 2D and visualize cellular trajectories and outcome heatmaps.")
 
     # Keep the sweep controls alive across navigation (re-seed before they render).
@@ -4487,7 +4402,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
 # ── Interactive Simulator Page ────────────────────────────────────────────────
 elif st.session_state.current_page == "Interactive Simulator":
-    st.title("🦠 Interactive Simulation Builder")
+    st.title("Interactive Simulation Builder")
     st.caption("Configure custom variables, build mathematical parameters, and solve the ODE.")
 
     st.markdown(

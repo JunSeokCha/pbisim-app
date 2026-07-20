@@ -1,3 +1,11 @@
+[server]
+# Serve bundled IBM Plex woff2 from pbisim_app/static/ at /app/static/...
+enableStaticServing = true
+
 [theme]
 base = "light"
-primaryColor = "#10b981"
+primaryColor = "#0d7a68"
+backgroundColor = "#faf9f5"
+secondaryBackgroundColor = "#f6f8f7"
+textColor = "#16211f"
+font = "sans serif"
