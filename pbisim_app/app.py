@@ -353,6 +353,12 @@ if theme_mode == "Light":
     .card h4 { margin-top:0; color: var(--ink); font-weight:600;
       border-bottom:1px solid var(--hair); padding-bottom:8px; }
 
+    /* Expanders read as cards (strain/phage/arm blocks group as units) */
+    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
+      background: var(--card); margin-bottom:10px; }
+    [data-testid="stExpander"] summary { font-weight:600; }
+    [data-testid="stExpander"] summary:hover { color: var(--teal); }
+
     .metric-container { text-align:left; background: var(--card); padding:14px 16px;
       border:1px solid var(--border); border-radius:6px; }
     .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
@@ -439,6 +445,12 @@ else:
       padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
     .card h4 { margin-top:0; color: var(--ink); font-weight:600;
       border-bottom:1px solid var(--hair); padding-bottom:8px; }
+
+    /* Expanders read as cards (strain/phage/arm blocks group as units) */
+    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
+      background: var(--card); margin-bottom:10px; }
+    [data-testid="stExpander"] summary { font-weight:600; }
+    [data-testid="stExpander"] summary:hover { color: var(--teal); }
 
     .metric-container { text-align:left; background: var(--card); padding:14px 16px;
       border:1px solid var(--border); border-radius:6px; }
