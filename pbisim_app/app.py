@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import time
 
 # Force the non-interactive backend BEFORE importing pyplot. On a headless server
 # (e.g. the Render container) a GUI backend used from Streamlit's script thread
@@ -63,6 +64,7 @@ from pbisim.trial.clinical import TreatmentArm
 
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
+from pbisim_app.viz_helper import plot_axis_controls, apply_axis_mpl, apply_axis_plotly
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -216,11 +218,11 @@ def render_mutation_graph_editor(strains, key_prefix):
                                          format="%.2e", key=f"{key_prefix}_rate_{idx}")
         with c4:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🗑️", key=f"{key_prefix}_del_{idx}"):
+            if st.button(":material/delete:", key=f"{key_prefix}_del_{idx}"):
                 transitions.pop(idx)
                 st.session_state.int_transitions = transitions
                 st.rerun()
-    if st.button("➕ Add transition", key=f"{key_prefix}_add"):
+    if st.button("+ Add transition", key=f"{key_prefix}_add"):
         transitions.append({"from": names[0] if names else "", "to": names[0] if names else "", "rate": 1e-7})
         st.session_state.int_transitions = transitions
         st.rerun()
@@ -294,7 +296,7 @@ def arm_regimen_summary(arm):
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="pbisim — Phage-Bacteria Simulation Control Center",
-    page_icon="🦠",
+    page_icon="",
     layout="wide",
 )
 
@@ -305,245 +307,202 @@ if "theme_mode" not in st.session_state:
 
 theme_mode = st.session_state["theme_mode"]
 
+FONT_FACE_CSS = """
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Regular.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexSans-Medium.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:600;font-display:swap;src:url('app/static/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Regular.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('app/static/fonts/IBMPlexMono-Medium.woff2') format('woff2');}
+"""
+
 if theme_mode == "Light":
     css_content = """
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+    :root{
+      --canvas:#faf9f5; --panel:#f6f8f7; --card:#ffffff; --border:#e4e8e6;
+      --hair:#eef1f0; --ink:#16211f; --muted:#66756f; --label:#93a09b;
+      --teal:#0d7a68; --teal-d:#0a6355; --teal-tint:#eef3f1; --accent:#5457a6;
     }
-    
-    .stApp {
-        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-        color: #0f172a !important;
+
+    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
+      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
-    /* Force light colors on text labels */
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p, .stApp [data-testid="stWidgetLabel"] p {
-        color: #1e293b !important;
+
+    .stApp { background: var(--canvas); color: var(--ink); }
+    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
+
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
+    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
+    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
+
+    /* Headings: solid ink, no gradient */
+    h1, h2, h3, h4 {
+      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
+      -webkit-text-fill-color: var(--ink); background: none;
     }
-    
-    input, select, textarea, [data-baseweb="select"] div {
-        color: #0f172a !important;
+    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
+
+    /* Mono for data / values / code */
+    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
+      font-family:'IBM Plex Mono', ui-monospace, monospace;
     }
-    
-    h1, h2, h3 {
-        background: linear-gradient(90deg, #059669 0%, #2563eb 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-    }
-    
-    .card {
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-        backdrop-filter: blur(12px);
-    }
-    
-    .card h4 {
-        margin-top: 0;
-        color: #0f172a !important;
-        font-weight: 700;
-        border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-        padding-bottom: 8px;
-    }
-    
-    .metric-container {
-        text-align: center;
-        background: rgba(255, 255, 255, 0.9);
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #475569 !important;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #059669 !important;
-        margin-top: 4px;
-    }
-    .metric-sub {
-        font-size: 0.8rem;
-        color: #64748b !important;
-        margin-top: 2px;
-    }
-    
+
+    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
+      color: var(--label); font-weight:600; }
+
+    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
+      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
+    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
+      border-bottom:1px solid var(--hair); padding-bottom:8px; }
+
+    /* Expanders read as cards (strain/phage/arm blocks group as units) */
+    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
+      background: var(--card); margin-bottom:10px; }
+    [data-testid="stExpander"] summary { font-weight:600; }
+    [data-testid="stExpander"] summary:hover { color: var(--teal); }
+
+    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
+      border:1px solid var(--border); border-radius:6px; }
+    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
+      text-transform:uppercase; letter-spacing:0.13em; }
+    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
+    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
+
+    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
     div.stButton > button {
-        background: linear-gradient(90deg, #10b981 0%, #059669 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2) !important;
+      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
+      transition: all .15s ease;
     }
-    div.stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3) !important;
+    div.stButton > button[kind="secondary"],
+    div.stButton > button[data-testid$="secondary"] {
+      background: var(--card); color: var(--ink); border:1px solid var(--border);
     }
-    
-    .preset-card {
-        background: rgba(255, 255, 255, 0.7);
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        border-radius: 12px;
-        padding: 18px;
-        height: 100%;
-        transition: border 0.2s ease;
+    div.stButton > button[kind="secondary"]:hover,
+    div.stButton > button[data-testid$="secondary"]:hover {
+      border-color: var(--teal); color: var(--teal);
     }
-    .preset-card:hover {
-        border-color: rgba(37, 99, 235, 0.5);
+    div.stButton > button[kind="primary"],
+    div.stButton > button[data-testid$="primary"],
+    div.stButton > button[data-testid$="primaryFormSubmit"] {
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
     }
-    
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {
-        color: #1e293b !important;
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[data-testid$="primary"]:hover,
+    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
+      background: var(--teal-d); border-color: var(--teal-d);
     }
-    
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
-        color: #0f172a !important;
-        font-weight: 600 !important;
-    }
-    
-    .info-banner {
-        background: rgba(37, 99, 235, 0.08);
-        border-left: 4px solid #2563eb;
-        padding: 12px 16px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-        color: #1e293b !important;
-    }
+
+    .preset-card { background: var(--panel); border:1px solid var(--border);
+      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
+    .preset-card:hover { border-color: var(--teal); }
+
+    section[data-testid="stSidebar"] { background: var(--panel);
+      border-right:1px solid var(--border); }
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label { color: var(--ink); }
+
+    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
+      font-weight:600; }
+    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
+    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
+
+    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
+      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
     """
 else:
     css_content = """
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
+    :root{
+      --canvas:#111a17; --panel:#17211d; --card:#1b2723; --border:#2c3a35;
+      --hair:#26332f; --ink:#e9efec; --muted:#9aa8a2; --label:#7c8a85;
+      --teal:#159b83; --teal-d:#12876f; --teal-tint:#16261f; --accent:#8184b8;
     }
-    
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        color: #f8fafc !important;
+
+    html, body, [class*="css"], .stApp, button, input, select, textarea, [data-baseweb] {
+      font-family:'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
-    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p, .stApp [data-testid="stWidgetLabel"] p {
-        color: #f1f5f9 !important;
+
+    .stApp { background: var(--canvas); color: var(--ink); }
+    .block-container { padding-top: 2.2rem; padding-bottom: 3rem; }
+
+    .stApp p, .stApp span, .stApp li, .stApp label, .stApp label p,
+    .stApp [data-testid="stWidgetLabel"] p { color: var(--ink); }
+    input, select, textarea, [data-baseweb="select"] div { color: var(--ink); }
+
+    /* Headings: solid ink, no gradient */
+    h1, h2, h3, h4 {
+      color: var(--ink) !important; font-weight:600; letter-spacing:-0.01em;
+      -webkit-text-fill-color: var(--ink); background: none;
     }
-    
-    input, select, textarea, [data-baseweb="select"] div {
-        color: #f8fafc !important;
+    h1 { font-size:1.7rem; } h2 { font-size:1.25rem; } h3 { font-size:1.05rem; }
+
+    /* Mono for data / values / code */
+    .metric-value, .mono, code, kbd, pre, [data-testid="stMetricValue"] {
+      font-family:'IBM Plex Mono', ui-monospace, monospace;
     }
-    
-    h1, h2, h3 {
-        background: linear-gradient(90deg, #10b981 0%, #3b82f6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-    }
-    
-    .card {
-        background: rgba(30, 41, 59, 0.45);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-        backdrop-filter: blur(12px);
-    }
-    
-    .card h4 {
-        margin-top: 0;
-        color: #f1f5f9 !important;
-        font-weight: 700;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        padding-bottom: 8px;
-    }
-    
-    .metric-container {
-        text-align: center;
-        background: rgba(15, 23, 42, 0.4);
-        padding: 16px;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.03);
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #94a3b8 !important;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #10b981 !important;
-        margin-top: 4px;
-    }
-    .metric-sub {
-        font-size: 0.8rem;
-        color: #64748b !important;
-        margin-top: 2px;
-    }
-    
+
+    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.13em;
+      color: var(--label); font-weight:600; }
+
+    .card { background: var(--card); border:1px solid var(--border); border-radius:6px;
+      padding:18px 20px; margin-bottom:16px; box-shadow:none; backdrop-filter:none; }
+    .card h4 { margin-top:0; color: var(--ink); font-weight:600;
+      border-bottom:1px solid var(--hair); padding-bottom:8px; }
+
+    /* Expanders read as cards (strain/phage/arm blocks group as units) */
+    [data-testid="stExpander"] { border:1px solid var(--border); border-radius:6px;
+      background: var(--card); margin-bottom:10px; }
+    [data-testid="stExpander"] summary { font-weight:600; }
+    [data-testid="stExpander"] summary:hover { color: var(--teal); }
+
+    .metric-container { text-align:left; background: var(--card); padding:14px 16px;
+      border:1px solid var(--border); border-radius:6px; }
+    .metric-label { font-size:10.5px; color: var(--label); font-weight:600;
+      text-transform:uppercase; letter-spacing:0.13em; }
+    .metric-value { font-size:1.5rem; font-weight:600; color: var(--ink); margin-top:6px; }
+    .metric-sub { font-size:11px; color: var(--label); margin-top:3px; }
+
+    /* Buttons: primary = filled teal, secondary (default) = subtle outline */
     div.stButton > button {
-        background: linear-gradient(90deg, #10b981 0%, #059669 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 24px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2) !important;
+      border-radius:6px; padding:8px 20px; font-weight:600; box-shadow:none;
+      transition: all .15s ease;
     }
-    div.stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3) !important;
+    div.stButton > button[kind="secondary"],
+    div.stButton > button[data-testid$="secondary"] {
+      background: var(--card); color: var(--ink); border:1px solid var(--border);
     }
-    
-    .preset-card {
-        background: rgba(30, 41, 59, 0.35);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        padding: 18px;
-        height: 100%;
-        transition: border 0.2s ease;
+    div.stButton > button[kind="secondary"]:hover,
+    div.stButton > button[data-testid$="secondary"]:hover {
+      border-color: var(--teal); color: var(--teal);
     }
-    .preset-card:hover {
-        border-color: rgba(59, 130, 246, 0.5);
+    div.stButton > button[kind="primary"],
+    div.stButton > button[data-testid$="primary"],
+    div.stButton > button[data-testid$="primaryFormSubmit"] {
+      background: var(--teal); color:#fff; border:1px solid var(--teal);
     }
-    
-    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {
-        color: #f1f5f9 !important;
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[data-testid$="primary"]:hover,
+    div.stButton > button[data-testid$="primaryFormSubmit"]:hover {
+      background: var(--teal-d); border-color: var(--teal-d);
     }
-    
-    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
-        color: #f1f5f9 !important;
-        font-weight: 600 !important;
-    }
-    
-    .info-banner {
-        background: rgba(59, 130, 246, 0.1);
-        border-left: 4px solid #3b82f6;
-        padding: 12px 16px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-    }
+
+    .preset-card { background: var(--panel); border:1px solid var(--border);
+      border-radius:6px; padding:16px; height:100%; transition:border-color .15s ease; }
+    .preset-card:hover { border-color: var(--teal); }
+
+    section[data-testid="stSidebar"] { background: var(--panel);
+      border-right:1px solid var(--border); }
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label { color: var(--ink); }
+
+    button[data-baseweb="tab"] p, button[data-baseweb="tab"] span { color: var(--muted);
+      font-weight:600; }
+    button[data-baseweb="tab"][aria-selected="true"] p { color: var(--teal); }
+    [data-baseweb="tab-highlight"] { background-color: var(--teal); }
+
+    .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
+      padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
     """
 
-st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+st.markdown(f"<style>{FONT_FACE_CSS}{css_content}</style>", unsafe_allow_html=True)
 
 
 # ── State Initialization ──────────────────────────────────────────────────────
@@ -616,6 +575,37 @@ def _safe_od(result, total_bacteria):
         return result.get_od()
     except Exception:
         return np.asarray(total_bacteria, dtype=float) / factor
+
+
+def _sweep_summary_tiles(df_summary):
+    """Render a compact metric-tile row summarising a sweep's runs. Robust to
+    missing/non-numeric columns (used by the Dose-Response and Parameter sweeps)."""
+    import pandas as _pd
+    n_runs = len(df_summary)
+    if not n_runs:
+        return
+    nadir = _pd.to_numeric(df_summary.get("Nadir (cells/mL)"), errors="coerce")
+    ct = _pd.to_numeric(df_summary.get("Clearance Time (h)"), errors="coerce")
+    best_nadir = float(nadir.min()) if nadir is not None and nadir.notna().any() else None
+    cleared = int(ct.notna().sum()) if ct is not None else 0
+    fastest = float(ct.min()) if cleared else None
+    tiles = [
+        ("Runs", f"{n_runs}", "in this sweep"),
+        ("Best nadir", f"{best_nadir:.2e}" if best_nadir is not None else "—", "lowest cells/mL"),
+        ("Runs cleared", f"{cleared}/{n_runs}", f"below threshold"),
+        ("Fastest clearance", f"{fastest:.1f} h" if fastest is not None else "—", "earliest eradication"),
+    ]
+    cols = st.columns(len(tiles))
+    for col, (lbl, val, sub) in zip(cols, tiles):
+        col.markdown(
+            f"""<div class="metric-container">
+                <div class="metric-label">{lbl}</div>
+                <div class="metric-value">{val}</div>
+                <div class="metric-sub">{sub}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    st.markdown("<br>", unsafe_allow_html=True)
 
 
 def load_preset_to_state(params: dict):
@@ -2122,7 +2112,7 @@ def warn_if_prerun_collapses(config, B0):
     frac = prerun_collapse_fraction(config, B0, t_prerun)
     if frac is not None and frac < 0.1:
         st.warning(
-            f"⚠️ The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
+            f"The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
             "(active + dormant) at treatment start, so the CFU/OD curves scale very low. "
             "A natural death rate with no dormancy makes the culture decline during the "
             "pre-run once nutrients exhaust (death keeps acting after growth stops). "
@@ -2458,7 +2448,16 @@ def generate_dose_sweep_reproduction_code() -> str:
 
 # ── Sidebar Settings ──────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🦠 pbisim App")
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:10px;margin:2px 0 8px'>"
+        "<div style='width:30px;height:30px;border-radius:6px;background:var(--teal);color:#fff;"
+        "display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;"
+        "font-family:IBM Plex Mono,monospace'>&#966;</div>"
+        "<div><div style='font-size:19px;font-weight:600;line-height:1;color:var(--ink)'>pbisim</div>"
+        "<div class='section-label' style='font-size:9.5px;margin-top:4px'>PHAGE-BACTERIA SIM</div></div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     # Apply any pending programmatic navigation (from Load buttons, etc.) BEFORE
     # the radio is instantiated — a keyed widget's value can only be set prior to
@@ -2477,7 +2476,7 @@ with st.sidebar:
     st.session_state.current_page = st.session_state.current_page_radio
 
     st.markdown("---")
-    st.markdown("### ⚙️ AI Settings")
+    st.markdown("### AI Settings")
 
     # API key — the masked field is a browser "password" input; re-rendering it on every
     # navigation/rerun makes Chrome repeatedly offer to save/update the password. So once a
@@ -2490,7 +2489,7 @@ with st.sidebar:
 
     if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
         _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
-        st.caption(f"🔑 Anthropic API key set ({_src})")
+        st.caption(f"Anthropic API key set ({_src})")
         if st.button("Change key", key="change_api_key", width="stretch"):
             st.session_state._editing_api_key = True
             st.rerun()
@@ -2575,7 +2574,7 @@ with st.sidebar:
     else:
         st.session_state.agent.model = selected_model
 
-    if st.button("🔍 Test API Key & List Models", key="test_api_key_btn"):
+    if st.button("Test API Key & List Models", key="test_api_key_btn"):
         if not st.session_state.agent.client.api_key:
             st.error("Please enter an Anthropic API Key first in the sidebar.")
         else:
@@ -2588,25 +2587,16 @@ with st.sidebar:
                     st.write(model_ids)
                 except Exception as e:
                     st.error(f"API Diagnostics Failed: {e}")
-                    st.info("💡 Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
+                    st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
 
-
-
-
-    show_code = st.toggle("Show generated code", value=True)
-    show_assumptions = st.toggle("Show assumptions", value=True)
-
-    st.markdown("---")
-    st.markdown("### 🎨 Appearance")
-    st.session_state["theme_mode"] = st.selectbox(
-        "Theme Mode",
-        ["Light", "Dark"],
-        index=["Light", "Dark"].index(st.session_state.get("theme_mode", "Light")),
-        key="theme_mode_selectbox"
-    )
+    # Dark mode is deferred: the redesign targets the (light-only) mockup, and the
+    # dark CSS branch still has contrast issues. Force light and hide the toggle so
+    # nobody lands on the broken dark state; the dark CSS is kept dormant for a
+    # future one-shot dark pass. Re-expose the selectbox here to bring it back.
+    st.session_state["theme_mode"] = "Light"
 
     st.markdown("---")
-    if st.button("🔄 Reset Environment"):
+    if st.button("Reset Environment"):
         st.session_state.agent.reset()
         st.session_state.history.clear()
         st.session_state.simulation_result = None
@@ -2624,11 +2614,11 @@ if _flash:
 
 # ── Library Page (Scenarios + Parts) ──────────────────────────────────────────
 if st.session_state.current_page == "Library":
-    st.title("📚 Library")
+    st.title("Library")
     st.caption("Reusable building blocks. **Scenarios** = whole configurations; "
                "**Parts** = individual bacteria / phages / antibiotics you compose.")
 
-    st.markdown("## 💾 Scenarios")
+    st.markdown("## Scenarios")
     st.markdown(
         "<div class='info-banner'>💡 A scenario captures your <b>entire</b> configuration. "
         "Loading one configures the <b>Interactive Simulator</b> and applies across all pages "
@@ -2647,13 +2637,13 @@ if st.session_state.current_page == "Library":
 
     sc_save, sc_io = st.columns(2)
     with sc_save:
-        with st.expander("➕ Save current configuration", expanded=not _scenarios):
+        with st.expander("+ Save current configuration", expanded=not _scenarios):
             _sc_name = st.text_input("Scenario name", value=f"Scenario {len(_scenarios) + 1}", key="sc_save_name")
             _sc_note = st.text_area(
                 "Annotation (optional)", key="sc_save_note",
                 placeholder="e.g. PA high-persister + fast-adsorbing phage, immunocompromised host",
             )
-            if st.button("💾 Save scenario", key="sc_save_btn", width="stretch"):
+            if st.button("Save scenario", key="sc_save_btn", width="stretch"):
                 _name = (_sc_name or "").strip()
                 if not _name:
                     st.error("Please enter a scenario name.")
@@ -2667,16 +2657,16 @@ if st.session_state.current_page == "Library":
                     st.success(f"Saved '{_name}'.")
                     st.rerun()
     with sc_io:
-        with st.expander("📤 Export / 📥 Import library", expanded=False):
+        with st.expander("Export / Import library", expanded=False):
             st.download_button(
-                "📤 Export all scenarios (JSON)",
+                "Export all scenarios (JSON)",
                 data=export_scenarios_json(_scenarios),
                 file_name="pbisim_scenarios.json",
                 mime="application/json",
                 width="stretch",
                 disabled=not _scenarios,
             )
-            _up = st.file_uploader("📥 Import scenarios (JSON)", type=["json"], key="sc_import")
+            _up = st.file_uploader("Import scenarios (JSON)", type=["json"], key="sc_import")
             if _up is not None and st.button("Merge imported scenarios", key="sc_import_btn"):
                 try:
                     imported = import_scenarios_json(_up.getvalue().decode("utf-8"))
@@ -2702,7 +2692,7 @@ if st.session_state.current_page == "Library":
                     st.success(f"Loaded '{_name}'.")
                     st.rerun()
             with c_del:
-                if st.button("🗑️", key=f"sc_del_{_name}"):
+                if st.button(":material/delete:", key=f"sc_del_{_name}"):
                     _scenarios.pop(_name, None)
                     st.session_state.user_scenarios = _scenarios
                     st.rerun()
@@ -2711,7 +2701,7 @@ if st.session_state.current_page == "Library":
 
     # ── 🧬 Parts (composable building blocks) ────────────────────────────────
     st.markdown("---")
-    st.markdown("## 🧬 Parts")
+    st.markdown("## Parts")
     st.caption(
         "Save individual **bacteria / phages / antibiotics** as reusable parts and compose "
         "them into any configuration. Loading a part adds it to the current strains / phages "
@@ -2721,14 +2711,14 @@ if st.session_state.current_page == "Library":
     )
     _lib = st.session_state.parts_library
 
-    with st.expander("📤 Export / 📥 Import parts library (JSON)"):
+    with st.expander("Export / Import parts library (JSON)"):
         _has_parts = any(_lib[c] for c in PART_CATEGORIES)
         st.download_button(
-            "📤 Export parts (JSON)", data=export_parts_json(_lib),
+            "Export parts (JSON)", data=export_parts_json(_lib),
             file_name="pbisim_parts.json", mime="application/json",
             width="stretch", disabled=not _has_parts,
         )
-        _pup = st.file_uploader("📥 Import parts (JSON)", type=["json"], key="parts_import")
+        _pup = st.file_uploader("Import parts (JSON)", type=["json"], key="parts_import")
         if _pup is not None and st.button("Merge imported parts", key="parts_import_btn"):
             try:
                 _imported = import_parts_json(_pup.getvalue().decode("utf-8"))
@@ -2748,7 +2738,7 @@ if st.session_state.current_page == "Library":
             _entities = st.session_state.get(_meta["key"], [])
             _store = _lib[_cat]
 
-            with st.expander(f"➕ Save a current {_singular} as a part", expanded=not _store):
+            with st.expander(f"+ Save a current {_singular} as a part", expanded=not _store):
                 if not _entities:
                     st.info(f"No {_meta['label'].lower()} configured yet — set one up in the Interactive Simulator first.")
                 else:
@@ -2770,7 +2760,7 @@ if st.session_state.current_page == "Library":
                             help="Burst/latent/adsorption are phage×host properties — record the host so reuse elsewhere is flagged.",
                         )
                         _pref = "" if _pref == "(unspecified)" else _pref
-                    if st.button("💾 Save part", key=f"part_save_{_cat}", width="stretch"):
+                    if st.button("Save part", key=f"part_save_{_cat}", width="stretch"):
                         _nm = (_pname or "").strip()
                         if not _nm:
                             st.error("Please enter a part name.")
@@ -2820,7 +2810,7 @@ if st.session_state.current_page == "Library":
                             st.session_state._nav_to = "Interactive Simulator"
                             st.rerun()
                 with _cd:
-                    if st.button("🗑️", key=f"part_del_{_cat}_{_pn}"):
+                    if st.button(":material/delete:", key=f"part_del_{_cat}_{_pn}"):
                         _store.pop(_pn, None)
                         st.session_state.parts_library = _lib
                         st.rerun()
@@ -2828,7 +2818,7 @@ if st.session_state.current_page == "Library":
 
 # ── Calibration Page (Phase A: data upload + overlay + fit metric) ────────────
 elif st.session_state.current_page == "Calibration":
-    st.title("📐 Calibration — data overlay")
+    st.title("Calibration — data overlay")
     st.caption(
         "Upload experimental data and overlay the **current model's** prediction (configured in "
         "the Interactive Simulator) on the observations. Tune parameters there to match; a "
@@ -2882,7 +2872,7 @@ elif st.session_state.current_page == "Calibration":
             _canonical = all(k in _low for k in ("time", "arm", "observable", "value"))
             if _canonical:
                 st.success("Detected pbisim-fit long format (time, arm, observable, value).")
-            with st.expander("🔧 Column mapping", expanded=not _canonical):
+            with st.expander("Column mapping", expanded=not _canonical):
                 _tc = st.selectbox("Time column", _cols, index=_guess(["time"]))
                 _vc = st.selectbox("Value (measurement) column", _cols, index=_guess(["value", "dv"]))
                 _obs_from_col = st.checkbox("Observable is in a column", value=("observable" in _low))
@@ -2896,7 +2886,7 @@ elif st.session_state.current_page == "Calibration":
                 _mc = st.selectbox("Phage-dose / MOI column (optional — drives the simulated dose per arm)",
                                    ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
                 _mc = None if _mc == "(none)" else _mc
-            if st.button("📥 Load dataset", key="fit_load", width="stretch"):
+            if st.button("Load dataset", key="fit_load", width="stretch"):
                 st.session_state.fit_dataset = {
                     "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
                     "arm_cols": _ac, "moi": _mc,
@@ -2990,7 +2980,7 @@ elif st.session_state.current_page == "Calibration":
             # in sync with edits made on the Simulator page.
             _tstrains = st.session_state.get("int_strains", [])
             _tphages = st.session_state.get("int_phages", [])
-            with st.expander("🎛 Manual parameter tuning", expanded=False):
+            with st.expander("Manual parameter tuning", expanded=False):
                 st.caption("Edit the model's real parameter values, then re-overlay. Changes update the live "
                            "Interactive-Simulator model directly (no separate apply step) and can be saved as "
                            "a Scenario or as Parts in the Library.")
@@ -3006,7 +2996,7 @@ elif st.session_state.current_page == "Calibration":
                         help="Number of phage latent (eclipse) stages — Erlang shape of the latent period."))
                 with gk2:
                     st.session_state["int_carrying_capacity"] = st.number_input(
-                        "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                        "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                         format="%.3e", key="fit_edit_K")
                 with gk3:
                     st.session_state["int_monod_constant"] = st.number_input(
@@ -3175,7 +3165,7 @@ elif st.session_state.current_page == "Calibration":
             # data in session_state so the visualization stays alive across page
             # navigation (and reruns) until it is explicitly re-run or the dataset
             # is cleared.
-            if st.button("🔬 Overlay model on data", key="fit_overlay", width="stretch"):
+            if st.button("Overlay model on data", key="fit_overlay", width="stretch", type="primary"):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
                     _B0 = float(np.sum(_iB))
@@ -3245,6 +3235,47 @@ elif st.session_state.current_page == "Calibration":
                 _ax.grid(True, alpha=0.15)
                 st.pyplot(_fig)
                 plt.close(_fig)
+
+                # Pooled fit-quality tiles (RMSE + R² across all series, model
+                # interpolated onto the observation times; log₁₀ space when the
+                # observable is logged).
+                _obs_all, _pred_all = [], []
+                for _s in _ovr["series"]:
+                    _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
+                    _ov = np.asarray(_s["obs_value"], dtype=float)
+                    if _ovr["log"]:
+                        _pt = np.log10(np.maximum(_pt, 1e-30))
+                        _ov = np.log10(np.maximum(_ov, 1e-30))
+                    _obs_all.append(_ov)
+                    _pred_all.append(np.asarray(_pt, dtype=float))
+                if _obs_all:
+                    _oa = np.concatenate(_obs_all)
+                    _pa = np.concatenate(_pred_all)
+                    _mask = np.isfinite(_oa) & np.isfinite(_pa)
+                    _oa, _pa = _oa[_mask], _pa[_mask]
+                    _rmse_agg = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
+                    _ss_tot = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
+                    _r2 = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _ss_tot) if _ss_tot > 0 else float("nan")
+                    _q1, _q2 = st.columns(2)
+                    _rmse_lbl = "RMSE (log₁₀)" if _ovr["log"] else "RMSE"
+                    _q1.markdown(
+                        f"""<div class="metric-container">
+                            <div class="metric-label">{_rmse_lbl}</div>
+                            <div class="metric-value">{_rmse_agg:.3f}</div>
+                            <div class="metric-sub">across {_oa.size} points</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                    _q2.markdown(
+                        f"""<div class="metric-container">
+                            <div class="metric-label">R²</div>
+                            <div class="metric-value">{_r2:.3f}</div>
+                            <div class="metric-sub">observed vs predicted</div>
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("<br>", unsafe_allow_html=True)
+
                 st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _ovr["log"] else "") +
                             f", vs {_ovr['stat_label']})")
                 st.dataframe(pd.DataFrame(_ovr["metrics"]), width="stretch", hide_index=True)
@@ -3263,7 +3294,7 @@ elif st.session_state.current_page == "Calibration":
                 _cal_name = st.text_input("Scenario name", value="calibrated", key="fit_save_name")
             with _cs2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 Save calibrated config as Scenario", key="fit_save_scenario", width="stretch"):
+                if st.button("Save calibrated config as Scenario", key="fit_save_scenario", width="stretch"):
                     _nm = (_cal_name or "").strip()
                     if not _nm:
                         st.error("Enter a scenario name.")
@@ -3277,7 +3308,7 @@ elif st.session_state.current_page == "Calibration":
                         st.session_state.user_scenarios = _scen
                         st.success(f"Saved scenario '{_nm}'. Reload it from the Library page.")
 
-        if st.button("🗑️ Clear dataset", key="fit_clear"):
+        if st.button("Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None
             st.session_state.fit_config = {}
             st.session_state.calib_overlay_result = None
@@ -3296,12 +3327,20 @@ elif st.session_state.current_page == "Calibration":
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────
 elif st.session_state.current_page == "AI Assistant":
-    st.title("💬 AI Simulation Assistant")
+    st.title("AI Simulation Assistant")
     st.caption("Instruct Claude to design, simulate, and analyze phage therapy setups using natural language.")
+
+    # Output display preferences — live here, next to the output they control
+    # (moved out of the sidebar's API settings, where they were buried).
+    _sc1, _sc2 = st.columns(2)
+    with _sc1:
+        show_code = st.toggle("Show generated code", value=True, key="ai_show_code")
+    with _sc2:
+        show_assumptions = st.toggle("Show assumptions", value=True, key="ai_show_assumptions")
 
     # Check key
     if not st.session_state.agent.client.api_key:
-        st.warning("⚠️ Please enter your Anthropic API Key in the sidebar to use the AI Assistant.")
+        st.warning("Please enter your Anthropic API Key in the sidebar to use the AI Assistant.")
 
     # Chat UI
     for turn in st.session_state.history:
@@ -3313,7 +3352,7 @@ elif st.session_state.current_page == "AI Assistant":
             with st.chat_message("assistant"):
                 st.markdown(agent_resp.narrative)
                 if getattr(agent_resp, "assumptions", "") and show_assumptions:
-                    with st.expander("👁️ Model Assumptions"):
+                    with st.expander("Model Assumptions"):
                         st.markdown(agent_resp.assumptions)
                 if agent_resp.code and show_code:
                     with st.expander("🐍 Generated python code"):
@@ -3326,7 +3365,7 @@ elif st.session_state.current_page == "AI Assistant":
                             st.pyplot(fig)
                             plt.close(fig)
                         if exec_result.stdout:
-                            with st.expander("📄 Print outputs"):
+                            with st.expander("Print outputs"):
                                 st.text(exec_result.stdout)
                     else:
                         st.error("Execution failed:")
@@ -3348,8 +3387,8 @@ elif st.session_state.current_page == "AI Assistant":
                     summarize=summarize_current_results,
                 )
         except Exception as e:
-            st.error(f"❌ AI Assistant Error: {e}")
-            st.info("💡 If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
+            st.error(f"AI Assistant Error: {e}")
+            st.info("If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
 
         if run is not None:
             exec_result = run.result
@@ -3366,7 +3405,7 @@ elif st.session_state.current_page == "AI Assistant":
                             st.pyplot(fig)
                             plt.close(fig)
                         if exec_result.stdout:
-                            with st.expander("📄 Print outputs"):
+                            with st.expander("Print outputs"):
                                 st.text(exec_result.stdout)
                     else:
                         st.error("The code still failed after self-correction:")
@@ -3374,7 +3413,7 @@ elif st.session_state.current_page == "AI Assistant":
 
                 # The assistant populated the Interactive Simulator's widgets — offer to open it.
                 if getattr(run, "configured", False):
-                    st.success("✅ I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
+                    st.success("I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
                     if st.button("▶ Open in Interactive Simulator", key=f"nav_sim_{len(st.session_state.history)}", width="stretch"):
                         st.session_state["_nav_to"] = "Interactive Simulator"
                         st.rerun()
@@ -3394,7 +3433,7 @@ elif st.session_state.current_page == "AI Assistant":
 
 # ── Clinical Trials & Cohorts Page ────────────────────────────────────────────
 elif st.session_state.current_page == "Clinical Trials & Cohorts":
-    st.title("👥 Clinical Trials & cohort Simulator")
+    st.title("Clinical Trials & Cohort Simulator")
     st.caption("Generate a virtual population (VPOP), apply statistical variability (IIV), and run matching parallel arms.")
     
     st.markdown(
@@ -3406,14 +3445,14 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
     t_cols = st.columns([1, 2])
     
     with t_cols[0]:
-        st.markdown("### 📊 Trial Settings")
+        st.markdown("### Trial Settings")
         trial_patients = st.number_input("Cohort Size (N)", min_value=10, max_value=500, value=50, step=10)
         trial_seed = st.number_input("Cohort RNG Seed", value=42)
         trial_t_end = st.number_input("Trial Duration (hours)", min_value=12.0, max_value=336.0, value=72.0, step=12.0)
         trial_dt = st.number_input("Solver output step (dt)", min_value=0.05, max_value=1.0, value=0.25, step=0.05)
         trial_n_jobs = st.slider("Parallel workers (n_jobs)", min_value=1, max_value=16, value=1, help="Parallel patient simulation via joblib (loky). Keep at 1 on small/shared hosts (e.g. the free Render tier) — forked worker processes can segfault or OOM there; raise it on a beefier machine.")
         
-        st.markdown("### 💉 Treatment Arms")
+        st.markdown("### Treatment Arms")
         st.caption("Define any number of arms (e.g. low-dose vs high-dose), each with its own phage / antibiotic regimen. The Control arm never receives doses.")
         trial_include_control = st.checkbox("Include Control arm (no doses)", value=True)
 
@@ -3432,11 +3471,11 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             with _lc:
                 st.markdown(f"**{_arm['name']}** — {arm_regimen_summary(_arm)}")
             with _dc:
-                if st.button("🗑️", key=f"del_arm_{_aid}"):
+                if st.button(":material/delete:", key=f"del_arm_{_aid}"):
                     trial_arms.pop(_ai)
                     st.session_state.trial_arms = trial_arms
                     st.rerun()
-            with st.expander(f"✏️ Edit '{_arm['name']}'", expanded=False):
+            with st.expander(f"Edit '{_arm['name']}'", expanded=False):
                 _en = st.text_input("Arm name", value=_arm["name"], key=f"edit_arm_name_{_aid}")
                 _ep, _ea = {"on": False}, {"on": False}
                 if _tphages:
@@ -3447,13 +3486,13 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     st.markdown("**Antibiotic dosing**")
                     _ea = render_regimen_config(f"edit_arm_a_{_aid}", _tabx, "antibiotic",
                                                 10.0, "Amount (mg)", initial=_arm.get("abx"))
-                if st.button("💾 Save changes", key=f"save_arm_{_aid}"):
+                if st.button("Save changes", key=f"save_arm_{_aid}"):
                     _arm["name"], _arm["phage"], _arm["abx"] = _en, _ep, _ea
                     st.session_state.trial_arms = trial_arms
                     st.rerun()
 
         # Add-arm form
-        with st.expander("➕ Add treatment arm", expanded=not trial_arms):
+        with st.expander("+ Add treatment arm", expanded=not trial_arms):
             _new_name = st.text_input("Arm name", value=f"Arm {len(trial_arms) + 1}", key="new_arm_name")
             _pcfg, _acfg = {"on": False}, {"on": False}
             if _tphages:
@@ -3462,12 +3501,12 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             if _tabx:
                 st.markdown("**Antibiotic dosing**")
                 _acfg = render_regimen_config("new_arm_a", _tabx, "antibiotic", 10.0, "Amount (mg)", default_on=not _tphages)
-            if st.button("➕ Add arm", key="add_arm_btn"):
+            if st.button("+ Add arm", key="add_arm_btn"):
                 trial_arms.append({"name": _new_name, "phage": _pcfg, "abx": _acfg})
                 st.session_state.trial_arms = trial_arms
                 st.rerun()
 
-        st.markdown("### 🧬 Parameter Variability (IIV)")
+        st.markdown("### Parameter Variability (IIV)")
         
         # Active IIVs — editable in place
         trial_iivs = st.session_state.get("trial_iiv_inputs", [])
@@ -3480,20 +3519,20 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             with col_p:
                 st.markdown(f"**{_pname}** — {iiv['dist_type']} {iiv['params']} ({iiv['mode']})")
             with col_act:
-                if st.button("🗑️", key=f"del_iiv_{_iid}"):
+                if st.button(":material/delete:", key=f"del_iiv_{_iid}"):
                     trial_iivs.pop(idx)
                     st.session_state.trial_iiv_inputs = trial_iivs
                     st.rerun()
-            with st.expander("✏️ Edit", expanded=False):
+            with st.expander("Edit", expanded=False):
                 _edited = render_iiv_config(f"edit_iiv_{_iid}", initial=iiv)
-                if st.button("💾 Save changes", key=f"save_iiv_{_iid}"):
+                if st.button("Save changes", key=f"save_iiv_{_iid}"):
                     _edited["_id"] = _iid
                     trial_iivs[idx] = _edited
                     st.session_state.trial_iiv_inputs = trial_iivs
                     st.rerun()
 
         # Add IIV form
-        with st.expander("➕ Add Parameter Variability"):
+        with st.expander("+ Add Parameter Variability"):
             _new_iiv = render_iiv_config("new_iiv")
             if st.button("Add Parameter IIV"):
                 trial_iivs.append(_new_iiv)
@@ -3503,7 +3542,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Run Parallel Clinical Trial", width="stretch"):
+        if st.button("Run Parallel Clinical Trial", width="stretch", type="primary"):
             with st.spinner("Generating cohort populations & simulating treatment arms..."):
                 try:
                     # 1. Compile nominal base config
@@ -3577,7 +3616,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     st.code(traceback.format_exc())
                     
     with t_cols[1]:
-        st.markdown("### 📊 Outcomes & Visualization")
+        st.markdown("### Outcomes & Visualization")
         
         if st.session_state.trial_result is None:
             st.info("Run the clinical trial simulation on the left panel to display outcomes.")
@@ -3608,9 +3647,39 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 )
                 
             clearance_threshold = st.session_state.get("int_extinction_threshold", 100.0)
-            
+
+            # Cure-rate summary tiles (one per arm; eradication = reached clearance by t_end)
+            try:
+                _arm_names = list(result.arm_names)
+            except Exception:
+                _arm_names = []
+            if _arm_names and len(_arm_names) <= 6:
+                _tiles = st.columns(len(_arm_names))
+                for _col, _arm in zip(_tiles, _arm_names):
+                    try:
+                        _pats = [r for r in result[_arm].results if r is not None]
+                        _tt = [time_to_clearance(r, threshold=clearance_threshold) for r in _pats]
+                        _cured = [t for t in _tt if t is not None]
+                        _rate = (len(_cured) / len(_pats) * 100.0) if _pats else 0.0
+                        _median = float(np.median(_cured)) if _cured else None
+                        _sub = (f"{len(_cured)}/{len(_pats)} cured · median {_median:.0f} h"
+                                if _median is not None else f"{len(_cured)}/{len(_pats)} cured")
+                    except Exception:
+                        _rate, _sub = 0.0, "n/a"
+                    _col.markdown(
+                        f"""
+                        <div class="metric-container">
+                            <div class="metric-label">Cure rate · {_arm}</div>
+                            <div class="metric-value">{_rate:.0f}%</div>
+                            <div class="metric-sub">{_sub}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("<br>", unsafe_allow_html=True)
+
             # Raw PKPD time trajectories (CFU + PFU) per arm
-            st.markdown("#### 🧫 PK/PD trajectories (median & IQR per arm)")
+            st.markdown("#### PK/PD trajectories (median & IQR per arm)")
             fig_cfu = plot_pkpd_trajectories_plotly(
                 result, prefixes=("B", "D", "I", "H"),
                 title="Total Bacteria (CFU/mL)", y_label="log₁₀ CFU/mL",
@@ -3628,13 +3697,13 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             st.plotly_chart(fig_km, width="stretch")
 
             # Metric distributions
-            st.markdown("#### 📦 Distribution of outcomes")
+            st.markdown("#### Distribution of outcomes")
             fig_dist = plot_metric_distributions_plotly(result, metric=metric_choice)
             st.plotly_chart(fig_dist, width="stretch")
             
             # Data Exports
             st.markdown("---")
-            st.markdown("### 📥 Cohort Data Exports")
+            st.markdown("### Cohort Data Exports")
             
             cx1, cx2 = st.columns(2)
             with cx1:
@@ -3642,7 +3711,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 out_df = result.outcome_dataframe(endpoint=endpoint_choice, t_end=trial_t_end, threshold=clearance_threshold)
                 csv_out = out_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Survival Outcomes DataFrame (CSV)",
+                    "Download Survival Outcomes DataFrame (CSV)",
                     data=csv_out,
                     file_name="pbisim_survival_outcomes.csv",
                     mime="text/csv",
@@ -3655,7 +3724,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 nlme_df = result.nlme_dataframe(outputs_spec, times=obs_times)
                 csv_nlme = nlme_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Pharmacometrics (NLME) DataFrame (CSV)",
+                    "Download Pharmacometrics (NLME) DataFrame (CSV)",
                     data=csv_nlme,
                     file_name="pbisim_nlme_cohort.csv",
                     mime="text/csv",
@@ -3665,7 +3734,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
 # ── Dose-Response Sweeps Page ──────────────────────────────────────────────────
 elif st.session_state.current_page == "Dose-Response Sweeps":
-    st.title("📈 Dose-Response Simulator")
+    st.title("Dose-Response Simulator")
     st.caption("Perform multi-drug dose-response sweeps with MOI scaling, vector padding, and raw time-series visualization.")
 
     # Keep the sweep controls alive across navigation (re-seed before they render).
@@ -3690,7 +3759,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
     col_setup, col_run = st.columns([1, 2])
 
     with col_setup:
-        st.markdown("### ⚙️ Configure Sweeps")
+        st.markdown("### Configure Sweeps")
         
         # Phages
         for j, p in enumerate(phages):
@@ -3758,10 +3827,10 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     }
 
         st.markdown("<br>", unsafe_allow_html=True)
-        run_sweep = st.button("🚀 Run Dose-Response Sweep", width="stretch")
+        run_sweep = st.button("Run Dose-Response Sweep", width="stretch", type="primary")
 
     with col_run:
-        st.markdown("### 📊 Sweep Results")
+        st.markdown("### Sweep Results")
         if run_sweep:
             # Parse vectors
             parsed_vectors = {}
@@ -3782,7 +3851,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 # Perform padding
                 padded, warnings = pad_vectors(parsed_vectors)
                 for w in warnings:
-                    st.warning(f"⚠️ {w}")
+                    st.warning(f"{w}")
 
                 # Determine number of runs M
                 first_key = list(padded.keys())[0]
@@ -3938,6 +4007,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
         if _dr:
             import plotly.graph_objects as go
             df_summary = pd.DataFrame(_dr["summary"])
+            _sweep_summary_tiles(df_summary)
             st.markdown("#### Summary of Runs")
             st.dataframe(
                 df_summary.style.format({
@@ -3955,7 +4025,8 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
             fig_traj.update_layout(
                 xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+            apply_axis_plotly(fig_traj, plot_axis_controls("dr_traj", default_y="Log"))
             st.plotly_chart(fig_traj, width="stretch")
 
             if _dr["od_trajectories"]:
@@ -3995,7 +4066,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 
 # ── Parameter Sweeps Page ──────────────────────────────────────────────────────
 elif st.session_state.current_page == "Parameter Sweeps":
-    st.title("📊 Model Parameter Sweeps")
+    st.title("Model Parameter Sweeps")
     st.caption("Sweep any model parameter in 1D or 2D and visualize cellular trajectories and outcome heatmaps.")
 
     # Keep the sweep controls alive across navigation (re-seed before they render).
@@ -4027,7 +4098,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
     col_setup, col_run = st.columns([1, 2])
 
     with col_setup:
-        st.markdown("### ⚙️ Configure Parameters")
+        st.markdown("### Configure Parameters")
         
         if sweep_type == "1D Sweep":
             param1_label = st.selectbox("Select Parameter", param_labels, key="p1_sweep_label")
@@ -4094,7 +4165,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
             spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
-            run_sweep = st.button("🚀 Run 1D Sweep", width="stretch")
+            run_sweep = st.button("Run 1D Sweep", width="stretch", type="primary")
 
         elif sweep_type == "2D Sweep":
             param1_label = st.selectbox("Select Parameter 1 (X-axis)", param_labels, key="p1_sweep_label")
@@ -4122,7 +4193,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 steps2 = st.number_input("P2 Steps", min_value=2, max_value=10, value=3, key="p2_steps")
             spacing2 = st.selectbox("P2 Spacing", ["Linear", "Logarithmic"], key="p2_spacing")
 
-            run_sweep = st.button("🚀 Run 2D Sweep", width="stretch")
+            run_sweep = st.button("Run 2D Sweep", width="stretch", type="primary")
 
         else:  # Coupled (linked) sweep
             st.caption(
@@ -4140,10 +4211,10 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     key=f"pc_series_{_ci}",
                     placeholder="e.g. 0, 0.5, 1",
                 )
-            run_sweep = st.button("🚀 Run Coupled Sweep", width="stretch")
+            run_sweep = st.button("Run Coupled Sweep", width="stretch", type="primary")
 
     with col_run:
-        st.markdown("### 📊 Sweep Results")
+        st.markdown("### Sweep Results")
         if run_sweep:
             # Warn once if the pre-run decimates the culture (death w/o dormancy).
             warn_if_prerun_collapses(nominal_config, initial_B)
@@ -4386,6 +4457,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
             if _ps["type"] == "1D":
                 _p1 = _ps["param1_label"]
                 df_summary = pd.DataFrame(_ps["summary"])
+                _sweep_summary_tiles(df_summary)
                 st.markdown("#### Summary of Runs")
                 st.dataframe(
                     df_summary.style.format({
@@ -4399,7 +4471,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                apply_axis_plotly(fig_traj, plot_axis_controls("ps1d_traj", default_y="Log"))
                 st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
@@ -4423,6 +4496,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
             elif _ps["type"] == "coupled":
                 _labels = _ps["labels"]
                 df_summary = pd.DataFrame(_ps["summary"])
+                _sweep_summary_tiles(df_summary)
                 st.markdown("#### Summary of Runs (linked parameters)")
                 _fmt = {c: "{:.2e}" for c in _labels}
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
@@ -4434,7 +4508,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                apply_axis_plotly(fig_traj, plot_axis_controls("pscoupled_traj", default_y="Log"))
                 st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
@@ -4487,7 +4562,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
 
 # ── Interactive Simulator Page ────────────────────────────────────────────────
 elif st.session_state.current_page == "Interactive Simulator":
-    st.title("🦠 Interactive Simulation Builder")
+    st.title("Interactive Simulation Builder")
     st.caption("Configure custom variables, build mathematical parameters, and solve the ODE.")
 
     st.markdown(
@@ -4506,10 +4581,10 @@ elif st.session_state.current_page == "Interactive Simulator":
     # 2. Main tabs for parameters configuration
     config_tabs = st.tabs(
         [
-            "🧫 Strains & Phages",
-            "🧪 Antibiotics & Immunity",
-            "📅 Environment & Dosing",
-            "⚙️ Solver Settings",
+            "Strains & Phages",
+            "Antibiotics & Immunity",
+            "Environment & Dosing",
+            "Solver Settings",
         ]
     )
 
@@ -4555,7 +4630,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     step=0.05, help="Nutrient half-saturation for Monod growth S/(Ks+S).")
             if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
                 st.session_state["int_carrying_capacity"] = st.number_input(
-                    "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                    "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                     format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
 
         # Death signal (model-wide) — modulates the per-strain natural death rate dB.
@@ -4587,7 +4662,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── DIRECT MODE ──
         if builder_mode == "Direct (ModelBuilder)":
             with col1:
-                st.markdown("### 🧫 Bacterial Strains")
+                st.markdown("### Bacterial Strains")
 
                 n_strains = st.number_input(
                     "Number of strains", min_value=1, max_value=10, value=len(strains)
@@ -4636,7 +4711,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc2:
                             strains[i]["growth_rate"] = st.number_input(
-                                "Growth rate (r)",
+                                "Growth rate r (h⁻¹)",
                                 value=float(strains[i]["growth_rate"]),
                                 step=0.1,
                                 key=f"str_growth_{i}",
@@ -4650,7 +4725,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.",
                         )
                         strains[i]["death_rate_B"] = st.number_input(
-                            "Natural death rate (dB)",
+                            "Natural death rate dB (h⁻¹)",
                             value=float(strains[i].get("death_rate_B", 0.0)),
                             step=0.01,
                             key=f"str_death_{i}",
@@ -4687,7 +4762,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 )
                             with cd4:
                                 strains[i]["death_rate_D"] = st.number_input(
-                                    "Dormant death rate (dD)",
+                                    "Dormant death rate dD (h⁻¹)",
                                     value=float(strains[i].get("death_rate_D", 0.0)),
                                     step=0.01,
                                     key=f"str_death_d_{i}",
@@ -4746,7 +4821,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
 
             with col2:
-                st.markdown("### 🧬 Phage Strains")
+                st.markdown("### Phage Strains")
 
                 n_phages = st.number_input(
                     "Number of phages", min_value=0, max_value=10, value=len(phages)
@@ -4800,7 +4875,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc4:
                             phages[i]["burst_sizes"] = st.number_input(
-                                "Burst size (Y)",
+                                "Burst size Y (PFU/cell)",
                                 value=float(phages[i]["burst_sizes"]),
                                 step=10.0,
                                 key=f"phg_burst_{i}",
@@ -4894,7 +4969,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
                 if n_phages > 0:
                     st.markdown("---")
-                    st.markdown("### 🧬 Bacterial Mutations (WT → R)")
+                    st.markdown("### Bacterial Mutations (WT → R)")
                     if n_strains == 2**n_phages:
                         st.caption("Per-phage-locus shortcut (binary-genotype layout, n_strains = 2^n_phages):")
                         phg_res_rates = []
@@ -4915,7 +4990,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             phg_res_rates.append(res_rate)
                         st.session_state["direct_phg_res_rates"] = phg_res_rates
 
-                    with st.expander("🔄 Custom mutation network (any number of strains)",
+                    with st.expander("Custom mutation network (any number of strains)",
                                      expanded=(n_strains != 2**n_phages)):
                         st.caption(
                             "Define arbitrary strain→strain mutation transitions. Works for any "
@@ -4927,7 +5002,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── BINARY RESISTANCE GENOTYPES (BRG) ──
         elif builder_mode == "Binary Genotypes (BRG)":
             with col1:
-                st.markdown("### 🧫 Base Bacteria (WT)")
+                st.markdown("### Base Bacteria (WT)")
                 st.session_state["int_brg_base_growth"] = st.number_input(
                     "Base growth rate (r)", value=float(st.session_state.get("int_brg_base_growth", 1.2)), step=0.1
                 )
@@ -4935,7 +5010,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     "Resource consumption ratio", value=float(st.session_state.get("int_brg_base_ratio", 1e9)), format="%.1e"
                 )
                 st.session_state["int_brg_death_rate_B"] = st.number_input(
-                    "Natural death rate (dB)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
+                    "Natural death rate dB (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
                 )
                 st.session_state["int_brg_dormancy_enabled"] = st.checkbox(
                     "Enable Dormancy", value=st.session_state.get("int_brg_dormancy_enabled", False)
@@ -4957,7 +5032,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                         help="Number of dormancy-depth compartments for all genotypes.",
                     )
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
-                        "Dormant death rate (dD)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
+                        "Dormant death rate dD (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                     )
                     _bds = canonical_signal(st.session_state.get("int_brg_dorm_signal", "nutrient"))
                     _brs = canonical_signal(st.session_state.get("int_brg_resus_signal", "nutrient"))
@@ -4985,7 +5060,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
                 # Renders the loci count
                 st.markdown("---")
-                st.markdown("### 🧬 Phage Loci")
+                st.markdown("### Phage Loci")
                 n_phg_loci = st.number_input("Number of phage species (loci)", min_value=1, max_value=10, value=max(len(phages), 1))
                 if n_phg_loci != len(phages):
                     phages = phages[:n_phg_loci]
@@ -5008,12 +5083,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for idx in range(n_phg_loci):
                     with st.expander(f"Phage Locus {idx}: {phages[idx]['name']}", expanded=True):
                         phages[idx]["name"] = st.text_input("Locus name", value=phages[idx]["name"], key=f"brg_phg_name_{idx}")
-                        phages[idx]["initial_P"] = st.number_input("Initial count (P0)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
-                        phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (adsorption_s)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
-                        phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (adsorption_r)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
-                        phages[idx]["burst_sizes"] = st.number_input("Burst size", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
+                        phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (mL·h⁻¹)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
+                        phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (mL·h⁻¹)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
+                        phages[idx]["burst_sizes"] = st.number_input("Burst size (PFU/cell)", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx]["latent_periods"]), step=0.1, key=f"brg_phg_latent_{idx}")
-                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
+                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
                         phages[idx]["fitness_cost"] = st.number_input(
                             "Resistance fitness cost",
                             value=float(phages[idx].get("fitness_cost", 0.05)), step=0.01,
@@ -5023,7 +5098,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "initial condition — with cost 0 the resistant mutants are neutral "
                                  "and dominate the pre-treatment equilibrium.",
                         )
-                        phages[idx]["mu"] = st.number_input("Mutation rate (mu)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
+                        phages[idx]["mu"] = st.number_input("Mutation rate μ (per replication)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
                             "Dormant adsorption attenuation (per depth layer)",
                             value=float(phages[idx].get("attenuation_rate", 0.0)),
@@ -5072,7 +5147,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"brg_phg_vi_{idx}")
 
             with col2:
-                st.markdown("### 🧮 Auto-generated Genotypes")
+                st.markdown("### Auto-generated Genotypes")
                 # Show list of 2^(m+a) genotypes and initial conditions inputs
                 import itertools
                 n_abx = len(antibiotics)
@@ -5115,7 +5190,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── CUSTOM STRAINS & MUTATION GRAPH (StrainSet) ──
         elif builder_mode == "Custom Strains & Graph (StrainSet)":
             with col1:
-                st.markdown("### 🧫 Custom Bacterial Strains")
+                st.markdown("### Custom Bacterial Strains")
                 
                 n_strains = st.number_input("Number of custom strains", min_value=1, max_value=10, value=max(len(strains), 1))
                 if n_strains != len(strains):
@@ -5137,22 +5212,22 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for i in range(n_strains):
                     with st.expander(f"Strain {i}: {strains[i]['name']}", expanded=True):
                         strains[i]["name"] = st.text_input("Strain name", value=strains[i]["name"], key=f"ss_str_name_{i}")
-                        strains[i]["initial_B"] = st.number_input("Initial count (B0)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
-                        strains[i]["growth_rate"] = st.number_input("Growth rate (r)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
+                        strains[i]["initial_B"] = st.number_input("Initial count B₀ (CFU·mL⁻¹)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
+                        strains[i]["growth_rate"] = st.number_input("Growth rate r (h⁻¹)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
                         strains[i]["bacteria_to_resource_ratio"] = st.number_input(
                             "Bacteria-to-resource ratio", value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
                             format="%.2e", key=f"ss_str_ratio_{i}",
                             help="Bacteria produced per unit resource consumed (yield). Governs how fast "
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.")
-                        strains[i]["death_rate_B"] = st.number_input("Natural death rate (dB)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
+                        strains[i]["death_rate_B"] = st.number_input("Natural death rate dB (h⁻¹)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
                         if strains[i]["dormancy_enabled"]:
                             strains[i]["dormancy_depth"] = st.number_input("Depth layers (Q)", min_value=1, max_value=10, value=int(strains[i].get("dormancy_depth", 1)), key=f"ss_str_depth_{i}", help="Number of dormancy-depth compartments (max across strains sets the model n_depth).")
-                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
-                            strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
-                            strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
-                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate (dD)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
+                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate (h⁻¹)", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
+                            strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate (h⁻¹)", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
+                            strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion (h⁻¹)", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
+                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate dD (h⁻¹)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
                             _sds = canonical_signal(strains[i].get("dormancy_signal", "nutrient"))
                             _srs = canonical_signal(strains[i].get("resuscitation_signal", "nutrient"))
                             strains[i]["dormancy_signal"] = st.selectbox(
@@ -5194,7 +5269,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                     )
 
                 # 🔄 Transitions graph editor
-                st.markdown("#### 🔄 Mutation Graph (Transitions)")
+                st.markdown("#### Mutation Graph (Transitions)")
                 transitions = st.session_state.get("int_transitions", [])
                 
                 for idx, trans in enumerate(transitions):
@@ -5209,18 +5284,18 @@ elif st.session_state.current_page == "Interactive Simulator":
                         trans["rate"] = st.number_input(f"Rate", value=float(trans["rate"]), format="%.2e", key=f"trans_rate_{idx}")
                     with c_del:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"trans_del_{idx}"):
+                        if st.button(":material/delete:", key=f"trans_del_{idx}"):
                             transitions.pop(idx)
                             st.session_state.int_transitions = transitions
                             st.rerun()
                             
-                if st.button("➕ Add Mutation Transition"):
+                if st.button("+ Add Mutation Transition"):
                     transitions.append({"from": strains[0]["name"] if strains else "", "to": strains[0]["name"] if strains else "", "rate": 1e-7})
                     st.session_state.int_transitions = transitions
                     st.rerun()
 
             with col2:
-                st.markdown("### 🧬 Phage Strains")
+                st.markdown("### Phage Strains")
                 n_phages = st.number_input("Number of phages", min_value=0, max_value=10, value=len(phages))
                 if n_phages != len(phages):
                     phages = phages[:n_phages]
@@ -5239,10 +5314,10 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for idx in range(n_phages):
                     with st.expander(f"Phage {idx}: {phages[idx]['name']}", expanded=True):
                         phages[idx]["name"] = st.text_input("Phage name", value=phages[idx]["name"], key=f"ss_phg_name_{idx}")
-                        phages[idx]["initial_P"] = st.number_input("Initial count (P0)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
-                        phages[idx]["burst_sizes"] = st.number_input("Burst size (Y)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
+                        phages[idx]["burst_sizes"] = st.number_input("Burst size Y (PFU/cell)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx].get("latent_periods", 0.5)), step=0.1, key=f"ss_phg_latent_{idx}")
-                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
+                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
                             "Dormant adsorption attenuation (per depth layer)",
                             value=float(phages[idx].get("attenuation_rate", 0.0)),
@@ -5296,7 +5371,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Antibiotics
         with col1:
-            st.markdown("### 💊 Antibiotics")
+            st.markdown("### Antibiotics")
 
             n_abx = st.number_input(
                 "Number of antibiotics", min_value=0, max_value=6, value=len(antibiotics)
@@ -5383,7 +5458,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "Drives the equilibrium initial condition; cost 0 → resistant "
                                  "mutants dominate the pre-treatment equilibrium.",
                         )
-                        antibiotics[i]["mu"] = st.number_input("Mutation rate (mu)", value=float(antibiotics[i].get("mu", 1e-7)), format="%.1e", key=f"abx_mu_{i}")
+                        antibiotics[i]["mu"] = st.number_input("Mutation rate μ (per replication)", value=float(antibiotics[i].get("mu", 1e-7)), format="%.1e", key=f"abx_mu_{i}")
                     else:
                         # Direct parameters
                         c3, c4 = st.columns(2)
@@ -5438,7 +5513,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Host Immunity
         with col2:
-            st.markdown("### 🛡️ Host Immunity")
+            st.markdown("### Host Immunity")
 
             st.session_state["int_immunity_enabled"] = st.checkbox(
                 "Enable Immune System Module",
@@ -5549,7 +5624,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 if _dormancy_on and st.session_state["int_imm_kill_rate_D"] <= 0:
                     st.warning(
-                        "⚠️ **Dormancy + immunity:** dormant/hibernating cells are "
+                        "**Dormancy + immunity:** dormant/hibernating cells are "
                         "immune-privileged while `imm_kill_rate_D = 0` — the immune "
                         "system will not kill them and they do not stimulate it. A "
                         "phage-resistant (or persister) population can survive in the "
@@ -5565,7 +5640,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Environment & Debris
         with col1:
-            st.markdown("### 🍎 Nutrient environment")
+            st.markdown("### Nutrient environment")
             st.caption("The **growth signal function** (and its Monod constant / carrying capacity) "
                        "is set under **Strains & Phages → Growth model**. These are the medium/reactor "
                        "conditions for nutrient-tracking growth.")
@@ -5591,7 +5666,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.info("The selected growth signal is nutrient-independent (constant / density), "
                         "so nutrient substrate dynamics are inactive.")
 
-            st.markdown("### 🎚️ Optical Density (OD) & Debris")
+            st.markdown("### Optical Density (OD) & Debris")
             st.session_state["int_debris_enabled"] = st.checkbox(
                 "Track Bacteriolytic Cell Debris",
                 value=st.session_state.get("int_debris_enabled", False),
@@ -5621,14 +5696,14 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Dosing Schedule
         with col2:
-            st.markdown("### 📅 Dosing Schedule & Regimens")
+            st.markdown("### Dosing Schedule & Regimens")
 
             sub_col1, sub_col2 = st.columns(2)
 
             with sub_col1:
                 st.markdown("#### Active Dosing Events")
                 if doses:
-                    st.caption("Edit time / amount / route inline; 🗑️ removes a row. "
+                    st.caption("Edit time / amount / route inline; :material/delete: removes a row. "
                                "To change the target, delete and re-add.")
                 _routes = ["bolus", "infusion"]
                 for idx, dose in enumerate(doses):
@@ -5655,14 +5730,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 value=float(dose.get("duration") or 2.0), step=0.5,
                                 key=f"dose_dur_{_did}")
                     with c_t4:
-                        if st.button("🗑️", key=f"del_dose_{_did}"):
+                        if st.button(":material/delete:", key=f"del_dose_{_did}"):
                             doses.pop(idx)
                             st.session_state.int_doses = doses
                             st.rerun()
                 st.session_state.int_doses = doses  # persist inline edits
 
                 st.markdown("#### Add Single Dose Event")
-                with st.expander("➕ Define Single Dosing Event"):
+                with st.expander("+ Define Single Dosing Event"):
                     # Build target options
                     target_ops = ["phage"]
                     if len(antibiotics) > 0:
@@ -5694,7 +5769,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     if d_route == "infusion":
                         d_dur = st.number_input("Infusion Duration (hours)", min_value=0.1, value=2.0, step=0.5)
 
-                    if st.button("➕ Add Dose Event"):
+                    if st.button("+ Add Dose Event"):
                         doses.append(
                             {
                                 "time": d_time,
@@ -5711,7 +5786,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
             with sub_col2:
                 st.markdown("#### Add Repeat Dosing Regimen")
-                with st.expander("➕ Define Repeat Dosing Regimen"):
+                with st.expander("+ Define Repeat Dosing Regimen"):
                     # Target options
                     target_ops_rep = ["phage"]
                     if len(antibiotics) > 0:
@@ -5742,7 +5817,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     if r_route == "infusion":
                         r_dur = st.number_input("Infusion Duration (hours)", min_value=0.1, value=2.0, step=0.5, key="rep_dose_duration")
 
-                    if st.button("➕ Add Repeat Regimen", key="rep_dose_add_btn"):
+                    if st.button("+ Add Repeat Regimen", key="rep_dose_add_btn"):
                         for k in range(int(r_count)):
                             doses.append({
                                 "time": r_start + k * r_interval,
@@ -5762,7 +5837,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("### 🕒 Solver Time parameters")
+            st.markdown("### Solver Time parameters")
             st.session_state["int_t_end"] = st.number_input(
                 "Simulation end time (hours)",
                 value=float(st.session_state.get("int_t_end", 48.0)),
@@ -5774,7 +5849,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 step=0.05,
             )
 
-            st.markdown("### 🧬 Model structure")
+            st.markdown("### Model structure")
             st.session_state["int_n_latent"] = st.number_input(
                 "Latency compartments (n_latent)",
                 min_value=1, max_value=20,
@@ -5783,7 +5858,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                      "Applies to all builder modes (Direct / BRG / Custom Strains).",
             )
 
-            st.markdown("### 🧩 Advanced solver options")
+            st.markdown("### Advanced solver options")
             st.session_state["int_superinfection"] = st.checkbox(
                 "Allow Phage Superinfection",
                 value=st.session_state.get("int_superinfection", False),
@@ -5806,7 +5881,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                          "cells are washed out — treatment starts with zero debris.")
 
         with col2:
-            st.markdown("### 🎛️ ODE solver specifics")
+            st.markdown("### ODE solver specifics")
             st.session_state["int_extinction_threshold"] = st.number_input(
                 "Absorbing Extinction threshold",
                 value=float(st.session_state.get("int_extinction_threshold", 1.0)),
@@ -5840,12 +5915,14 @@ elif st.session_state.current_page == "Interactive Simulator":
 
     # ──── Run Button ──────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🚀 Run Simulation", width="stretch"):
+    if st.button("Run Simulation", width="stretch", type="primary"):
         with st.spinner("Assembling model equations & integrating..."):
             try:
                 _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
                 warn_if_prerun_collapses(_pc_cfg, _pc_B0)
+                _t0 = time.perf_counter()
                 result, config = run_sim_from_gui_params()
+                st.session_state.sim_runtime = time.perf_counter() - _t0
                 st.session_state.simulation_result = result
                 st.session_state.simulation_config = config
                 st.success("Simulation finished successfully!")
@@ -5858,8 +5935,6 @@ elif st.session_state.current_page == "Interactive Simulator":
     if st.session_state.simulation_result is not None:
         result = st.session_state.simulation_result
         config = st.session_state.simulation_config
-
-        st.markdown("## 📊 Simulation Results")
 
         # 1. Calculate Metrics
         total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -5876,8 +5951,40 @@ elif st.session_state.current_page == "Interactive Simulator":
         )
         t_log_red = time_to_log_reduction(result, n_logs=2.0)
 
+        # Peak free-phage titre
+        _phage_tot = np.asarray(result.sum_prefixes("P"), dtype=float)
+        peak_phage = float(_phage_tot.max()) if _phage_tot.size else 0.0
+        peak_phage_t = float(result.time[int(np.argmax(_phage_tot))]) if _phage_tot.size else 0.0
+
+        # Outcome classification for the results header badge
+        _b0 = float(total_bacteria[0]) if len(total_bacteria) else 0.0
+        _bend = float(total_bacteria[-1]) if len(total_bacteria) else 0.0
+        if t_clear is not None:
+            _outcome, _obg, _ofg = "Cleared", "var(--teal)", "#fff"
+        elif _b0 > 0 and _bend <= _b0 * 0.1:
+            _outcome, _obg, _ofg = "Suppressed", "var(--teal-tint)", "var(--teal)"
+        elif _b0 > 0 and nadir_val <= _b0 * 0.1 and _bend > nadir_val * 10:
+            _outcome, _obg, _ofg = "Regrowth", "#f3e4cf", "#8a5a1a"
+        else:
+            _outcome, _obg, _ofg = "Uncontrolled", "#f4dedb", "#9b3b33"
+
+        # Results header bar: title + solver/runtime meta + outcome badge
+        _rt = st.session_state.get("sim_runtime")
+        _meta = f"t = 0–{result.time[-1]:.0f} h · {st.session_state.get('int_solver_method', 'BDF')}"
+        if _rt is not None:
+            _meta += f" · {_rt:.2f} s"
+        st.markdown(
+            "<div style='display:flex;align-items:center;justify-content:space-between;margin:2px 0 14px'>"
+            "<div><div style='font-size:1.25rem;font-weight:600;color:var(--ink)'>Simulation results</div>"
+            f"<div class='section-label' style='margin-top:3px'>{_meta}</div></div>"
+            f"<div style='background:{_obg};color:{_ofg};padding:6px 14px;border-radius:6px;"
+            f"font-weight:600;font-size:13px'>{_outcome}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
         # Render Metrics in Columns
-        m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+        m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
         with m_col1:
             st.markdown(
                 f"""
@@ -5938,16 +6045,27 @@ elif st.session_state.current_page == "Interactive Simulator":
                 """,
                 unsafe_allow_html=True,
             )
+        with m_col6:
+            st.markdown(
+                f"""
+                <div class="metric-container">
+                    <div class="metric-label">Peak Phage Titre</div>
+                    <div class="metric-value">{peak_phage:.2e}</div>
+                    <div class="metric-sub">PFU/mL at t={peak_phage_t:.1f}h</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         # 2. Plot Tabs
         plot_tabs = st.tabs(
             [
-                "📈 Bacterial Dynamics",
-                "🧬 Phage Dynamics",
-                "🍎 Nutrients & OD",
-                "💊 Antibiotics & Immunity",
+                "Bacterial Dynamics",
+                "Phage Dynamics",
+                "Nutrients & OD",
+                "Antibiotics & Immunity",
             ]
         )
 
@@ -5998,6 +6116,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             )
             ax.legend(fontsize=9, loc="lower left")
             ax.grid(True, which="both", ls="-", alpha=0.1)
+            apply_axis_mpl(ax, plot_axis_controls("sim_bact", default_y="Log"))
             st.pyplot(fig)
             plt.close(fig)
 
@@ -6029,6 +6148,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 ax.legend(fontsize=9, loc="lower left")
                 ax.grid(True, which="both", ls="-", alpha=0.1)
+                apply_axis_mpl(ax, plot_axis_controls("sim_phage", default_y="Log"))
                 st.pyplot(fig)
                 plt.close(fig)
             else:
@@ -6149,7 +6269,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.info("No antibiotics or immune modules were configured.")
 
         # 3. Export Code & Data
-        st.markdown("### 📤 Export & Reproducibility")
+        st.markdown("### Export & Reproducibility")
 
         c_down1, c_down2 = st.columns(2)
         with c_down1:
@@ -6164,7 +6284,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             csv_str = csv_buffer.getvalue()
 
             st.download_button(
-                "📥 Download Simulation Trajectories (CSV)",
+                "Download Simulation Trajectories (CSV)",
                 data=csv_str,
                 file_name="pbisim_simulation_results.csv",
                 mime="text/csv",
@@ -6174,13 +6294,12 @@ elif st.session_state.current_page == "Interactive Simulator":
         with c_down2:
             rep_code = generate_reproduction_code()
             st.download_button(
-                "📥 Download Python Script",
+                "Download Python Script",
                 data=rep_code,
                 file_name="pbisim_run.py",
                 mime="text/x-python",
                 width="stretch",
             )
 
-        if show_code:
-            with st.expander("🐍 View Python Reproduction Code"):
-                st.code(rep_code, language="python")
+        with st.expander("🐍 View Python Reproduction Code"):
+            st.code(rep_code, language="python")

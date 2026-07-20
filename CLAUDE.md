@@ -177,6 +177,35 @@ python -m streamlit run pbisim_app/app.py
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-07-20) — visual redesign (branch `feature/redesign`)
+
+Adopting the owner-approved "scientific instrument" mockup (Claude Design). Decided
+to **stay in Streamlit** for the public launch — the real launch blockers (the AI
+`exec()` sandbox is research-grade/unsafe for public input, plus auth/storage and
+concurrency/cost) are framework-independent; keep the compute/AI core UI-agnostic so a
+future frontend swap stays cheap. Work is on `feature/redesign` (pushed), **143 tests**.
+
+- **Pass A — identity/theme:** self-host IBM Plex Sans+Mono woff2 in `pbisim_app/static/
+  fonts/`, served via `enableStaticServing` at `/app/static/` (verified 200 font/woff2 on
+  a headless boot); `config.toml` + a full rewrite of the injected CSS block (light+dark)
+  to muted-teal `#0d7a68` / warm-paper `#faf9f5` / 6px bordered cards / mono data values;
+  dropped the rainbow gradient-text headings and gradient buttons; de-emoji'd titles/
+  headers/buttons (kept one 🐍); φ-mark sidebar brand.
+- **Pass B — structure:** primary/secondary button hierarchy (Run = `type="primary"`);
+  Interactive Simulator results header bar (solver + runtime meta + outcome badge) and a
+  Peak Phage Titre tile; moved the `show_code`/`show_assumptions` toggles out of the
+  sidebar onto the AI page; units on all core physical-parameter labels; expanders styled
+  as cards.
+- **Pass C — visualization:** new `pbisim_app/viz_helper.py` (`plot_axis_controls` +
+  `apply_axis_mpl`/`apply_axis_plotly`, log/linear/log-log + axis limits, plotly log10-range
+  gotcha handled). Wired into the sim bacterial+phage (mpl) and Dose-Response + Param-Sweep
+  trajectories (plotly). Hardcoded `semilogy`/`yaxis_type="log"` removed from those.
+- Tests: `tests/test_redesign.py`. **Still TODO:** metric tiles/headers on Clinical Trials
+  (cure rate), Calibration (RMSE/R²), sweep summaries; axis controls on remaining secondary
+  plots (OD/nutrient, trial PK/PD, antibiotic-immune twin-axis). Branch not yet merged to
+  `main` (won't auto-deploy until merged; a Clear-build-cache deploy is still needed for the
+  earlier pbisim engine change).
+
 ## Done this session (2026-06-23 continued)
 
 - **Adsorption default 2e-9 → 1e-8** for WT phage in all preset parameter dicts and
