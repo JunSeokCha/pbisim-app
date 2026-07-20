@@ -121,6 +121,11 @@ theme_mode = st.session_state["theme_mode"]
 with open(os.path.join(os.path.dirname(__file__), "static", "styles.css"), encoding="utf-8") as _f:
     st.markdown(f"<style>{_f.read()}</style>", unsafe_allow_html=True)
 
+# Theme matplotlib globally so the AI Assistant's agent-generated figures match the
+# app's Plotly palette/typography (rcParams only — no change to generated code).
+from pbisim_app.viz_helper import apply_mpl_theme
+apply_mpl_theme()
+
 
 
 

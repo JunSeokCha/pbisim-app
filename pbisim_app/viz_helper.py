@@ -103,3 +103,71 @@ def apply_axis_plotly(fig, opts):
     if yr is not None:
         fig.update_yaxes(range=yr)
     return fig
+
+
+# ── Matplotlib theme (for the AI Assistant's agent-generated figures) ──────────
+# The app's own charts are Plotly; the AI Assistant still renders agent-written
+# matplotlib via st.pyplot. Rather than touch that generated code, we apply a
+# global rcParams theme so any figure it produces matches the app's palette.
+import os as _os
+
+import matplotlib as _mpl
+from matplotlib import font_manager as _fm
+from cycler import cycler as _cycler
+
+_FONT_DIR = _os.path.join(_os.path.dirname(__file__), "static", "fonts")
+_PLEX_TTFS = (
+    "IBMPlexSans-Regular.ttf", "IBMPlexSans-Medium.ttf",
+    "IBMPlexSans-SemiBold.ttf", "IBMPlexSans-Bold.ttf",
+)
+_FONTS_REGISTERED = False
+
+
+def _register_plex_fonts():
+    """Register the bundled IBM Plex Sans TTFs with matplotlib, once per process.
+    matplotlib cannot read the .woff2 used for the web CSS, so TTF copies live
+    alongside them. Returns True if 'IBM Plex Sans' is available afterwards."""
+    global _FONTS_REGISTERED
+    if not _FONTS_REGISTERED:
+        for fn in _PLEX_TTFS:
+            p = _os.path.join(_FONT_DIR, fn)
+            if _os.path.exists(p):
+                try:
+                    _fm.fontManager.addfont(p)
+                except Exception:
+                    pass
+        _FONTS_REGISTERED = True
+    return any(f.name == "IBM Plex Sans" for f in _fm.fontManager.ttflist)
+
+
+def apply_mpl_theme():
+    """Apply the app's design system to matplotlib via rcParams, so agent-generated
+    figures (rendered by the AI Assistant via st.pyplot) match the Plotly charts.
+    Call once at startup — takes effect purely through global rcParams; no plotting
+    code needs to change. Falls back to system sans if IBM Plex isn't registered."""
+    has_plex = _register_plex_fonts()
+    family = (["IBM Plex Sans"] if has_plex else []) + ["DejaVu Sans", "Arial", "sans-serif"]
+    _mpl.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": family,
+        "text.color": "#16211f",
+        "axes.labelcolor": "#16211f",
+        "axes.titlecolor": "#16211f",
+        "axes.edgecolor": "#d3dbd8",
+        "axes.linewidth": 0.8,
+        "axes.facecolor": "white",
+        "figure.facecolor": "white",
+        "savefig.facecolor": "white",
+        "axes.grid": True,
+        "grid.color": "#e4e8e6",
+        "grid.linewidth": 0.8,
+        "xtick.color": "#66756f",
+        "ytick.color": "#66756f",
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.prop_cycle": _cycler(color=["#0d7a68", "#5457a6", "#c1873a"]),
+    })
+    # Tick-label colour is a separate rcParam on matplotlib >= 3.4.
+    for _k in ("xtick.labelcolor", "ytick.labelcolor"):
+        if _k in _mpl.rcParams:
+            _mpl.rcParams[_k] = "#66756f"
