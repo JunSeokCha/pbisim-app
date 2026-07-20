@@ -577,6 +577,37 @@ def _safe_od(result, total_bacteria):
         return np.asarray(total_bacteria, dtype=float) / factor
 
 
+def _sweep_summary_tiles(df_summary):
+    """Render a compact metric-tile row summarising a sweep's runs. Robust to
+    missing/non-numeric columns (used by the Dose-Response and Parameter sweeps)."""
+    import pandas as _pd
+    n_runs = len(df_summary)
+    if not n_runs:
+        return
+    nadir = _pd.to_numeric(df_summary.get("Nadir (cells/mL)"), errors="coerce")
+    ct = _pd.to_numeric(df_summary.get("Clearance Time (h)"), errors="coerce")
+    best_nadir = float(nadir.min()) if nadir is not None and nadir.notna().any() else None
+    cleared = int(ct.notna().sum()) if ct is not None else 0
+    fastest = float(ct.min()) if cleared else None
+    tiles = [
+        ("Runs", f"{n_runs}", "in this sweep"),
+        ("Best nadir", f"{best_nadir:.2e}" if best_nadir is not None else "—", "lowest cells/mL"),
+        ("Runs cleared", f"{cleared}/{n_runs}", f"below threshold"),
+        ("Fastest clearance", f"{fastest:.1f} h" if fastest is not None else "—", "earliest eradication"),
+    ]
+    cols = st.columns(len(tiles))
+    for col, (lbl, val, sub) in zip(cols, tiles):
+        col.markdown(
+            f"""<div class="metric-container">
+                <div class="metric-label">{lbl}</div>
+                <div class="metric-value">{val}</div>
+                <div class="metric-sub">{sub}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
 def load_preset_to_state(params: dict):
     """Deep copy preset parameters into st.session_state variables."""
     # 0. Clear old simulation results to prevent dimension mismatch crashes
@@ -3976,6 +4007,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
         if _dr:
             import plotly.graph_objects as go
             df_summary = pd.DataFrame(_dr["summary"])
+            _sweep_summary_tiles(df_summary)
             st.markdown("#### Summary of Runs")
             st.dataframe(
                 df_summary.style.format({
@@ -4425,6 +4457,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
             if _ps["type"] == "1D":
                 _p1 = _ps["param1_label"]
                 df_summary = pd.DataFrame(_ps["summary"])
+                _sweep_summary_tiles(df_summary)
                 st.markdown("#### Summary of Runs")
                 st.dataframe(
                     df_summary.style.format({
@@ -4463,6 +4496,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
             elif _ps["type"] == "coupled":
                 _labels = _ps["labels"]
                 df_summary = pd.DataFrame(_ps["summary"])
+                _sweep_summary_tiles(df_summary)
                 st.markdown("#### Summary of Runs (linked parameters)")
                 _fmt = {c: "{:.2e}" for c in _labels}
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
