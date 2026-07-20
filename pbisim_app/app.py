@@ -216,11 +216,11 @@ def render_mutation_graph_editor(strains, key_prefix):
                                          format="%.2e", key=f"{key_prefix}_rate_{idx}")
         with c4:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🗑️", key=f"{key_prefix}_del_{idx}"):
+            if st.button(":material/delete:", key=f"{key_prefix}_del_{idx}"):
                 transitions.pop(idx)
                 st.session_state.int_transitions = transitions
                 st.rerun()
-    if st.button("➕ Add transition", key=f"{key_prefix}_add"):
+    if st.button("+ Add transition", key=f"{key_prefix}_add"):
         transitions.append({"from": names[0] if names else "", "to": names[0] if names else "", "rate": 1e-7})
         st.session_state.int_transitions = transitions
         st.rerun()
@@ -294,7 +294,7 @@ def arm_regimen_summary(arm):
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="pbisim — Phage-Bacteria Simulation Control Center",
-    page_icon="🦠",
+    page_icon="",
     layout="wide",
 )
 
@@ -2037,7 +2037,7 @@ def warn_if_prerun_collapses(config, B0):
     frac = prerun_collapse_fraction(config, B0, t_prerun)
     if frac is not None and frac < 0.1:
         st.warning(
-            f"⚠️ The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
+            f"The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
             "(active + dormant) at treatment start, so the CFU/OD curves scale very low. "
             "A natural death rate with no dormancy makes the culture decline during the "
             "pre-run once nutrients exhaust (death keeps acting after growth stops). "
@@ -2373,7 +2373,16 @@ def generate_dose_sweep_reproduction_code() -> str:
 
 # ── Sidebar Settings ──────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("pbisim")
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:10px;margin:2px 0 8px'>"
+        "<div style='width:30px;height:30px;border-radius:6px;background:var(--teal);color:#fff;"
+        "display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;"
+        "font-family:IBM Plex Mono,monospace'>&#966;</div>"
+        "<div><div style='font-size:19px;font-weight:600;line-height:1;color:var(--ink)'>pbisim</div>"
+        "<div class='section-label' style='font-size:9.5px;margin-top:4px'>PHAGE-BACTERIA SIM</div></div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     # Apply any pending programmatic navigation (from Load buttons, etc.) BEFORE
     # the radio is instantiated — a keyed widget's value can only be set prior to
@@ -2392,7 +2401,7 @@ with st.sidebar:
     st.session_state.current_page = st.session_state.current_page_radio
 
     st.markdown("---")
-    st.markdown("### ⚙️ AI Settings")
+    st.markdown("### AI Settings")
 
     # API key — the masked field is a browser "password" input; re-rendering it on every
     # navigation/rerun makes Chrome repeatedly offer to save/update the password. So once a
@@ -2405,7 +2414,7 @@ with st.sidebar:
 
     if st.session_state.api_key and not st.session_state.get("_editing_api_key", False):
         _src = "from environment" if st.session_state.api_key == _env_key and _env_key else "entered"
-        st.caption(f"🔑 Anthropic API key set ({_src})")
+        st.caption(f"Anthropic API key set ({_src})")
         if st.button("Change key", key="change_api_key", width="stretch"):
             st.session_state._editing_api_key = True
             st.rerun()
@@ -2490,7 +2499,7 @@ with st.sidebar:
     else:
         st.session_state.agent.model = selected_model
 
-    if st.button("🔍 Test API Key & List Models", key="test_api_key_btn"):
+    if st.button("Test API Key & List Models", key="test_api_key_btn"):
         if not st.session_state.agent.client.api_key:
             st.error("Please enter an Anthropic API Key first in the sidebar.")
         else:
@@ -2503,7 +2512,7 @@ with st.sidebar:
                     st.write(model_ids)
                 except Exception as e:
                     st.error(f"API Diagnostics Failed: {e}")
-                    st.info("💡 Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
+                    st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
 
 
 
@@ -2512,7 +2521,7 @@ with st.sidebar:
     show_assumptions = st.toggle("Show assumptions", value=True)
 
     st.markdown("---")
-    st.markdown("### 🎨 Appearance")
+    st.markdown("### Appearance")
     st.session_state["theme_mode"] = st.selectbox(
         "Theme Mode",
         ["Light", "Dark"],
@@ -2521,7 +2530,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    if st.button("🔄 Reset Environment"):
+    if st.button("Reset Environment"):
         st.session_state.agent.reset()
         st.session_state.history.clear()
         st.session_state.simulation_result = None
@@ -2543,7 +2552,7 @@ if st.session_state.current_page == "Library":
     st.caption("Reusable building blocks. **Scenarios** = whole configurations; "
                "**Parts** = individual bacteria / phages / antibiotics you compose.")
 
-    st.markdown("## 💾 Scenarios")
+    st.markdown("## Scenarios")
     st.markdown(
         "<div class='info-banner'>💡 A scenario captures your <b>entire</b> configuration. "
         "Loading one configures the <b>Interactive Simulator</b> and applies across all pages "
@@ -2562,13 +2571,13 @@ if st.session_state.current_page == "Library":
 
     sc_save, sc_io = st.columns(2)
     with sc_save:
-        with st.expander("➕ Save current configuration", expanded=not _scenarios):
+        with st.expander("+ Save current configuration", expanded=not _scenarios):
             _sc_name = st.text_input("Scenario name", value=f"Scenario {len(_scenarios) + 1}", key="sc_save_name")
             _sc_note = st.text_area(
                 "Annotation (optional)", key="sc_save_note",
                 placeholder="e.g. PA high-persister + fast-adsorbing phage, immunocompromised host",
             )
-            if st.button("💾 Save scenario", key="sc_save_btn", width="stretch"):
+            if st.button("Save scenario", key="sc_save_btn", width="stretch"):
                 _name = (_sc_name or "").strip()
                 if not _name:
                     st.error("Please enter a scenario name.")
@@ -2582,16 +2591,16 @@ if st.session_state.current_page == "Library":
                     st.success(f"Saved '{_name}'.")
                     st.rerun()
     with sc_io:
-        with st.expander("📤 Export / 📥 Import library", expanded=False):
+        with st.expander("Export / Import library", expanded=False):
             st.download_button(
-                "📤 Export all scenarios (JSON)",
+                "Export all scenarios (JSON)",
                 data=export_scenarios_json(_scenarios),
                 file_name="pbisim_scenarios.json",
                 mime="application/json",
                 width="stretch",
                 disabled=not _scenarios,
             )
-            _up = st.file_uploader("📥 Import scenarios (JSON)", type=["json"], key="sc_import")
+            _up = st.file_uploader("Import scenarios (JSON)", type=["json"], key="sc_import")
             if _up is not None and st.button("Merge imported scenarios", key="sc_import_btn"):
                 try:
                     imported = import_scenarios_json(_up.getvalue().decode("utf-8"))
@@ -2617,7 +2626,7 @@ if st.session_state.current_page == "Library":
                     st.success(f"Loaded '{_name}'.")
                     st.rerun()
             with c_del:
-                if st.button("🗑️", key=f"sc_del_{_name}"):
+                if st.button(":material/delete:", key=f"sc_del_{_name}"):
                     _scenarios.pop(_name, None)
                     st.session_state.user_scenarios = _scenarios
                     st.rerun()
@@ -2626,7 +2635,7 @@ if st.session_state.current_page == "Library":
 
     # ── 🧬 Parts (composable building blocks) ────────────────────────────────
     st.markdown("---")
-    st.markdown("## 🧬 Parts")
+    st.markdown("## Parts")
     st.caption(
         "Save individual **bacteria / phages / antibiotics** as reusable parts and compose "
         "them into any configuration. Loading a part adds it to the current strains / phages "
@@ -2636,14 +2645,14 @@ if st.session_state.current_page == "Library":
     )
     _lib = st.session_state.parts_library
 
-    with st.expander("📤 Export / 📥 Import parts library (JSON)"):
+    with st.expander("Export / Import parts library (JSON)"):
         _has_parts = any(_lib[c] for c in PART_CATEGORIES)
         st.download_button(
-            "📤 Export parts (JSON)", data=export_parts_json(_lib),
+            "Export parts (JSON)", data=export_parts_json(_lib),
             file_name="pbisim_parts.json", mime="application/json",
             width="stretch", disabled=not _has_parts,
         )
-        _pup = st.file_uploader("📥 Import parts (JSON)", type=["json"], key="parts_import")
+        _pup = st.file_uploader("Import parts (JSON)", type=["json"], key="parts_import")
         if _pup is not None and st.button("Merge imported parts", key="parts_import_btn"):
             try:
                 _imported = import_parts_json(_pup.getvalue().decode("utf-8"))
@@ -2663,7 +2672,7 @@ if st.session_state.current_page == "Library":
             _entities = st.session_state.get(_meta["key"], [])
             _store = _lib[_cat]
 
-            with st.expander(f"➕ Save a current {_singular} as a part", expanded=not _store):
+            with st.expander(f"+ Save a current {_singular} as a part", expanded=not _store):
                 if not _entities:
                     st.info(f"No {_meta['label'].lower()} configured yet — set one up in the Interactive Simulator first.")
                 else:
@@ -2685,7 +2694,7 @@ if st.session_state.current_page == "Library":
                             help="Burst/latent/adsorption are phage×host properties — record the host so reuse elsewhere is flagged.",
                         )
                         _pref = "" if _pref == "(unspecified)" else _pref
-                    if st.button("💾 Save part", key=f"part_save_{_cat}", width="stretch"):
+                    if st.button("Save part", key=f"part_save_{_cat}", width="stretch"):
                         _nm = (_pname or "").strip()
                         if not _nm:
                             st.error("Please enter a part name.")
@@ -2735,7 +2744,7 @@ if st.session_state.current_page == "Library":
                             st.session_state._nav_to = "Interactive Simulator"
                             st.rerun()
                 with _cd:
-                    if st.button("🗑️", key=f"part_del_{_cat}_{_pn}"):
+                    if st.button(":material/delete:", key=f"part_del_{_cat}_{_pn}"):
                         _store.pop(_pn, None)
                         st.session_state.parts_library = _lib
                         st.rerun()
@@ -2797,7 +2806,7 @@ elif st.session_state.current_page == "Calibration":
             _canonical = all(k in _low for k in ("time", "arm", "observable", "value"))
             if _canonical:
                 st.success("Detected pbisim-fit long format (time, arm, observable, value).")
-            with st.expander("🔧 Column mapping", expanded=not _canonical):
+            with st.expander("Column mapping", expanded=not _canonical):
                 _tc = st.selectbox("Time column", _cols, index=_guess(["time"]))
                 _vc = st.selectbox("Value (measurement) column", _cols, index=_guess(["value", "dv"]))
                 _obs_from_col = st.checkbox("Observable is in a column", value=("observable" in _low))
@@ -2811,7 +2820,7 @@ elif st.session_state.current_page == "Calibration":
                 _mc = st.selectbox("Phage-dose / MOI column (optional — drives the simulated dose per arm)",
                                    ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
                 _mc = None if _mc == "(none)" else _mc
-            if st.button("📥 Load dataset", key="fit_load", width="stretch"):
+            if st.button("Load dataset", key="fit_load", width="stretch"):
                 st.session_state.fit_dataset = {
                     "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
                     "arm_cols": _ac, "moi": _mc,
@@ -2905,7 +2914,7 @@ elif st.session_state.current_page == "Calibration":
             # in sync with edits made on the Simulator page.
             _tstrains = st.session_state.get("int_strains", [])
             _tphages = st.session_state.get("int_phages", [])
-            with st.expander("🎛 Manual parameter tuning", expanded=False):
+            with st.expander("Manual parameter tuning", expanded=False):
                 st.caption("Edit the model's real parameter values, then re-overlay. Changes update the live "
                            "Interactive-Simulator model directly (no separate apply step) and can be saved as "
                            "a Scenario or as Parts in the Library.")
@@ -3090,7 +3099,7 @@ elif st.session_state.current_page == "Calibration":
             # data in session_state so the visualization stays alive across page
             # navigation (and reruns) until it is explicitly re-run or the dataset
             # is cleared.
-            if st.button("🔬 Overlay model on data", key="fit_overlay", width="stretch"):
+            if st.button("Overlay model on data", key="fit_overlay", width="stretch"):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
                     _B0 = float(np.sum(_iB))
@@ -3178,7 +3187,7 @@ elif st.session_state.current_page == "Calibration":
                 _cal_name = st.text_input("Scenario name", value="calibrated", key="fit_save_name")
             with _cs2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("💾 Save calibrated config as Scenario", key="fit_save_scenario", width="stretch"):
+                if st.button("Save calibrated config as Scenario", key="fit_save_scenario", width="stretch"):
                     _nm = (_cal_name or "").strip()
                     if not _nm:
                         st.error("Enter a scenario name.")
@@ -3192,7 +3201,7 @@ elif st.session_state.current_page == "Calibration":
                         st.session_state.user_scenarios = _scen
                         st.success(f"Saved scenario '{_nm}'. Reload it from the Library page.")
 
-        if st.button("🗑️ Clear dataset", key="fit_clear"):
+        if st.button("Clear dataset", key="fit_clear"):
             st.session_state.fit_dataset = None
             st.session_state.fit_config = {}
             st.session_state.calib_overlay_result = None
@@ -3216,7 +3225,7 @@ elif st.session_state.current_page == "AI Assistant":
 
     # Check key
     if not st.session_state.agent.client.api_key:
-        st.warning("⚠️ Please enter your Anthropic API Key in the sidebar to use the AI Assistant.")
+        st.warning("Please enter your Anthropic API Key in the sidebar to use the AI Assistant.")
 
     # Chat UI
     for turn in st.session_state.history:
@@ -3228,7 +3237,7 @@ elif st.session_state.current_page == "AI Assistant":
             with st.chat_message("assistant"):
                 st.markdown(agent_resp.narrative)
                 if getattr(agent_resp, "assumptions", "") and show_assumptions:
-                    with st.expander("👁️ Model Assumptions"):
+                    with st.expander("Model Assumptions"):
                         st.markdown(agent_resp.assumptions)
                 if agent_resp.code and show_code:
                     with st.expander("🐍 Generated python code"):
@@ -3241,7 +3250,7 @@ elif st.session_state.current_page == "AI Assistant":
                             st.pyplot(fig)
                             plt.close(fig)
                         if exec_result.stdout:
-                            with st.expander("📄 Print outputs"):
+                            with st.expander("Print outputs"):
                                 st.text(exec_result.stdout)
                     else:
                         st.error("Execution failed:")
@@ -3263,8 +3272,8 @@ elif st.session_state.current_page == "AI Assistant":
                     summarize=summarize_current_results,
                 )
         except Exception as e:
-            st.error(f"❌ AI Assistant Error: {e}")
-            st.info("💡 If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
+            st.error(f"AI Assistant Error: {e}")
+            st.info("If you are getting a 401 Authentication Error, please verify that your Anthropic API key is correct, active, and has remaining usage credits.")
 
         if run is not None:
             exec_result = run.result
@@ -3281,7 +3290,7 @@ elif st.session_state.current_page == "AI Assistant":
                             st.pyplot(fig)
                             plt.close(fig)
                         if exec_result.stdout:
-                            with st.expander("📄 Print outputs"):
+                            with st.expander("Print outputs"):
                                 st.text(exec_result.stdout)
                     else:
                         st.error("The code still failed after self-correction:")
@@ -3289,7 +3298,7 @@ elif st.session_state.current_page == "AI Assistant":
 
                 # The assistant populated the Interactive Simulator's widgets — offer to open it.
                 if getattr(run, "configured", False):
-                    st.success("✅ I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
+                    st.success("I've set up the **Interactive Simulator** with this configuration — open it to review, tweak, and run.")
                     if st.button("▶ Open in Interactive Simulator", key=f"nav_sim_{len(st.session_state.history)}", width="stretch"):
                         st.session_state["_nav_to"] = "Interactive Simulator"
                         st.rerun()
@@ -3321,14 +3330,14 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
     t_cols = st.columns([1, 2])
     
     with t_cols[0]:
-        st.markdown("### 📊 Trial Settings")
+        st.markdown("### Trial Settings")
         trial_patients = st.number_input("Cohort Size (N)", min_value=10, max_value=500, value=50, step=10)
         trial_seed = st.number_input("Cohort RNG Seed", value=42)
         trial_t_end = st.number_input("Trial Duration (hours)", min_value=12.0, max_value=336.0, value=72.0, step=12.0)
         trial_dt = st.number_input("Solver output step (dt)", min_value=0.05, max_value=1.0, value=0.25, step=0.05)
         trial_n_jobs = st.slider("Parallel workers (n_jobs)", min_value=1, max_value=16, value=1, help="Parallel patient simulation via joblib (loky). Keep at 1 on small/shared hosts (e.g. the free Render tier) — forked worker processes can segfault or OOM there; raise it on a beefier machine.")
         
-        st.markdown("### 💉 Treatment Arms")
+        st.markdown("### Treatment Arms")
         st.caption("Define any number of arms (e.g. low-dose vs high-dose), each with its own phage / antibiotic regimen. The Control arm never receives doses.")
         trial_include_control = st.checkbox("Include Control arm (no doses)", value=True)
 
@@ -3347,11 +3356,11 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             with _lc:
                 st.markdown(f"**{_arm['name']}** — {arm_regimen_summary(_arm)}")
             with _dc:
-                if st.button("🗑️", key=f"del_arm_{_aid}"):
+                if st.button(":material/delete:", key=f"del_arm_{_aid}"):
                     trial_arms.pop(_ai)
                     st.session_state.trial_arms = trial_arms
                     st.rerun()
-            with st.expander(f"✏️ Edit '{_arm['name']}'", expanded=False):
+            with st.expander(f"Edit '{_arm['name']}'", expanded=False):
                 _en = st.text_input("Arm name", value=_arm["name"], key=f"edit_arm_name_{_aid}")
                 _ep, _ea = {"on": False}, {"on": False}
                 if _tphages:
@@ -3362,13 +3371,13 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     st.markdown("**Antibiotic dosing**")
                     _ea = render_regimen_config(f"edit_arm_a_{_aid}", _tabx, "antibiotic",
                                                 10.0, "Amount (mg)", initial=_arm.get("abx"))
-                if st.button("💾 Save changes", key=f"save_arm_{_aid}"):
+                if st.button("Save changes", key=f"save_arm_{_aid}"):
                     _arm["name"], _arm["phage"], _arm["abx"] = _en, _ep, _ea
                     st.session_state.trial_arms = trial_arms
                     st.rerun()
 
         # Add-arm form
-        with st.expander("➕ Add treatment arm", expanded=not trial_arms):
+        with st.expander("+ Add treatment arm", expanded=not trial_arms):
             _new_name = st.text_input("Arm name", value=f"Arm {len(trial_arms) + 1}", key="new_arm_name")
             _pcfg, _acfg = {"on": False}, {"on": False}
             if _tphages:
@@ -3377,12 +3386,12 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             if _tabx:
                 st.markdown("**Antibiotic dosing**")
                 _acfg = render_regimen_config("new_arm_a", _tabx, "antibiotic", 10.0, "Amount (mg)", default_on=not _tphages)
-            if st.button("➕ Add arm", key="add_arm_btn"):
+            if st.button("+ Add arm", key="add_arm_btn"):
                 trial_arms.append({"name": _new_name, "phage": _pcfg, "abx": _acfg})
                 st.session_state.trial_arms = trial_arms
                 st.rerun()
 
-        st.markdown("### 🧬 Parameter Variability (IIV)")
+        st.markdown("### Parameter Variability (IIV)")
         
         # Active IIVs — editable in place
         trial_iivs = st.session_state.get("trial_iiv_inputs", [])
@@ -3395,20 +3404,20 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             with col_p:
                 st.markdown(f"**{_pname}** — {iiv['dist_type']} {iiv['params']} ({iiv['mode']})")
             with col_act:
-                if st.button("🗑️", key=f"del_iiv_{_iid}"):
+                if st.button(":material/delete:", key=f"del_iiv_{_iid}"):
                     trial_iivs.pop(idx)
                     st.session_state.trial_iiv_inputs = trial_iivs
                     st.rerun()
-            with st.expander("✏️ Edit", expanded=False):
+            with st.expander("Edit", expanded=False):
                 _edited = render_iiv_config(f"edit_iiv_{_iid}", initial=iiv)
-                if st.button("💾 Save changes", key=f"save_iiv_{_iid}"):
+                if st.button("Save changes", key=f"save_iiv_{_iid}"):
                     _edited["_id"] = _iid
                     trial_iivs[idx] = _edited
                     st.session_state.trial_iiv_inputs = trial_iivs
                     st.rerun()
 
         # Add IIV form
-        with st.expander("➕ Add Parameter Variability"):
+        with st.expander("+ Add Parameter Variability"):
             _new_iiv = render_iiv_config("new_iiv")
             if st.button("Add Parameter IIV"):
                 trial_iivs.append(_new_iiv)
@@ -3418,7 +3427,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
 
         # Run Button
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Run Parallel Clinical Trial", width="stretch"):
+        if st.button("Run Parallel Clinical Trial", width="stretch"):
             with st.spinner("Generating cohort populations & simulating treatment arms..."):
                 try:
                     # 1. Compile nominal base config
@@ -3492,7 +3501,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                     st.code(traceback.format_exc())
                     
     with t_cols[1]:
-        st.markdown("### 📊 Outcomes & Visualization")
+        st.markdown("### Outcomes & Visualization")
         
         if st.session_state.trial_result is None:
             st.info("Run the clinical trial simulation on the left panel to display outcomes.")
@@ -3525,7 +3534,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             clearance_threshold = st.session_state.get("int_extinction_threshold", 100.0)
             
             # Raw PKPD time trajectories (CFU + PFU) per arm
-            st.markdown("#### 🧫 PK/PD trajectories (median & IQR per arm)")
+            st.markdown("#### PK/PD trajectories (median & IQR per arm)")
             fig_cfu = plot_pkpd_trajectories_plotly(
                 result, prefixes=("B", "D", "I", "H"),
                 title="Total Bacteria (CFU/mL)", y_label="log₁₀ CFU/mL",
@@ -3543,13 +3552,13 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
             st.plotly_chart(fig_km, width="stretch")
 
             # Metric distributions
-            st.markdown("#### 📦 Distribution of outcomes")
+            st.markdown("#### Distribution of outcomes")
             fig_dist = plot_metric_distributions_plotly(result, metric=metric_choice)
             st.plotly_chart(fig_dist, width="stretch")
             
             # Data Exports
             st.markdown("---")
-            st.markdown("### 📥 Cohort Data Exports")
+            st.markdown("### Cohort Data Exports")
             
             cx1, cx2 = st.columns(2)
             with cx1:
@@ -3557,7 +3566,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 out_df = result.outcome_dataframe(endpoint=endpoint_choice, t_end=trial_t_end, threshold=clearance_threshold)
                 csv_out = out_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Survival Outcomes DataFrame (CSV)",
+                    "Download Survival Outcomes DataFrame (CSV)",
                     data=csv_out,
                     file_name="pbisim_survival_outcomes.csv",
                     mime="text/csv",
@@ -3570,7 +3579,7 @@ elif st.session_state.current_page == "Clinical Trials & Cohorts":
                 nlme_df = result.nlme_dataframe(outputs_spec, times=obs_times)
                 csv_nlme = nlme_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Pharmacometrics (NLME) DataFrame (CSV)",
+                    "Download Pharmacometrics (NLME) DataFrame (CSV)",
                     data=csv_nlme,
                     file_name="pbisim_nlme_cohort.csv",
                     mime="text/csv",
@@ -3605,7 +3614,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
     col_setup, col_run = st.columns([1, 2])
 
     with col_setup:
-        st.markdown("### ⚙️ Configure Sweeps")
+        st.markdown("### Configure Sweeps")
         
         # Phages
         for j, p in enumerate(phages):
@@ -3673,10 +3682,10 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                     }
 
         st.markdown("<br>", unsafe_allow_html=True)
-        run_sweep = st.button("🚀 Run Dose-Response Sweep", width="stretch")
+        run_sweep = st.button("Run Dose-Response Sweep", width="stretch")
 
     with col_run:
-        st.markdown("### 📊 Sweep Results")
+        st.markdown("### Sweep Results")
         if run_sweep:
             # Parse vectors
             parsed_vectors = {}
@@ -3697,7 +3706,7 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 # Perform padding
                 padded, warnings = pad_vectors(parsed_vectors)
                 for w in warnings:
-                    st.warning(f"⚠️ {w}")
+                    st.warning(f"{w}")
 
                 # Determine number of runs M
                 first_key = list(padded.keys())[0]
@@ -3942,7 +3951,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
     col_setup, col_run = st.columns([1, 2])
 
     with col_setup:
-        st.markdown("### ⚙️ Configure Parameters")
+        st.markdown("### Configure Parameters")
         
         if sweep_type == "1D Sweep":
             param1_label = st.selectbox("Select Parameter", param_labels, key="p1_sweep_label")
@@ -4009,7 +4018,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
 
             spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
-            run_sweep = st.button("🚀 Run 1D Sweep", width="stretch")
+            run_sweep = st.button("Run 1D Sweep", width="stretch")
 
         elif sweep_type == "2D Sweep":
             param1_label = st.selectbox("Select Parameter 1 (X-axis)", param_labels, key="p1_sweep_label")
@@ -4037,7 +4046,7 @@ elif st.session_state.current_page == "Parameter Sweeps":
                 steps2 = st.number_input("P2 Steps", min_value=2, max_value=10, value=3, key="p2_steps")
             spacing2 = st.selectbox("P2 Spacing", ["Linear", "Logarithmic"], key="p2_spacing")
 
-            run_sweep = st.button("🚀 Run 2D Sweep", width="stretch")
+            run_sweep = st.button("Run 2D Sweep", width="stretch")
 
         else:  # Coupled (linked) sweep
             st.caption(
@@ -4055,10 +4064,10 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     key=f"pc_series_{_ci}",
                     placeholder="e.g. 0, 0.5, 1",
                 )
-            run_sweep = st.button("🚀 Run Coupled Sweep", width="stretch")
+            run_sweep = st.button("Run Coupled Sweep", width="stretch")
 
     with col_run:
-        st.markdown("### 📊 Sweep Results")
+        st.markdown("### Sweep Results")
         if run_sweep:
             # Warn once if the pre-run decimates the culture (death w/o dormancy).
             warn_if_prerun_collapses(nominal_config, initial_B)
@@ -4421,10 +4430,10 @@ elif st.session_state.current_page == "Interactive Simulator":
     # 2. Main tabs for parameters configuration
     config_tabs = st.tabs(
         [
-            "🧫 Strains & Phages",
-            "🧪 Antibiotics & Immunity",
-            "📅 Environment & Dosing",
-            "⚙️ Solver Settings",
+            "Strains & Phages",
+            "Antibiotics & Immunity",
+            "Environment & Dosing",
+            "Solver Settings",
         ]
     )
 
@@ -4502,7 +4511,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── DIRECT MODE ──
         if builder_mode == "Direct (ModelBuilder)":
             with col1:
-                st.markdown("### 🧫 Bacterial Strains")
+                st.markdown("### Bacterial Strains")
 
                 n_strains = st.number_input(
                     "Number of strains", min_value=1, max_value=10, value=len(strains)
@@ -4661,7 +4670,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
 
             with col2:
-                st.markdown("### 🧬 Phage Strains")
+                st.markdown("### Phage Strains")
 
                 n_phages = st.number_input(
                     "Number of phages", min_value=0, max_value=10, value=len(phages)
@@ -4809,7 +4818,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
                 if n_phages > 0:
                     st.markdown("---")
-                    st.markdown("### 🧬 Bacterial Mutations (WT → R)")
+                    st.markdown("### Bacterial Mutations (WT → R)")
                     if n_strains == 2**n_phages:
                         st.caption("Per-phage-locus shortcut (binary-genotype layout, n_strains = 2^n_phages):")
                         phg_res_rates = []
@@ -4830,7 +4839,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             phg_res_rates.append(res_rate)
                         st.session_state["direct_phg_res_rates"] = phg_res_rates
 
-                    with st.expander("🔄 Custom mutation network (any number of strains)",
+                    with st.expander("Custom mutation network (any number of strains)",
                                      expanded=(n_strains != 2**n_phages)):
                         st.caption(
                             "Define arbitrary strain→strain mutation transitions. Works for any "
@@ -4842,7 +4851,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── BINARY RESISTANCE GENOTYPES (BRG) ──
         elif builder_mode == "Binary Genotypes (BRG)":
             with col1:
-                st.markdown("### 🧫 Base Bacteria (WT)")
+                st.markdown("### Base Bacteria (WT)")
                 st.session_state["int_brg_base_growth"] = st.number_input(
                     "Base growth rate (r)", value=float(st.session_state.get("int_brg_base_growth", 1.2)), step=0.1
                 )
@@ -4900,7 +4909,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
                 # Renders the loci count
                 st.markdown("---")
-                st.markdown("### 🧬 Phage Loci")
+                st.markdown("### Phage Loci")
                 n_phg_loci = st.number_input("Number of phage species (loci)", min_value=1, max_value=10, value=max(len(phages), 1))
                 if n_phg_loci != len(phages):
                     phages = phages[:n_phg_loci]
@@ -4987,7 +4996,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"brg_phg_vi_{idx}")
 
             with col2:
-                st.markdown("### 🧮 Auto-generated Genotypes")
+                st.markdown("### Auto-generated Genotypes")
                 # Show list of 2^(m+a) genotypes and initial conditions inputs
                 import itertools
                 n_abx = len(antibiotics)
@@ -5030,7 +5039,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         # ── CUSTOM STRAINS & MUTATION GRAPH (StrainSet) ──
         elif builder_mode == "Custom Strains & Graph (StrainSet)":
             with col1:
-                st.markdown("### 🧫 Custom Bacterial Strains")
+                st.markdown("### Custom Bacterial Strains")
                 
                 n_strains = st.number_input("Number of custom strains", min_value=1, max_value=10, value=max(len(strains), 1))
                 if n_strains != len(strains):
@@ -5109,7 +5118,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                     )
 
                 # 🔄 Transitions graph editor
-                st.markdown("#### 🔄 Mutation Graph (Transitions)")
+                st.markdown("#### Mutation Graph (Transitions)")
                 transitions = st.session_state.get("int_transitions", [])
                 
                 for idx, trans in enumerate(transitions):
@@ -5124,18 +5133,18 @@ elif st.session_state.current_page == "Interactive Simulator":
                         trans["rate"] = st.number_input(f"Rate", value=float(trans["rate"]), format="%.2e", key=f"trans_rate_{idx}")
                     with c_del:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"trans_del_{idx}"):
+                        if st.button(":material/delete:", key=f"trans_del_{idx}"):
                             transitions.pop(idx)
                             st.session_state.int_transitions = transitions
                             st.rerun()
                             
-                if st.button("➕ Add Mutation Transition"):
+                if st.button("+ Add Mutation Transition"):
                     transitions.append({"from": strains[0]["name"] if strains else "", "to": strains[0]["name"] if strains else "", "rate": 1e-7})
                     st.session_state.int_transitions = transitions
                     st.rerun()
 
             with col2:
-                st.markdown("### 🧬 Phage Strains")
+                st.markdown("### Phage Strains")
                 n_phages = st.number_input("Number of phages", min_value=0, max_value=10, value=len(phages))
                 if n_phages != len(phages):
                     phages = phages[:n_phages]
@@ -5211,7 +5220,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Antibiotics
         with col1:
-            st.markdown("### 💊 Antibiotics")
+            st.markdown("### Antibiotics")
 
             n_abx = st.number_input(
                 "Number of antibiotics", min_value=0, max_value=6, value=len(antibiotics)
@@ -5353,7 +5362,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Host Immunity
         with col2:
-            st.markdown("### 🛡️ Host Immunity")
+            st.markdown("### Host Immunity")
 
             st.session_state["int_immunity_enabled"] = st.checkbox(
                 "Enable Immune System Module",
@@ -5464,7 +5473,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 if _dormancy_on and st.session_state["int_imm_kill_rate_D"] <= 0:
                     st.warning(
-                        "⚠️ **Dormancy + immunity:** dormant/hibernating cells are "
+                        "**Dormancy + immunity:** dormant/hibernating cells are "
                         "immune-privileged while `imm_kill_rate_D = 0` — the immune "
                         "system will not kill them and they do not stimulate it. A "
                         "phage-resistant (or persister) population can survive in the "
@@ -5480,7 +5489,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Environment & Debris
         with col1:
-            st.markdown("### 🍎 Nutrient environment")
+            st.markdown("### Nutrient environment")
             st.caption("The **growth signal function** (and its Monod constant / carrying capacity) "
                        "is set under **Strains & Phages → Growth model**. These are the medium/reactor "
                        "conditions for nutrient-tracking growth.")
@@ -5506,7 +5515,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.info("The selected growth signal is nutrient-independent (constant / density), "
                         "so nutrient substrate dynamics are inactive.")
 
-            st.markdown("### 🎚️ Optical Density (OD) & Debris")
+            st.markdown("### Optical Density (OD) & Debris")
             st.session_state["int_debris_enabled"] = st.checkbox(
                 "Track Bacteriolytic Cell Debris",
                 value=st.session_state.get("int_debris_enabled", False),
@@ -5536,14 +5545,14 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         # Dosing Schedule
         with col2:
-            st.markdown("### 📅 Dosing Schedule & Regimens")
+            st.markdown("### Dosing Schedule & Regimens")
 
             sub_col1, sub_col2 = st.columns(2)
 
             with sub_col1:
                 st.markdown("#### Active Dosing Events")
                 if doses:
-                    st.caption("Edit time / amount / route inline; 🗑️ removes a row. "
+                    st.caption("Edit time / amount / route inline; :material/delete: removes a row. "
                                "To change the target, delete and re-add.")
                 _routes = ["bolus", "infusion"]
                 for idx, dose in enumerate(doses):
@@ -5570,14 +5579,14 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 value=float(dose.get("duration") or 2.0), step=0.5,
                                 key=f"dose_dur_{_did}")
                     with c_t4:
-                        if st.button("🗑️", key=f"del_dose_{_did}"):
+                        if st.button(":material/delete:", key=f"del_dose_{_did}"):
                             doses.pop(idx)
                             st.session_state.int_doses = doses
                             st.rerun()
                 st.session_state.int_doses = doses  # persist inline edits
 
                 st.markdown("#### Add Single Dose Event")
-                with st.expander("➕ Define Single Dosing Event"):
+                with st.expander("+ Define Single Dosing Event"):
                     # Build target options
                     target_ops = ["phage"]
                     if len(antibiotics) > 0:
@@ -5609,7 +5618,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     if d_route == "infusion":
                         d_dur = st.number_input("Infusion Duration (hours)", min_value=0.1, value=2.0, step=0.5)
 
-                    if st.button("➕ Add Dose Event"):
+                    if st.button("+ Add Dose Event"):
                         doses.append(
                             {
                                 "time": d_time,
@@ -5626,7 +5635,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
             with sub_col2:
                 st.markdown("#### Add Repeat Dosing Regimen")
-                with st.expander("➕ Define Repeat Dosing Regimen"):
+                with st.expander("+ Define Repeat Dosing Regimen"):
                     # Target options
                     target_ops_rep = ["phage"]
                     if len(antibiotics) > 0:
@@ -5657,7 +5666,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     if r_route == "infusion":
                         r_dur = st.number_input("Infusion Duration (hours)", min_value=0.1, value=2.0, step=0.5, key="rep_dose_duration")
 
-                    if st.button("➕ Add Repeat Regimen", key="rep_dose_add_btn"):
+                    if st.button("+ Add Repeat Regimen", key="rep_dose_add_btn"):
                         for k in range(int(r_count)):
                             doses.append({
                                 "time": r_start + k * r_interval,
@@ -5677,7 +5686,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("### 🕒 Solver Time parameters")
+            st.markdown("### Solver Time parameters")
             st.session_state["int_t_end"] = st.number_input(
                 "Simulation end time (hours)",
                 value=float(st.session_state.get("int_t_end", 48.0)),
@@ -5689,7 +5698,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 step=0.05,
             )
 
-            st.markdown("### 🧬 Model structure")
+            st.markdown("### Model structure")
             st.session_state["int_n_latent"] = st.number_input(
                 "Latency compartments (n_latent)",
                 min_value=1, max_value=20,
@@ -5698,7 +5707,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                      "Applies to all builder modes (Direct / BRG / Custom Strains).",
             )
 
-            st.markdown("### 🧩 Advanced solver options")
+            st.markdown("### Advanced solver options")
             st.session_state["int_superinfection"] = st.checkbox(
                 "Allow Phage Superinfection",
                 value=st.session_state.get("int_superinfection", False),
@@ -5721,7 +5730,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                          "cells are washed out — treatment starts with zero debris.")
 
         with col2:
-            st.markdown("### 🎛️ ODE solver specifics")
+            st.markdown("### ODE solver specifics")
             st.session_state["int_extinction_threshold"] = st.number_input(
                 "Absorbing Extinction threshold",
                 value=float(st.session_state.get("int_extinction_threshold", 1.0)),
@@ -5755,7 +5764,7 @@ elif st.session_state.current_page == "Interactive Simulator":
 
     # ──── Run Button ──────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🚀 Run Simulation", width="stretch"):
+    if st.button("Run Simulation", width="stretch"):
         with st.spinner("Assembling model equations & integrating..."):
             try:
                 _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
@@ -5774,7 +5783,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         result = st.session_state.simulation_result
         config = st.session_state.simulation_config
 
-        st.markdown("## 📊 Simulation Results")
+        st.markdown("## Simulation Results")
 
         # 1. Calculate Metrics
         total_bacteria = result.sum_prefixes("B", "D", "I", "H")
@@ -5859,10 +5868,10 @@ elif st.session_state.current_page == "Interactive Simulator":
         # 2. Plot Tabs
         plot_tabs = st.tabs(
             [
-                "📈 Bacterial Dynamics",
-                "🧬 Phage Dynamics",
-                "🍎 Nutrients & OD",
-                "💊 Antibiotics & Immunity",
+                "Bacterial Dynamics",
+                "Phage Dynamics",
+                "Nutrients & OD",
+                "Antibiotics & Immunity",
             ]
         )
 
@@ -6064,7 +6073,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 st.info("No antibiotics or immune modules were configured.")
 
         # 3. Export Code & Data
-        st.markdown("### 📤 Export & Reproducibility")
+        st.markdown("### Export & Reproducibility")
 
         c_down1, c_down2 = st.columns(2)
         with c_down1:
@@ -6079,7 +6088,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             csv_str = csv_buffer.getvalue()
 
             st.download_button(
-                "📥 Download Simulation Trajectories (CSV)",
+                "Download Simulation Trajectories (CSV)",
                 data=csv_str,
                 file_name="pbisim_simulation_results.csv",
                 mime="text/csv",
@@ -6089,7 +6098,7 @@ elif st.session_state.current_page == "Interactive Simulator":
         with c_down2:
             rep_code = generate_reproduction_code()
             st.download_button(
-                "📥 Download Python Script",
+                "Download Python Script",
                 data=rep_code,
                 file_name="pbisim_run.py",
                 mime="text/x-python",
