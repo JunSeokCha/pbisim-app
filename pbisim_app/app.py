@@ -64,6 +64,7 @@ from pbisim.trial.clinical import TreatmentArm
 
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
+from pbisim_app.viz_helper import plot_axis_controls, apply_axis_mpl, apply_axis_plotly
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -3924,7 +3925,8 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
                 fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
             fig_traj.update_layout(
                 xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+            apply_axis_plotly(fig_traj, plot_axis_controls("dr_traj", default_y="Log"))
             st.plotly_chart(fig_traj, width="stretch")
 
             if _dr["od_trajectories"]:
@@ -4368,7 +4370,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                apply_axis_plotly(fig_traj, plot_axis_controls("ps1d_traj", default_y="Log"))
                 st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
@@ -4403,7 +4406,8 @@ elif st.session_state.current_page == "Parameter Sweeps":
                     fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
                 fig_traj.update_layout(
                     xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    yaxis_type="log", template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                apply_axis_plotly(fig_traj, plot_axis_controls("pscoupled_traj", default_y="Log"))
                 st.plotly_chart(fig_traj, width="stretch")
                 if _ps.get("od_trajectories"):
                     st.markdown("#### Raw Simulation Trajectories (Optical Density)")
@@ -6010,6 +6014,7 @@ elif st.session_state.current_page == "Interactive Simulator":
             )
             ax.legend(fontsize=9, loc="lower left")
             ax.grid(True, which="both", ls="-", alpha=0.1)
+            apply_axis_mpl(ax, plot_axis_controls("sim_bact", default_y="Log"))
             st.pyplot(fig)
             plt.close(fig)
 
@@ -6041,6 +6046,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                 )
                 ax.legend(fontsize=9, loc="lower left")
                 ax.grid(True, which="both", ls="-", alpha=0.1)
+                apply_axis_mpl(ax, plot_axis_controls("sim_phage", default_y="Log"))
                 st.pyplot(fig)
                 plt.close(fig)
             else:

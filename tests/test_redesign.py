@@ -31,3 +31,44 @@ def test_run_button_is_primary():
     at.run()
     runs = [b for b in at.button if "Run Simulation" in (b.label or "")]
     assert runs and runs[0].proto.type == "primary"
+
+
+def test_plot_axis_controls_render_after_run():
+    """The 'Plot options' axis controls appear once results exist."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    labels = [e.label for e in at.expander]
+    assert any("Plot options" in (l or "") for l in labels), labels
+
+
+def test_viz_helper_apply_functions():
+    """apply_axis_mpl / apply_axis_plotly set scale + limits (log10-space for plotly)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import plotly.graph_objects as go
+    from pbisim_app.viz_helper import apply_axis_mpl, apply_axis_plotly
+
+    fig, ax = plt.subplots()
+    ax.plot([1, 2, 3], [10, 100, 1000])
+    apply_axis_mpl(ax, {"x_scale": "Linear", "y_scale": "Log",
+                        "xlim": (None, None), "ylim": (1.0, None)})
+    assert ax.get_yscale() == "log" and ax.get_xscale() == "linear"
+    assert ax.get_ylim()[0] == 1.0
+    # picking Linear overrides a prior log scale
+    apply_axis_mpl(ax, {"x_scale": "Linear", "y_scale": "Linear",
+                        "xlim": (None, None), "ylim": (None, None)})
+    assert ax.get_yscale() == "linear"
+
+    f = go.Figure()
+    apply_axis_plotly(f, {"x_scale": "Linear", "y_scale": "Log",
+                          "xlim": (None, None), "ylim": (1.0, 1e4)})
+    assert f.layout.yaxis.type == "log"
+    assert abs(f.layout.yaxis.range[1] - 4.0) < 1e-9  # log10(1e4)
+    # non-positive bound on a log axis -> autorange, no crash
+    f2 = go.Figure()
+    apply_axis_plotly(f2, {"x_scale": "Linear", "y_scale": "Log",
+                           "xlim": (None, None), "ylim": (0.0, 1e4)})
+    assert f2.layout.yaxis.range is None
