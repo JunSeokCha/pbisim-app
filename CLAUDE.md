@@ -200,11 +200,16 @@ future frontend swap stays cheap. Work is on `feature/redesign` (pushed), **143 
   `apply_axis_mpl`/`apply_axis_plotly`, log/linear/log-log + axis limits, plotly log10-range
   gotcha handled). Wired into the sim bacterial+phage (mpl) and Dose-Response + Param-Sweep
   trajectories (plotly). Hardcoded `semilogy`/`yaxis_type="log"` removed from those.
-- Tests: `tests/test_redesign.py`. **Still TODO:** metric tiles/headers on Clinical Trials
-  (cure rate), Calibration (RMSE/R²), sweep summaries; axis controls on remaining secondary
-  plots (OD/nutrient, trial PK/PD, antibiotic-immune twin-axis). Branch not yet merged to
-  `main` (won't auto-deploy until merged; a Clear-build-cache deploy is still needed for the
-  earlier pbisim engine change).
+- Tests: `tests/test_redesign.py`. **Merged to `main`** (feature/redesign deleted). Metric
+  tiles now on every result page (Sim results header+badge+peak-phage, Trials per-arm cure
+  rate, Calibration pooled RMSE+R², Dose-Response + Param-Sweep summaries).
+- **Post-merge follow-ups:** AI settings collapsed into a sidebar `st.expander`; unit labels
+  standardized (`h⁻¹`/`mL·h⁻¹`, dropped confusing "(r)"/"dB"/"dD"/"Y" symbols); **all
+  app-owned plots migrated to Plotly** for consistency (repro script + AI-generated figures
+  stay matplotlib by design). **Dark mode deferred** (light-only for launch; toggle hidden,
+  dark CSS dormant).
+- Deploy note: auto-deploys from `main`, but the earlier pbisim engine change still needs a
+  **Clear build cache & deploy** on Render (cached pip layer).
 
 ## Done this session (2026-06-23 continued)
 
