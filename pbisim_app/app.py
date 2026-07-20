@@ -2545,12 +2545,6 @@ with st.sidebar:
                     st.error(f"API Diagnostics Failed: {e}")
                     st.info("Note: If you get a 404 error here, your key is authentic but has no models enabled (often because the Anthropic account is at Tier 0/unfunded). If you get a 401, the key is invalid.")
 
-
-
-
-    show_code = st.toggle("Show generated code", value=True)
-    show_assumptions = st.toggle("Show assumptions", value=True)
-
     st.markdown("---")
     st.markdown("### Appearance")
     st.session_state["theme_mode"] = st.selectbox(
@@ -3253,6 +3247,14 @@ elif st.session_state.current_page == "Calibration":
 elif st.session_state.current_page == "AI Assistant":
     st.title("AI Simulation Assistant")
     st.caption("Instruct Claude to design, simulate, and analyze phage therapy setups using natural language.")
+
+    # Output display preferences — live here, next to the output they control
+    # (moved out of the sidebar's API settings, where they were buried).
+    _sc1, _sc2 = st.columns(2)
+    with _sc1:
+        show_code = st.toggle("Show generated code", value=True, key="ai_show_code")
+    with _sc2:
+        show_assumptions = st.toggle("Show assumptions", value=True, key="ai_show_assumptions")
 
     # Check key
     if not st.session_state.agent.client.api_key:
@@ -6179,6 +6181,5 @@ elif st.session_state.current_page == "Interactive Simulator":
                 width="stretch",
             )
 
-        if show_code:
-            with st.expander("🐍 View Python Reproduction Code"):
-                st.code(rep_code, language="python")
+        with st.expander("🐍 View Python Reproduction Code"):
+            st.code(rep_code, language="python")
