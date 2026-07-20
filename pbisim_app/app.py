@@ -64,7 +64,7 @@ from pbisim.trial.clinical import TreatmentArm
 
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
-from pbisim_app.viz_helper import plot_axis_controls, apply_axis_mpl, apply_axis_plotly
+from pbisim_app.viz_helper import plot_axis_controls, apply_axis_plotly
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -3213,28 +3213,41 @@ elif st.session_state.current_page == "Calibration":
             # Render the (persisted) overlay result if one exists.
             _ovr = st.session_state.get("calib_overlay_result")
             if _ovr:
-                _fig, _ax = plt.subplots(figsize=(10, 5))
-                _palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+                import plotly.graph_objects as go
+                _palette = ["#0d7a68", "#c1873a", "#5457a6", "#b5487f", "#3b6fb5",
+                            "#2e8b57", "#a0522d", "#6a5acd"]
+
+                def _rgba(hexc, a):
+                    h = hexc.lstrip("#")
+                    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
+
+                _pfig = go.Figure()
                 for _i, _s in enumerate(_ovr["series"]):
                     _color = _palette[_i % len(_palette)]
                     _yp = np.maximum(_s["pred"], 1e-30) if _ovr["log"] else _s["pred"]
-                    _ax.plot(_s["time"], _yp, color=_color, lw=2, label=f"{_s['label']} (model)")
-                    if _s["is_raw"]:
-                        _ax.scatter(_s["obs_time"], _s["obs_value"], color=_color, s=14, alpha=0.45)
-                    else:
-                        _ax.scatter(_s["obs_time"], _s["obs_value"], color=_color, s=18, marker="o",
-                                    edgecolor="k", linewidth=0.3, zorder=3)
-                        if _s["obs_lo"] is not None:
-                            _ax.fill_between(_s["obs_time"], _s["obs_lo"], _s["obs_hi"], color=_color, alpha=0.18, linewidth=0)
+                    # observed uncertainty band (aggregated series only)
+                    if (not _s["is_raw"]) and _s["obs_lo"] is not None:
+                        _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_hi"], mode="lines",
+                                                   line=dict(width=0), showlegend=False, hoverinfo="skip"))
+                        _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_lo"], mode="lines",
+                                                   line=dict(width=0), fill="tonexty",
+                                                   fillcolor=_rgba(_color, 0.15), showlegend=False, hoverinfo="skip"))
+                    # model line
+                    _pfig.add_trace(go.Scatter(x=_s["time"], y=_yp, mode="lines",
+                                               name=f"{_s['label']} (model)", line=dict(color=_color, width=2)))
+                    # observations
+                    _mk = dict(color=_color, size=5 if _s["is_raw"] else 7,
+                               opacity=0.45 if _s["is_raw"] else 1.0)
+                    if not _s["is_raw"]:
+                        _mk["line"] = dict(color="#16211f", width=0.4)
+                    _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_value"], mode="markers",
+                                               name=f"{_s['label']} (obs)", marker=_mk))
+                _pfig.update_layout(title=_ovr["title"], xaxis_title="Time (h)", yaxis_title=_ovr["ylabel"],
+                                    template="plotly_white", height=470, margin=dict(t=48, b=40),
+                                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, x=0))
                 if _ovr["log"]:
-                    _ax.set_yscale("log")
-                _ax.set_xlabel("Time (h)")
-                _ax.set_ylabel(_ovr["ylabel"])
-                _ax.legend(fontsize=8, ncol=2)
-                _ax.set_title(_ovr["title"])
-                _ax.grid(True, alpha=0.15)
-                st.pyplot(_fig)
-                plt.close(_fig)
+                    _pfig.update_yaxes(type="log")
+                st.plotly_chart(_pfig, width="stretch")
 
                 # Pooled fit-quality tiles (RMSE + R² across all series, model
                 # interpolated onto the observation times; log₁₀ space when the
@@ -6071,14 +6084,20 @@ elif st.session_state.current_page == "Interactive Simulator":
 
         t = result.time
 
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        def _sim_layout(fig, title, ylab):
+            fig.update_layout(title=title, xaxis_title="Time (hours)", yaxis_title=ylab,
+                              template="plotly_white", height=440, margin=dict(t=48, b=40),
+                              legend=dict(orientation="h", yanchor="bottom", y=-0.28, x=0))
+            return fig
+
         # Bacterial Dynamics Plot
         with plot_tabs[0]:
-            fig, ax = plt.subplots(figsize=(10, 4.5))
-            ax.semilogy(
-                t, np.maximum(total_bacteria, 1.0), "k-", lw=3, label="Total Viable"
-            )
-            
-            # Map genotype labels if BRG
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=t, y=np.maximum(total_bacteria, 1.0), mode="lines",
+                                     name="Total Viable", line=dict(color="#16211f", width=3)))
             if builder_mode == "Binary Genotypes (BRG)":
                 import itertools
                 combs = list(itertools.product([0, 1], repeat=len(phages) + len(antibiotics)))
@@ -6091,66 +6110,39 @@ elif st.session_state.current_page == "Interactive Simulator":
                         a_lbl = "".join(map(str, comb[len(phages):]))
                         lbl = f"phi{p_lbl}_abx{a_lbl}" if len(phages) > 0 else f"abx{a_lbl}"
                     labels.append(lbl)
-                    
                 for j in range(len(labels)):
-                    ax.semilogy(
-                        t, np.maximum(result.get(f"B{j}"), 1.0), "--", label=labels[j]
-                    )
+                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"B{j}"), 1.0),
+                                             mode="lines", name=labels[j], line=dict(dash="dash")))
             else:
                 for j in range(len(strains)):
                     name = strains[j]["name"]
-                    ax.semilogy(
-                        t, np.maximum(result.get(f"B{j}"), 1.0), "--", label=f"{name} (Active)"
-                    )
+                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"B{j}"), 1.0),
+                                             mode="lines", name=f"{name} (Active)", line=dict(dash="dash")))
                     if strains[j].get("dormancy_enabled", False):
                         D_total = np.zeros_like(t)
                         for q in range(strains[j].get("dormancy_depth", 1)):
                             D_total += result.get(f"D{q}_{j}")
-                        ax.semilogy(
-                            t, np.maximum(D_total, 1.0), ":", label=f"{name} (Dormant)"
-                        )
-            ax.set(
-                xlabel="Time (hours)",
-                ylabel="Density (cells/mL)",
-                title="Bacterial Population Trajectories",
-            )
-            ax.legend(fontsize=9, loc="lower left")
-            ax.grid(True, which="both", ls="-", alpha=0.1)
-            apply_axis_mpl(ax, plot_axis_controls("sim_bact", default_y="Log"))
-            st.pyplot(fig)
-            plt.close(fig)
+                        fig.add_trace(go.Scatter(x=t, y=np.maximum(D_total, 1.0),
+                                                 mode="lines", name=f"{name} (Dormant)", line=dict(dash="dot")))
+            _sim_layout(fig, "Bacterial Population Trajectories", "Density (cells/mL)")
+            apply_axis_plotly(fig, plot_axis_controls("sim_bact", default_y="Log"))
+            st.plotly_chart(fig, width="stretch")
 
         # Phage Dynamics Plot
         with plot_tabs[1]:
             if len(phages) > 0:
-                fig, ax = plt.subplots(figsize=(10, 4.5))
+                fig = go.Figure()
                 for j in range(len(phages)):
                     name = phages[j]["name"]
-                    ax.semilogy(
-                        t,
-                        np.maximum(result.get(f"P{j}"), 1.0),
-                        "-",
-                        label=f"{name} (Infection Site)",
-                    )
-                    # blood Pc
+                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"P{j}"), 1.0),
+                                             mode="lines", name=f"{name} (Infection Site)"))
                     if phages[j]["pk_mode"] != "None":
                         Vc = phages[j].get("Vc", 5000.0)
-                        ax.semilogy(
-                            t,
-                            np.maximum(result.get(f"Pc{j}") / Vc, 1.0),
-                            "--",
-                            label=f"{name} (Blood Conc)",
-                        )
-                ax.set(
-                    xlabel="Time (hours)",
-                    ylabel="Density (phages/mL)",
-                    title="Phage Population Trajectories",
-                )
-                ax.legend(fontsize=9, loc="lower left")
-                ax.grid(True, which="both", ls="-", alpha=0.1)
-                apply_axis_mpl(ax, plot_axis_controls("sim_phage", default_y="Log"))
-                st.pyplot(fig)
-                plt.close(fig)
+                        fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"Pc{j}") / Vc, 1.0),
+                                                 mode="lines", name=f"{name} (Blood Conc)", line=dict(dash="dash")))
+                _sim_layout(fig, "Phage Population Trajectories", "Density (phages/mL)")
+                apply_axis_plotly(fig, plot_axis_controls("sim_phage", default_y="Log"))
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("No phages were configured in this simulation.")
 
@@ -6159,112 +6151,57 @@ elif st.session_state.current_page == "Interactive Simulator":
             col_nut1, col_nut2 = st.columns(2)
             with col_nut1:
                 if track_nutrients:
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    ax.plot(t, result.get("S"), "C1-", lw=2, label="Substrate (S)")
-                    ax.set(
-                        xlabel="Time (hours)",
-                        ylabel="Substrate concentration",
-                        title="Nutrient Resource Depletion",
-                    )
-                    ax.legend()
-                    ax.grid(True, alpha=0.15)
-                    st.pyplot(fig)
-                    plt.close(fig)
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=t, y=result.get("S"), mode="lines",
+                                             name="Substrate (S)", line=dict(color="#c1873a", width=2)))
+                    _sim_layout(fig, "Nutrient Resource Depletion", "Substrate concentration")
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     st.info("Nutrient tracking is disabled (constant/logistic growth).")
-
             with col_nut2:
                 if st.session_state.get("int_debris_enabled", False):
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    ax.plot(
-                        t,
-                        _safe_od(result, total_bacteria),
-                        "C2-",
-                        lw=2.5,
-                        label="OD (AU)",
-                    )
-                    cfu_od = total_bacteria / st.session_state.get(
-                        "int_od_to_cfu_conversion_factor", 2e8
-                    )
-                    ax.plot(
-                        t,
-                        cfu_od,
-                        "g--",
-                        alpha=0.6,
-                        label="Live-only OD",
-                    )
-                    ax.set(
-                        xlabel="Time (hours)",
-                        ylabel="Optical Density (AU)",
-                        title="Simulated Optical Density (Live + Debris)",
-                    )
-                    ax.legend()
-                    ax.grid(True, alpha=0.15)
-                    st.pyplot(fig)
-                    plt.close(fig)
+                    cfu_od = total_bacteria / st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=t, y=_safe_od(result, total_bacteria), mode="lines",
+                                             name="OD (AU)", line=dict(color="#0d7a68", width=2.5)))
+                    fig.add_trace(go.Scatter(x=t, y=cfu_od, mode="lines", name="Live-only OD",
+                                             line=dict(color="#0d7a68", dash="dash"), opacity=0.6))
+                    _sim_layout(fig, "Simulated Optical Density (Live + Debris)", "Optical Density (AU)")
+                    st.plotly_chart(fig, width="stretch")
                 else:
-                    st.info(
-                        "Bacterial debris & Optical Density (OD) tracking was not enabled."
-                    )
+                    st.info("Bacterial debris & Optical Density (OD) tracking was not enabled.")
 
         # Antibiotics & Host Immunity Plot
         with plot_tabs[3]:
             abx_present = len(antibiotics) > 0
             imm_present = st.session_state.get("int_immunity_enabled", False)
-
             if abx_present or imm_present:
-                fig, ax1 = plt.subplots(figsize=(10, 4.5))
-
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
                 if abx_present:
-                    color = "#3b82f6"
-                    ax1.set_xlabel("Time (hours)")
-                    ax1.set_ylabel("Antibiotic Concentration", color=color)
                     for j, abx in enumerate(antibiotics):
                         Vc = abx.get("Vc", 1.0)
-                        conc = result.get(f"Ac{j}") / Vc
-                        ax1.plot(
-                            t,
-                            conc,
-                            color=color,
-                            lw=2,
-                            label=f"{abx['name']} (Blood)",
-                        )
+                        fig.add_trace(go.Scatter(x=t, y=result.get(f"Ac{j}") / Vc, mode="lines",
+                                                 name=f"{abx['name']} (Blood)", line=dict(color="#3b6fb5")),
+                                      secondary_y=False)
                         if abx.get("k12", 0.0) > 0:
-                            ax1.plot(
-                                t,
-                                result.get(f"Ap{j}") / Vc,
-                                color=color,
-                                ls="--",
-                                alpha=0.7,
-                                label=f"{abx['name']} (Peripheral)",
-                            )
-                    ax1.tick_params(axis="y", labelcolor=color)
-
+                            fig.add_trace(go.Scatter(x=t, y=result.get(f"Ap{j}") / Vc, mode="lines",
+                                                     name=f"{abx['name']} (Peripheral)",
+                                                     line=dict(color="#3b6fb5", dash="dash")),
+                                          secondary_y=False)
+                # When an antibiotic is present, put Imm on the secondary y-axis; otherwise on the
+                # primary (so an immunity-only run is never drawn on an empty/throwaway axis).
                 if imm_present:
-                    # When an antibiotic is present, put Imm on a twin y-axis;
-                    # otherwise plot it directly on ax1 (the displayed figure).
-                    # NOTE: previously this used plt.subplots(...)[1] in the no-abx
-                    # case, which drew Imm onto a throwaway figure while st.pyplot(fig)
-                    # showed the empty original — so the graph appeared blank whenever
-                    # immunity was enabled without an antibiotic.
-                    ax2 = ax1.twinx() if abx_present else ax1
-                    color = "#ec4899"
-                    ax2.set_ylabel("Immune Effector Cells (Imm)", color=color)
-                    ax2.plot(
-                        t,
-                        result.get("Imm"),
-                        color=color,
-                        lw=2,
-                        label="Immune Effector",
-                    )
-                    ax2.tick_params(axis="y", labelcolor=color)
-                    if not abx_present:
-                        ax2.set_xlabel("Time (hours)")
-
-                plt.title("Pharmacokinetics & Host Defense Dynamics")
-                fig.tight_layout()
-                st.pyplot(fig)
-                plt.close(fig)
+                    fig.add_trace(go.Scatter(x=t, y=result.get("Imm"), mode="lines",
+                                             name="Immune Effector", line=dict(color="#b5487f")),
+                                  secondary_y=bool(abx_present))
+                fig.update_xaxes(title_text="Time (hours)")
+                fig.update_yaxes(title_text="Antibiotic concentration", secondary_y=False)
+                if imm_present:
+                    fig.update_yaxes(title_text="Immune Effector Cells (Imm)", secondary_y=bool(abx_present))
+                fig.update_layout(title="Pharmacokinetics & Host Defense Dynamics",
+                                  template="plotly_white", height=440, margin=dict(t=48, b=40),
+                                  legend=dict(orientation="h", yanchor="bottom", y=-0.28, x=0))
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("No antibiotics or immune modules were configured.")
 
