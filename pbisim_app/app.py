@@ -2955,7 +2955,7 @@ elif st.session_state.current_page == "Calibration":
                         help="Number of phage latent (eclipse) stages — Erlang shape of the latent period."))
                 with gk2:
                     st.session_state["int_carrying_capacity"] = st.number_input(
-                        "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                        "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                         format="%.3e", key="fit_edit_K")
                 with gk3:
                     st.session_state["int_monod_constant"] = st.number_input(
@@ -4512,7 +4512,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     step=0.05, help="Nutrient half-saturation for Monod growth S/(Ks+S).")
             if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
                 st.session_state["int_carrying_capacity"] = st.number_input(
-                    "Carrying capacity (K)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                    "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
                     format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
 
         # Death signal (model-wide) — modulates the per-strain natural death rate dB.
@@ -4593,7 +4593,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc2:
                             strains[i]["growth_rate"] = st.number_input(
-                                "Growth rate (r)",
+                                "Growth rate r (h⁻¹)",
                                 value=float(strains[i]["growth_rate"]),
                                 step=0.1,
                                 key=f"str_growth_{i}",
@@ -4607,7 +4607,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.",
                         )
                         strains[i]["death_rate_B"] = st.number_input(
-                            "Natural death rate (dB)",
+                            "Natural death rate dB (h⁻¹)",
                             value=float(strains[i].get("death_rate_B", 0.0)),
                             step=0.01,
                             key=f"str_death_{i}",
@@ -4644,7 +4644,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                 )
                             with cd4:
                                 strains[i]["death_rate_D"] = st.number_input(
-                                    "Dormant death rate (dD)",
+                                    "Dormant death rate dD (h⁻¹)",
                                     value=float(strains[i].get("death_rate_D", 0.0)),
                                     step=0.01,
                                     key=f"str_death_d_{i}",
@@ -4757,7 +4757,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                             )
                         with cc4:
                             phages[i]["burst_sizes"] = st.number_input(
-                                "Burst size (Y)",
+                                "Burst size Y (PFU/cell)",
                                 value=float(phages[i]["burst_sizes"]),
                                 step=10.0,
                                 key=f"phg_burst_{i}",
@@ -4892,7 +4892,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                     "Resource consumption ratio", value=float(st.session_state.get("int_brg_base_ratio", 1e9)), format="%.1e"
                 )
                 st.session_state["int_brg_death_rate_B"] = st.number_input(
-                    "Natural death rate (dB)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
+                    "Natural death rate dB (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)), step=0.01
                 )
                 st.session_state["int_brg_dormancy_enabled"] = st.checkbox(
                     "Enable Dormancy", value=st.session_state.get("int_brg_dormancy_enabled", False)
@@ -4914,7 +4914,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                         help="Number of dormancy-depth compartments for all genotypes.",
                     )
                     st.session_state["int_brg_death_rate_D"] = st.number_input(
-                        "Dormant death rate (dD)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
+                        "Dormant death rate dD (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                     )
                     _bds = canonical_signal(st.session_state.get("int_brg_dorm_signal", "nutrient"))
                     _brs = canonical_signal(st.session_state.get("int_brg_resus_signal", "nutrient"))
@@ -4965,12 +4965,12 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for idx in range(n_phg_loci):
                     with st.expander(f"Phage Locus {idx}: {phages[idx]['name']}", expanded=True):
                         phages[idx]["name"] = st.text_input("Locus name", value=phages[idx]["name"], key=f"brg_phg_name_{idx}")
-                        phages[idx]["initial_P"] = st.number_input("Initial count (P0)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
-                        phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (adsorption_s)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
-                        phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (adsorption_r)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
-                        phages[idx]["burst_sizes"] = st.number_input("Burst size", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
+                        phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (mL·h⁻¹)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
+                        phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (mL·h⁻¹)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
+                        phages[idx]["burst_sizes"] = st.number_input("Burst size (PFU/cell)", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx]["latent_periods"]), step=0.1, key=f"brg_phg_latent_{idx}")
-                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
+                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
                         phages[idx]["fitness_cost"] = st.number_input(
                             "Resistance fitness cost",
                             value=float(phages[idx].get("fitness_cost", 0.05)), step=0.01,
@@ -4980,7 +4980,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "initial condition — with cost 0 the resistant mutants are neutral "
                                  "and dominate the pre-treatment equilibrium.",
                         )
-                        phages[idx]["mu"] = st.number_input("Mutation rate (mu)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
+                        phages[idx]["mu"] = st.number_input("Mutation rate μ (per replication)", value=float(phages[idx].get("mu", 1e-7)), format="%.1e", key=f"brg_phg_mu_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
                             "Dormant adsorption attenuation (per depth layer)",
                             value=float(phages[idx].get("attenuation_rate", 0.0)),
@@ -5094,22 +5094,22 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for i in range(n_strains):
                     with st.expander(f"Strain {i}: {strains[i]['name']}", expanded=True):
                         strains[i]["name"] = st.text_input("Strain name", value=strains[i]["name"], key=f"ss_str_name_{i}")
-                        strains[i]["initial_B"] = st.number_input("Initial count (B0)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
-                        strains[i]["growth_rate"] = st.number_input("Growth rate (r)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
+                        strains[i]["initial_B"] = st.number_input("Initial count B₀ (CFU·mL⁻¹)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
+                        strains[i]["growth_rate"] = st.number_input("Growth rate r (h⁻¹)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
                         strains[i]["bacteria_to_resource_ratio"] = st.number_input(
                             "Bacteria-to-resource ratio", value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
                             format="%.2e", key=f"ss_str_ratio_{i}",
                             help="Bacteria produced per unit resource consumed (yield). Governs how fast "
                                  "growth depletes the substrate under nutrient-limited (Monod) growth.")
-                        strains[i]["death_rate_B"] = st.number_input("Natural death rate (dB)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
+                        strains[i]["death_rate_B"] = st.number_input("Natural death rate dB (h⁻¹)", value=float(strains[i].get("death_rate_B", 0.0)), step=0.01, key=f"ss_str_death_{i}")
                         
                         strains[i]["dormancy_enabled"] = st.checkbox("Enable Dormancy", value=strains[i].get("dormancy_enabled", False), key=f"ss_str_dorm_{i}")
                         if strains[i]["dormancy_enabled"]:
                             strains[i]["dormancy_depth"] = st.number_input("Depth layers (Q)", min_value=1, max_value=10, value=int(strains[i].get("dormancy_depth", 1)), key=f"ss_str_depth_{i}", help="Number of dormancy-depth compartments (max across strains sets the model n_depth).")
-                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
-                            strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
-                            strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
-                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate (dD)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
+                            strains[i]["dormancy_rate"] = st.number_input("Dormancy rate (h⁻¹)", value=float(strains[i].get("dormancy_rate", 0.001)), key=f"ss_str_sleep_{i}")
+                            strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate (h⁻¹)", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
+                            strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion (h⁻¹)", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
+                            strains[i]["death_rate_D"] = st.number_input("Dormant death rate dD (h⁻¹)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
                             _sds = canonical_signal(strains[i].get("dormancy_signal", "nutrient"))
                             _srs = canonical_signal(strains[i].get("resuscitation_signal", "nutrient"))
                             strains[i]["dormancy_signal"] = st.selectbox(
@@ -5196,10 +5196,10 @@ elif st.session_state.current_page == "Interactive Simulator":
                 for idx in range(n_phages):
                     with st.expander(f"Phage {idx}: {phages[idx]['name']}", expanded=True):
                         phages[idx]["name"] = st.text_input("Phage name", value=phages[idx]["name"], key=f"ss_phg_name_{idx}")
-                        phages[idx]["initial_P"] = st.number_input("Initial count (P0)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
-                        phages[idx]["burst_sizes"] = st.number_input("Burst size (Y)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
+                        phages[idx]["burst_sizes"] = st.number_input("Burst size Y (PFU/cell)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx].get("latent_periods", 0.5)), step=0.1, key=f"ss_phg_latent_{idx}")
-                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
+                        phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")
                         phages[idx]["attenuation_rate"] = st.number_input(
                             "Dormant adsorption attenuation (per depth layer)",
                             value=float(phages[idx].get("attenuation_rate", 0.0)),
@@ -5340,7 +5340,7 @@ elif st.session_state.current_page == "Interactive Simulator":
                                  "Drives the equilibrium initial condition; cost 0 → resistant "
                                  "mutants dominate the pre-treatment equilibrium.",
                         )
-                        antibiotics[i]["mu"] = st.number_input("Mutation rate (mu)", value=float(antibiotics[i].get("mu", 1e-7)), format="%.1e", key=f"abx_mu_{i}")
+                        antibiotics[i]["mu"] = st.number_input("Mutation rate μ (per replication)", value=float(antibiotics[i].get("mu", 1e-7)), format="%.1e", key=f"abx_mu_{i}")
                     else:
                         # Direct parameters
                         c3, c4 = st.columns(2)
