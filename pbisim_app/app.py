@@ -3245,8 +3245,8 @@ elif st.session_state.current_page == "Calibration":
                 _pfig.update_layout(title=_ovr["title"], xaxis_title="Time (h)", yaxis_title=_ovr["ylabel"],
                                     template="plotly_white", height=470, margin=dict(t=48, b=40),
                                     legend=dict(orientation="h", yanchor="bottom", y=-0.3, x=0))
-                if _ovr["log"]:
-                    _pfig.update_yaxes(type="log")
+                apply_axis_plotly(_pfig, plot_axis_controls(
+                    "calib_overlay", default_y="Log" if _ovr["log"] else "Linear"))
                 st.plotly_chart(_pfig, width="stretch")
 
                 # Pooled fit-quality tiles (RMSE + R² across all series, model
