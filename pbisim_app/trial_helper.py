@@ -343,10 +343,10 @@ def plot_pkpd_trajectories_plotly(
         title=f"{title} — median & IQR per arm",
         xaxis_title="Time (hours)",
         yaxis_title=y_label,
-        template="plotly_dark",
+        template="plotly_white",
         hovermode="x unified",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        height=440,
+        margin=dict(t=48, b=40),
     )
     return fig
 

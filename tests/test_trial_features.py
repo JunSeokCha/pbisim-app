@@ -192,3 +192,26 @@ def test_trial_iiv_is_editable_inline():
     assert len(at.exception) == 0, at.exception
     assert "_id" in at.session_state["trial_iiv_inputs"][0]
     assert any((s.label or "") == "Select Parameter" for s in at.selectbox)   # edit form rendered
+
+
+def test_pkpd_plot_generalises_and_uses_light_template():
+    """The per-arm PK/PD median/IQR plot works for any state prefix (bacteria,
+    phage, immune) without crashing, and uses the app's light Plotly template."""
+    import numpy as np
+    from pbisim.trial.clinical import TreatmentArm
+    from pbisim.trial.population import InitialConditions
+    from pbisim.builder import ModelBuilder
+    from pbisim_app.trial_helper import run_trial_simulation, plot_pkpd_trajectories_plotly
+
+    cfg = ModelBuilder(n_bacteria=1, n_phages=0).with_growth_rates(1.0).build()
+    iB = np.array([1e6])
+    cfg.initial_conditions = InitialConditions(B=iB, P=np.zeros(0), S=1.0)
+    res = run_trial_simulation(
+        cfg, [], [TreatmentArm(name="Control", dose_schedule=None)],
+        n_patients=3, t_end=5.0, dt=1.0, seed=1, pretreatment_hours=0.0, n_jobs=1,
+        base_initial_B=iB, base_initial_P=np.zeros(0), base_initial_S=1.0,
+    )
+    for prefixes in [("B", "D", "I", "H"), ("P",), ("Imm",)]:
+        fig = plot_pkpd_trajectories_plotly(res, prefixes=prefixes, title="x", y_label="y")
+        assert fig is not None
+        assert fig.layout.template.layout.plot_bgcolor  # plotly_white has a defined bg

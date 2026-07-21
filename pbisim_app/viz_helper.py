@@ -318,3 +318,28 @@ def plot_series(result, chosen, opts, *, title, y_label, height=440):
                       legend=dict(orientation="h", yanchor="bottom", y=-0.28, x=0))
     apply_axis_plotly(fig, opts)
     return fig
+
+
+def plot_sweep_traces(traces, key_prefix, *, title_suffix="across runs"):
+    """Multi-run 'trace' plot: a selectbox picks ONE metric to show across every run
+    (overlaying N metrics x M runs would be unreadable — see approach A, phase 2).
+
+    ``traces`` is an ordered dict ``{metric_label: (scale, [(t, y, run_label), ...])}``
+    where scale is "log" or "linear". Renders nothing for an empty dict.
+    """
+    import plotly.graph_objects as go
+    if not traces:
+        return
+    name = st.selectbox("Trace", list(traces), key=f"{key_prefix}_metric")
+    scale, series = traces[name]
+    is_log = scale == "log"
+    st.markdown(f"#### {name} {title_suffix}")
+    fig = go.Figure()
+    for t_arr, y_arr, lbl in series:
+        y = _np.maximum(y_arr, 1.0) if is_log else y_arr
+        fig.add_trace(go.Scatter(x=t_arr, y=y, mode="lines", name=lbl))
+    fig.update_layout(xaxis_title="Time (hours)", yaxis_title=name, template="plotly_white",
+                      height=440, margin=dict(t=20, b=40))
+    apply_axis_plotly(fig, plot_axis_controls(f"{key_prefix}_axis",
+                                              default_y="Log" if is_log else "Linear"))
+    st.plotly_chart(fig, width="stretch")

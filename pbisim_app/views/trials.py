@@ -249,18 +249,24 @@ def render():
                     )
                 st.markdown("<br>", unsafe_allow_html=True)
 
-            # Raw PKPD time trajectories (CFU + PFU) per arm
+            # Raw PKPD time trajectories per arm — pick which outputs to show.
             st.markdown("#### PK/PD trajectories (median & IQR per arm)")
-            fig_cfu = plot_pkpd_trajectories_plotly(
-                result, prefixes=("B", "D", "I", "H"),
-                title="Total Bacteria (CFU/mL)", y_label="log₁₀ CFU/mL",
+            _TRIAL_OUTPUTS = {
+                "Total bacteria (CFU/mL)": (("B", "D", "I", "H"), "log₁₀ CFU/mL"),
+                "Free phage (PFU/mL)": (("P",), "log₁₀ PFU/mL"),
+                "Immune effector": (("Imm",), "log₁₀ Imm"),
+            }
+            _outputs = st.multiselect(
+                "Outputs", list(_TRIAL_OUTPUTS),
+                default=["Total bacteria (CFU/mL)", "Free phage (PFU/mL)"],
+                key="trial_pkpd_outputs",
             )
-            st.plotly_chart(fig_cfu, width="stretch")
-            fig_pfu = plot_pkpd_trajectories_plotly(
-                result, prefixes=("P",),
-                title="Free Phage (PFU/mL)", y_label="log₁₀ PFU/mL",
-            )
-            st.plotly_chart(fig_pfu, width="stretch")
+            for _name in _outputs:
+                _prefixes, _ylab = _TRIAL_OUTPUTS[_name]
+                st.plotly_chart(
+                    plot_pkpd_trajectories_plotly(result, prefixes=_prefixes, title=_name, y_label=_ylab),
+                    width="stretch",
+                )
 
             # Step survival plot
             st.markdown("#### Step-Survival (Kaplan-Meier)")

@@ -179,6 +179,7 @@ def render():
 
                 runs_outcomes = []
                 trajectories = [] # (time, viable_b, label)
+                phage_trajectories = []  # (time, total_free_phage, label)
                 od_trajectories = [] # (time, od, label) — only if OD/debris enabled
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
 
@@ -230,6 +231,7 @@ def render():
                     })
                     _lbl = f"{param1_label} = {val:.2e}"
                     trajectories.append((result.time, total_bacteria, _lbl))
+                    phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
                     if _od_enabled:
                         _od = (_safe_od(result, total_bacteria))
                         od_trajectories.append((result.time, _od, _lbl))
@@ -242,6 +244,7 @@ def render():
                     "spacing": spacing,
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
@@ -265,6 +268,7 @@ def render():
 
                 runs_outcomes = []
                 trajectories = []
+                phage_trajectories = []  # (time, total_free_phage, label)
                 od_trajectories = []
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
                 for k in range(M):
@@ -301,6 +305,7 @@ def render():
                     _lbl_txt = ", ".join(f"{s.rsplit(' - ',1)[0].split('(')[0].strip()}={series[s][k]:.2g}" for s in labels)
                     _lbl = f"Step {k+1}: {_lbl_txt}"
                     trajectories.append((result.time, total_bacteria, _lbl))
+                    phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
                     if _od_enabled:
                         _od = (_safe_od(result, total_bacteria))
                         od_trajectories.append((result.time, _od, _lbl))
@@ -312,6 +317,7 @@ def render():
                     "labels": list(labels),
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
@@ -411,24 +417,12 @@ def render():
                         "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"
                     }),
                     width="stretch")
-                st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
-                fig_traj = go.Figure()
-                for t_arr, b_arr, legend_lbl in _ps["trajectories"]:
-                    fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
-                fig_traj.update_layout(
-                    xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                apply_axis_plotly(fig_traj, plot_axis_controls("ps1d_traj", default_y="Log"))
-                st.plotly_chart(fig_traj, width="stretch")
+                _traces = {"Total viable bacteria (CFU/mL)": ("log", _ps["trajectories"])}
+                if _ps.get("phage_trajectories"):
+                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
                 if _ps.get("od_trajectories"):
-                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
-                    fig_od = go.Figure()
-                    for t_arr, od_arr, legend_lbl in _ps["od_trajectories"]:
-                        fig_od.add_trace(go.Scatter(x=t_arr, y=od_arr, mode='lines', name=legend_lbl))
-                    fig_od.update_layout(
-                        xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
-                        template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_od, width="stretch")
+                    _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
+                plot_sweep_traces(_traces, "ps1d_traj", title_suffix="across runs")
                 st.markdown("#### Outcome Metrics vs Parameter Value")
                 fig_metric = go.Figure()
                 fig_metric.add_trace(go.Scatter(x=df_summary[_p1], y=df_summary["AUC (cells·h/mL)"], mode="lines+markers", name="Bacterial AUC", yaxis="y1"))
@@ -448,24 +442,12 @@ def render():
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
                              "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"})
                 st.dataframe(df_summary.style.format(_fmt), width="stretch")
-                st.markdown("#### Raw Simulation Trajectories (Viable Bacteria)")
-                fig_traj = go.Figure()
-                for t_arr, b_arr, legend_lbl in _ps["trajectories"]:
-                    fig_traj.add_trace(go.Scatter(x=t_arr, y=np.maximum(b_arr, 1.0), mode='lines', name=legend_lbl))
-                fig_traj.update_layout(
-                    xaxis_title="Time (hours)", yaxis_title="Total Viable Bacteria (CFU/mL)",
-                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                apply_axis_plotly(fig_traj, plot_axis_controls("pscoupled_traj", default_y="Log"))
-                st.plotly_chart(fig_traj, width="stretch")
+                _traces = {"Total viable bacteria (CFU/mL)": ("log", _ps["trajectories"])}
+                if _ps.get("phage_trajectories"):
+                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
                 if _ps.get("od_trajectories"):
-                    st.markdown("#### Raw Simulation Trajectories (Optical Density)")
-                    fig_od = go.Figure()
-                    for t_arr, od_arr, legend_lbl in _ps["od_trajectories"]:
-                        fig_od.add_trace(go.Scatter(x=t_arr, y=od_arr, mode='lines', name=legend_lbl))
-                    fig_od.update_layout(
-                        xaxis_title="Time (hours)", yaxis_title="Optical density (AU)",
-                        template="plotly_white" if theme_mode == "Light" else "plotly_dark")
-                    st.plotly_chart(fig_od, width="stretch")
+                    _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
+                plot_sweep_traces(_traces, "pscoupled_traj", title_suffix="across runs")
                 st.markdown("#### Outcome Metrics vs Step Index")
                 _step = list(range(1, len(df_summary) + 1))
                 fig_metric = go.Figure()

@@ -38,7 +38,7 @@ from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
 from pbisim_app.viz_helper import (
     plot_axis_controls, apply_axis_plotly,
-    build_series, series_selector, plot_series,
+    build_series, series_selector, plot_series, plot_sweep_traces,
 )
 from pbisim_app.fit_helper import (
     OBSERVABLES,
@@ -2278,6 +2278,7 @@ __all__ = [
     'build_series',
     'series_selector',
     'plot_series',
+    'plot_sweep_traces',
     'OBSERVABLES',
     'predicted_observable',
     'normalize_fit_dataframe',

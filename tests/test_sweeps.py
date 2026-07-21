@@ -146,9 +146,14 @@ def test_dose_response_shows_od_trajectories_when_enabled():
     [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
 
     assert len(at.exception) == 0
-    headers = [m.value for m in at.markdown]
-    assert any("Viable Bacteria" in h for h in headers)   # CFU chart
-    assert any("Optical Density" in h for h in headers)   # OD chart
+    # The trajectory metric is chosen from a "Trace" selectbox; OD is offered only
+    # because the debris module is enabled.
+    trace = [s for s in at.selectbox if s.label == "Trace"]
+    assert trace, "Trace selectbox missing"
+    opts = list(trace[0].options)
+    assert "Total viable bacteria (CFU/mL)" in opts
+    assert "Total free phage (PFU/mL)" in opts
+    assert "Optical density (AU)" in opts
 
 
 def test_sweep_results_survive_navigation():
@@ -301,7 +306,8 @@ def test_parameter_sweep_shows_od_trajectories_when_enabled():
     at.session_state["current_page_radio"] = "Parameter Sweeps"
     at.run()
     [b for b in at.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
-    assert any("Optical Density" in m.value for m in at.markdown)
+    _tr = [s for s in at.selectbox if s.key == "ps1d_traj_metric"]
+    assert _tr and "Optical density (AU)" in list(_tr[0].options)
     assert len(at.exception) == 0
 
     # coupled sweep also shows OD
@@ -314,7 +320,8 @@ def test_parameter_sweep_shows_od_trajectories_when_enabled():
     at.session_state["pc_series_0"] = "1.0, 1.2, 1.5"
     at.run()
     [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
-    assert any("Optical Density" in m.value for m in at.markdown)
+    _tr = [s for s in at.selectbox if s.key == "pscoupled_traj_metric"]
+    assert _tr and "Optical density (AU)" in list(_tr[0].options)
 
     # no OD chart when the module is off
     at2 = AppTest.from_file(APP, default_timeout=220)
@@ -322,7 +329,8 @@ def test_parameter_sweep_shows_od_trajectories_when_enabled():
     at2.session_state["current_page_radio"] = "Parameter Sweeps"
     at2.run()
     [b for b in at2.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
-    assert not any("Optical Density" in m.value for m in at2.markdown)
+    _tr = [s for s in at2.selectbox if s.key == "ps1d_traj_metric"]
+    assert _tr and "Optical density (AU)" not in list(_tr[0].options)
     assert len(at2.exception) == 0
 
 
