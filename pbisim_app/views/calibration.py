@@ -129,33 +129,36 @@ def render():
             _obs_keys = sorted(_long["observable"].unique())
 
             st.markdown("### 4 · Overlay")
-            st.caption(f"{len(_arms)} group(s) · pick which to overlay against the current model.")
+            st.caption(f"{len(_arms)} group(s) · {len(_obs_keys)} observable(s) in the data · "
+                       "pick what to overlay against the current model. Each arm is simulated once; "
+                       "every observable is projected from that one trajectory.")
             oc1, oc2 = st.columns(2)
             with oc1:
                 _sel_arms = st.multiselect("Groups to overlay", _arms, default=_arms[:min(4, len(_arms))], key="fit_arms")
             with oc2:
-                _obs_key = st.selectbox("Observable", _obs_keys,
-                                        format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs")
-            _spec = OBSERVABLES.get(_obs_key, {"log": True, "link": None, "label": _obs_key, "prefixes": ("B", "D", "I", "H")})
-            _link_val = None
-            # When the OD/debris module is on, OD comes from the model's debris-inclusive
-            # get_od() (using od_to_cfu_conversion_factor, edited in the tuning panel's
-            # Global & structural section) rather than the simple biomass/link scaling.
-            _use_model_od = _obs_key == "od" and st.session_state.get("int_debris_enabled", False)
-            lc1, lc2 = st.columns(2)
-            if _spec.get("link") and not _use_model_od:
-                _pname, _op, _default = _spec["link"]
-                with lc1:
-                    _link_val = st.number_input(f"Link parameter · {_pname}", value=float(_default), format="%.3e",
-                                                key=f"fit_link_{_obs_key}",
-                                                help="Scales model state → signal (OD = biomass / od_to_cfu; "
-                                                     "luminescence = active biomass × rlu_per_cell). Tunable below / future fit param.")
-            elif _use_model_od:
-                with lc1:
-                    st.caption("OD uses the **debris module** (`get_od`, includes lysed-cell debris). "
-                               "Tune `od_to_cfu` and the debris rates in *Global & structural* below.")
-            with lc2:
-                _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
+                _sel_obs = st.multiselect("Observables", _obs_keys, default=_obs_keys,
+                                          format_func=lambda k: OBSERVABLES.get(k, {}).get("label", k), key="fit_obs_sel")
+
+            # Per-observable link parameters (OD = biomass / od_to_cfu; luminescence =
+            # active biomass × rlu_per_cell). One input per selected observable that needs
+            # one; OD instead uses the debris module's get_od() when it is enabled.
+            _debris_on = st.session_state.get("int_debris_enabled", False)
+            _link_vals = {}
+            _link_obs = [k for k in _sel_obs
+                         if OBSERVABLES.get(k, {}).get("link") and not (k == "od" and _debris_on)]
+            if _link_obs:
+                _lcols = st.columns(min(3, len(_link_obs)))
+                for _li, _ok in enumerate(_link_obs):
+                    _sp = OBSERVABLES[_ok]
+                    _pn, _op, _dflt = _sp["link"]
+                    _link_vals[_ok] = _lcols[_li % len(_lcols)].number_input(
+                        f"Link · {_sp['label']} ({_pn})", value=float(_dflt), format="%.3e",
+                        key=f"fit_link_{_ok}",
+                        help="Scales model state → signal. Tunable below / future fit parameter.")
+            if "od" in _sel_obs and _debris_on:
+                st.caption("OD uses the **debris module** (`get_od`, includes lysed-cell debris). "
+                           "Tune `od_to_cfu` and the debris rates in *Global & structural* below.")
+            _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
             # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
             # Edit the model's ACTUAL parameter values (absolute, per entity — like
@@ -357,7 +360,9 @@ def render():
                     _B0 = float(np.sum(_iB))
                     _method = st.session_state.get("int_solver_method", "BDF")
                     _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
-                    _series, _metrics = [], []
+                    # One simulation per arm; every selected observable is projected from
+                    # that single trajectory into its own panel (small multiples).
+                    _panels, _metrics = {}, []
                     for _arm in _sel_arms:
                         _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
                         _armP = np.zeros(len(_iP))
@@ -365,29 +370,65 @@ def render():
                             _armP[0] = _moi * _B0
                         _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
                         _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
-                        _pred = predicted_observable(_r, _obs_key, _link_val, use_model_od=_use_model_od)
-                        _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _obs_key)].sort_values("time")
-                        _has_band = _band is not None and _d["lo"].notna().any()
-                        _series.append({
-                            "label": _arm,
-                            "time": np.asarray(_r.time),
-                            "pred": np.asarray(_pred),
-                            "obs_time": _d["time"].to_numpy(),
-                            "obs_value": _d["value"].to_numpy(),
-                            "obs_lo": _d["lo"].to_numpy() if _has_band else None,
-                            "obs_hi": _d["hi"].to_numpy() if _has_band else None,
-                            "is_raw": _stat_key == "raw",
-                        })
-                        _metrics.append({"group": _arm, "MOI": _moi, "n_points": len(_d),
-                                         "RMSE": fit_residual(_r.time, _pred, _d["time"].values, _d["value"].values, _spec.get("log", False))})
+                        for _ok in _sel_obs:
+                            _sp = OBSERVABLES.get(_ok, {"log": True, "link": None, "label": _ok})
+                            _umo = (_ok == "od" and _debris_on)
+                            _pred = predicted_observable(_r, _ok, _link_vals.get(_ok), use_model_od=_umo)
+                            _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _ok)].sort_values("time")
+                            if not len(_d):
+                                continue  # this arm carries no data for this observable
+                            _has_band = _band is not None and _d["lo"].notna().any()
+                            _pan = _panels.setdefault(_ok, {"obs": _ok, "label": _sp.get("label", _ok),
+                                                            "log": bool(_sp.get("log")), "series": []})
+                            _pan["series"].append({
+                                "label": _arm,
+                                "time": np.asarray(_r.time),
+                                "pred": np.asarray(_pred),
+                                "obs_time": _d["time"].to_numpy(),
+                                "obs_value": _d["value"].to_numpy(),
+                                "obs_lo": _d["lo"].to_numpy() if _has_band else None,
+                                "obs_hi": _d["hi"].to_numpy() if _has_band else None,
+                                "is_raw": _stat_key == "raw",
+                            })
+                            _metrics.append({"observable": _sp.get("label", _ok), "group": _arm, "MOI": _moi,
+                                             "n_points": len(_d),
+                                             "RMSE": fit_residual(_r.time, _pred, _d["time"].values,
+                                                                  _d["value"].values, _sp.get("log", False))})
+
+                    # Per-observable pooled RMSE + R² (model interpolated onto obs times;
+                    # log10 space for logged observables), plus a combined objective =
+                    # equal-weight mean of the per-observable RMSEs.
+                    _panel_list, _rmses = [], []
+                    for _ok, _pan in _panels.items():
+                        _oa, _pa = [], []
+                        for _s in _pan["series"]:
+                            _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
+                            _ov = np.asarray(_s["obs_value"], dtype=float)
+                            if _pan["log"]:
+                                _pt = np.log10(np.maximum(_pt, 1e-30))
+                                _ov = np.log10(np.maximum(_ov, 1e-30))
+                            _oa.append(_ov)
+                            _pa.append(np.asarray(_pt, dtype=float))
+                        _oa = np.concatenate(_oa) if _oa else np.array([])
+                        _pa = np.concatenate(_pa) if _pa else np.array([])
+                        _msk = np.isfinite(_oa) & np.isfinite(_pa)
+                        _oa, _pa = _oa[_msk], _pa[_msk]
+                        _rmse = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
+                        _sst = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
+                        _pan["rmse"] = _rmse
+                        _pan["r2"] = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _sst) if _sst > 0 else float("nan")
+                        _pan["n"] = int(_oa.size)
+                        _panel_list.append(_pan)
+                        if np.isfinite(_rmse):
+                            _rmses.append(_rmse)
+
                     _stat_label = _stat if _stat_key != "raw" else "raw points"
                     st.session_state["calib_overlay_result"] = {
-                        "series": _series,
+                        "panels": _panel_list,
                         "metrics": _metrics,
-                        "log": bool(_spec.get("log")),
-                        "ylabel": _spec.get("label", _obs_key),
+                        "combined": float(np.mean(_rmses)) if _rmses else float("nan"),
                         "stat_label": _stat_label,
-                        "title": (f"Model (lines) vs observations ({_stat_label}"
+                        "title": (f"Model vs observations ({_stat_label}"
                                   + (f" + {_band_choice} band)" if _band else ")")),
                     }
                 except Exception as e:
@@ -398,7 +439,7 @@ def render():
 
             # Render the (persisted) overlay result if one exists.
             _ovr = st.session_state.get("calib_overlay_result")
-            if _ovr:
+            if _ovr and _ovr.get("panels"):
                 import plotly.graph_objects as go
                 _palette = ["#0d7a68", "#c1873a", "#5457a6", "#b5487f", "#3b6fb5",
                             "#2e8b57", "#a0522d", "#6a5acd"]
@@ -407,79 +448,59 @@ def render():
                     h = hexc.lstrip("#")
                     return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
 
-                _pfig = go.Figure()
-                for _i, _s in enumerate(_ovr["series"]):
-                    _color = _palette[_i % len(_palette)]
-                    _yp = np.maximum(_s["pred"], 1e-30) if _ovr["log"] else _s["pred"]
-                    # observed uncertainty band (aggregated series only)
-                    if (not _s["is_raw"]) and _s["obs_lo"] is not None:
-                        _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_hi"], mode="lines",
-                                                   line=dict(width=0), showlegend=False, hoverinfo="skip"))
-                        _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_lo"], mode="lines",
-                                                   line=dict(width=0), fill="tonexty",
-                                                   fillcolor=_rgba(_color, 0.15), showlegend=False, hoverinfo="skip"))
-                    # model line
-                    _pfig.add_trace(go.Scatter(x=_s["time"], y=_yp, mode="lines",
-                                               name=f"{_s['label']} (model)", line=dict(color=_color, width=2)))
-                    # observations
-                    _mk = dict(color=_color, size=5 if _s["is_raw"] else 7,
-                               opacity=0.45 if _s["is_raw"] else 1.0)
-                    if not _s["is_raw"]:
-                        _mk["line"] = dict(color="#16211f", width=0.4)
-                    _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_value"], mode="markers",
-                                               name=f"{_s['label']} (obs)", marker=_mk))
-                _pfig.update_layout(title=_ovr["title"], xaxis_title="Time (h)", yaxis_title=_ovr["ylabel"],
-                                    template="plotly_white", height=470, margin=dict(t=48, b=40),
-                                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, x=0))
-                apply_axis_plotly(_pfig, plot_axis_controls(
-                    "calib_overlay", default_y="Log" if _ovr["log"] else "Linear"))
-                st.plotly_chart(_pfig, width="stretch")
-
-                # Pooled fit-quality tiles (RMSE + R² across all series, model
-                # interpolated onto the observation times; log₁₀ space when the
-                # observable is logged).
-                _obs_all, _pred_all = [], []
-                for _s in _ovr["series"]:
-                    _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
-                    _ov = np.asarray(_s["obs_value"], dtype=float)
-                    if _ovr["log"]:
-                        _pt = np.log10(np.maximum(_pt, 1e-30))
-                        _ov = np.log10(np.maximum(_ov, 1e-30))
-                    _obs_all.append(_ov)
-                    _pred_all.append(np.asarray(_pt, dtype=float))
-                if _obs_all:
-                    _oa = np.concatenate(_obs_all)
-                    _pa = np.concatenate(_pred_all)
-                    _mask = np.isfinite(_oa) & np.isfinite(_pa)
-                    _oa, _pa = _oa[_mask], _pa[_mask]
-                    _rmse_agg = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
-                    _ss_tot = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
-                    _r2 = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _ss_tot) if _ss_tot > 0 else float("nan")
-                    _q1, _q2 = st.columns(2)
-                    _rmse_lbl = "RMSE (log₁₀)" if _ovr["log"] else "RMSE"
-                    _q1.markdown(
+                st.markdown(f"#### {_ovr['title']}")
+                _npan = len(_ovr["panels"])
+                # Combined objective (the single number to minimise; matches what
+                # pbisim-fit will jointly minimise) + one R²/RMSE chip per observable.
+                _cols = st.columns(1 + _npan)
+                _cval = _ovr.get("combined", float("nan"))
+                _cols[0].markdown(
+                    f"""<div class="metric-container">
+                        <div class="metric-label">Combined objective J</div>
+                        <div class="metric-value">{_cval:.3f}</div>
+                        <div class="metric-sub">equal-weight mean of per-observable RMSE</div>
+                    </div>""", unsafe_allow_html=True)
+                for _ci, _pan in enumerate(_ovr["panels"]):
+                    _cols[_ci + 1].markdown(
                         f"""<div class="metric-container">
-                            <div class="metric-label">{_rmse_lbl}</div>
-                            <div class="metric-value">{_rmse_agg:.3f}</div>
-                            <div class="metric-sub">across {_oa.size} points</div>
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
-                    _q2.markdown(
-                        f"""<div class="metric-container">
-                            <div class="metric-label">R²</div>
-                            <div class="metric-value">{_r2:.3f}</div>
-                            <div class="metric-sub">observed vs predicted</div>
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("<br>", unsafe_allow_html=True)
+                            <div class="metric-label">{_pan['label']} · R²</div>
+                            <div class="metric-value">{_pan['r2']:.3f}</div>
+                            <div class="metric-sub">RMSE{' (log₁₀)' if _pan['log'] else ''} {_pan['rmse']:.3f} · n={_pan['n']}</div>
+                        </div>""", unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
 
-                st.markdown("#### Fit quality (RMSE" + (" on log₁₀" if _ovr["log"] else "") +
-                            f", vs {_ovr['stat_label']})")
+                # One panel per observable (small multiples — units differ).
+                for _pan in _ovr["panels"]:
+                    _pfig = go.Figure()
+                    for _i, _s in enumerate(_pan["series"]):
+                        _color = _palette[_i % len(_palette)]
+                        _yp = np.maximum(_s["pred"], 1e-30) if _pan["log"] else _s["pred"]
+                        if (not _s["is_raw"]) and _s["obs_lo"] is not None:
+                            _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_hi"], mode="lines",
+                                                       line=dict(width=0), showlegend=False, hoverinfo="skip"))
+                            _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_lo"], mode="lines",
+                                                       line=dict(width=0), fill="tonexty",
+                                                       fillcolor=_rgba(_color, 0.15), showlegend=False, hoverinfo="skip"))
+                        _pfig.add_trace(go.Scatter(x=_s["time"], y=_yp, mode="lines",
+                                                   name=f"{_s['label']} (model)", line=dict(color=_color, width=2)))
+                        _mk = dict(color=_color, size=5 if _s["is_raw"] else 7,
+                                   opacity=0.45 if _s["is_raw"] else 1.0)
+                        if not _s["is_raw"]:
+                            _mk["line"] = dict(color="#16211f", width=0.4)
+                        _pfig.add_trace(go.Scatter(x=_s["obs_time"], y=_s["obs_value"], mode="markers",
+                                                   name=f"{_s['label']} (obs)", marker=_mk))
+                    _pfig.update_layout(title=_pan["label"], xaxis_title="Time (h)", yaxis_title=_pan["label"],
+                                        template="plotly_white", height=380, margin=dict(t=44, b=40),
+                                        legend=dict(orientation="h", yanchor="bottom", y=-0.32, x=0))
+                    apply_axis_plotly(_pfig, plot_axis_controls(
+                        f"calib_ovl_{_pan['obs']}", default_y="Log" if _pan["log"] else "Linear"))
+                    st.plotly_chart(_pfig, width="stretch")
+
+                st.markdown(f"#### Fit quality per group × observable (vs {_ovr['stat_label']})")
                 st.dataframe(pd.DataFrame(_ovr["metrics"]), width="stretch", hide_index=True)
-                st.caption("Edit the parameter values above and re-overlay to improve the fit. "
-                           "Edits update the live model directly and can be saved as Parts in the Library.")
+                st.caption("Edit the parameter values above and re-overlay to improve the fit "
+                           "(minimise the combined objective). Edits update the live model directly "
+                           "and can be saved as Parts in the Library.")
 
         # ── 6. Save the calibrated model ─────────────────────────────────────
         if _ds:

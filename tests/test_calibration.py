@@ -137,3 +137,38 @@ def test_globals_and_debris_and_save_scenario():
     [b for b in at.button if b.key == "fit_save_scenario"][0].click().run()
     assert "calib_test" in at.session_state["user_scenarios"]
     assert len(at.exception) == 0
+
+
+def _multi_observable_dataset():
+    """A long-format dataset with TWO observables (CFU + OD) per arm — a single
+    'observable' column, as pbisim-fit expects for joint multi-dataset fitting."""
+    rows = []
+    for phage in ("MXP1", "MXP2"):
+        for t in (0.0, 2.0, 4.0):
+            rows.append({"PHAGE": phage, "MOI": 1.0, "TIME": t, "OBS": "cfu", "DV": 1e7 / (t + 1)})
+            rows.append({"PHAGE": phage, "MOI": 1.0, "TIME": t, "OBS": "od", "DV": 0.05 * (t + 1)})
+    return pd.DataFrame(rows)
+
+
+def test_multi_observable_overlay_small_multiples():
+    """A CFU+OD dataset produces one overlay panel per observable, per-observable
+    RMSE/R², and a combined objective — all from one simulation per arm."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _multi_observable_dataset(), "time": "TIME", "value": "DV",
+        "observable": "OBS", "arm_cols": ["PHAGE"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    ovr = at.session_state["calib_overlay_result"]
+    obs = {p["obs"] for p in ovr["panels"]}
+    assert obs == {"cfu", "od"}, obs                 # one panel per observable
+    assert np.isfinite(ovr["combined"])              # combined objective computed
+    blob = " ".join(m.value for m in at.markdown)
+    assert "Combined objective J" in blob
+    # the observables multiselect defaulted to both present observables
+    ms = [m for m in at.multiselect if m.key == "fit_obs_sel"][0]
+    assert set(ms.value) == {"cfu", "od"}
