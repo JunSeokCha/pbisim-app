@@ -179,3 +179,142 @@ def apply_mpl_theme():
     for _k in ("xtick.labelcolor", "ytick.labelcolor"):
         if _k in _mpl.rcParams:
             _mpl.rcParams[_k] = "#66756f"
+
+
+# ── Plottable-series registry + selector (approach A: per-category checkboxes) ──
+# A single source of truth for "what can be plotted" from a SimulationResult, so
+# every module offers the same entity choices and adding an engine state surfaces
+# it automatically. Derived from result.state_names + named aggregates.
+import numpy as _np
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class Series:
+    key: str                # stable id, unique within a result
+    label: str              # human-readable legend label
+    category: str           # Bacteria | Phage | Immune | Nutrient | Antibiotic | OD
+    getter: object          # callable(result) -> 1D array
+    default: bool = False    # on by default (defaults reproduce the pre-registry view)
+    log: bool = True         # density-like (floored for a log axis)
+    dash: str = "solid"      # solid | dash | dot | dashdot
+    width: float = 2.0
+    color: str = None
+
+
+def _sum_states(result, keys):
+    """Sum a set of named states, skipping any that don't exist. Zeros if none."""
+    tot = None
+    for k in keys:
+        try:
+            v = _np.asarray(result.get(k), dtype=float)
+        except Exception:
+            continue
+        tot = v if tot is None else tot + v
+    return tot if tot is not None else _np.zeros_like(result.time, dtype=float)
+
+
+def build_series(result, *, config, strains, phages, antibiotics, builder_mode):
+    """Enumerate the plottable series for a result, grouped by category.
+
+    Defaults reproduce the previous fixed view (Total viable + per-strain active +
+    per-strain dormant; per-phage free + blood), so nothing regresses; the extra
+    compartments (infected I, hibernating H, total free phage) are opt-in.
+    """
+    n_latent = getattr(config, "n_latent", 1)
+    n_depth = getattr(config, "n_depth", 1)
+    n_phages = getattr(config, "n_phages", 0)
+    out = []
+
+    # ── Bacteria ──
+    out.append(Series("total_viable", "Total viable", "Bacteria",
+                      lambda r: r.sum_prefixes("B", "D", "I", "H"),
+                      default=True, log=True, dash="solid", width=3.0, color="#16211f"))
+
+    if builder_mode == "Binary Genotypes (BRG)":
+        import itertools
+        combs = list(itertools.product([0, 1], repeat=len(phages) + len(antibiotics)))
+        for j, comb in enumerate(combs):
+            if len(antibiotics) == 0:
+                lbl = "".join(map(str, comb))
+            else:
+                p_lbl = "".join(map(str, comb[:len(phages)])) if len(phages) > 0 else ""
+                a_lbl = "".join(map(str, comb[len(phages):]))
+                lbl = f"phi{p_lbl}_abx{a_lbl}" if len(phages) > 0 else f"abx{a_lbl}"
+            out.append(Series(f"B{j}", lbl, "Bacteria",
+                              (lambda r, j=j: r.get(f"B{j}")),
+                              default=True, log=True, dash="dash"))
+    else:
+        for j in range(len(strains)):
+            name = strains[j].get("name", f"Strain {j}")
+            out.append(Series(f"B{j}", f"{name} (active)", "Bacteria",
+                              (lambda r, j=j: r.get(f"B{j}")),
+                              default=True, log=True, dash="dash"))
+            if strains[j].get("dormancy_enabled", False):
+                d_keys = [f"D{q}_{j}" for q in range(n_depth)]
+                out.append(Series(f"D_{j}", f"{name} (dormant)", "Bacteria",
+                                  (lambda r, ks=d_keys: _sum_states(r, ks)),
+                                  default=True, log=True, dash="dot"))
+                if n_phages > 0:
+                    h_keys = [f"H{q}_{l}_{j}_{m}" for q in range(n_depth)
+                              for l in range(n_latent) for m in range(n_phages)]
+                    out.append(Series(f"H_{j}", f"{name} (hibernating)", "Bacteria",
+                                      (lambda r, ks=h_keys: _sum_states(r, ks)),
+                                      default=False, log=True, dash="dashdot"))
+            if n_phages > 0:
+                i_keys = [f"I{l}_{j}_{m}" for l in range(n_latent) for m in range(n_phages)]
+                out.append(Series(f"I_{j}", f"{name} (infected)", "Bacteria",
+                                  (lambda r, ks=i_keys: _sum_states(r, ks)),
+                                  default=False, log=True, dash="dashdot"))
+
+    # ── Phage ──
+    if n_phages > 0:
+        out.append(Series("P_total", "Total free phage", "Phage",
+                          lambda r: r.sum_prefixes("P"),
+                          default=False, log=True, dash="solid", width=1.5, color="#8a9591"))
+        for j in range(len(phages)):
+            name = phages[j].get("name", f"Phage {j}")
+            out.append(Series(f"P{j}", f"{name} (infection site)", "Phage",
+                              (lambda r, j=j: r.get(f"P{j}")), default=True, log=True))
+            if phages[j].get("pk_mode", "None") != "None":
+                Vc = phages[j].get("Vc", 5000.0)
+                out.append(Series(f"Pc{j}", f"{name} (blood)", "Phage",
+                                  (lambda r, j=j, Vc=Vc: r.get(f"Pc{j}") / Vc),
+                                  default=True, log=True, dash="dash"))
+    return out
+
+
+def series_selector(key_prefix, series, *, ncol=3):
+    """Category checkbox picker (keyed → state persists across reruns). Returns the
+    chosen Series list. Renders nothing/[] for an empty category."""
+    if not series:
+        return []
+    chosen = []
+    cols = st.columns(min(ncol, len(series)))
+    for i, s in enumerate(series):
+        on = cols[i % len(cols)].checkbox(s.label, value=s.default, key=f"{key_prefix}_{s.key}")
+        if on:
+            chosen.append(s)
+    return chosen
+
+
+def plot_series(result, chosen, opts, *, title, y_label, height=440):
+    """Build a single-axis Plotly figure from the chosen Series and apply the axis
+    controls. All series in one call share a unit (one tab = one unit family)."""
+    import plotly.graph_objects as go
+    t = result.time
+    floor = opts.get("y_scale") == "Log"
+    fig = go.Figure()
+    for s in chosen:
+        y = _np.asarray(s.getter(result), dtype=float)
+        if floor and s.log:
+            y = _np.maximum(y, 1.0)
+        line = dict(width=s.width, dash=s.dash)
+        if s.color:
+            line["color"] = s.color
+        fig.add_trace(go.Scatter(x=t, y=y, mode="lines", name=s.label, line=line))
+    fig.update_layout(title=title, xaxis_title="Time (hours)", yaxis_title=y_label,
+                      template="plotly_white", height=height, margin=dict(t=48, b=40),
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.28, x=0))
+    apply_axis_plotly(fig, opts)
+    return fig

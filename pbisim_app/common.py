@@ -36,7 +36,10 @@ from pbisim.pk.antibiotic import AntibioticDefinition, AntibioticSensitivity
 from pbisim.trial.clinical import TreatmentArm
 from pbisim_app.agent import SimulationAgent
 from pbisim_app.executor import execute_code
-from pbisim_app.viz_helper import plot_axis_controls, apply_axis_plotly
+from pbisim_app.viz_helper import (
+    plot_axis_controls, apply_axis_plotly,
+    build_series, series_selector, plot_series,
+)
 from pbisim_app.fit_helper import (
     OBSERVABLES,
     predicted_observable,
@@ -2272,6 +2275,9 @@ __all__ = [
     'execute_code',
     'plot_axis_controls',
     'apply_axis_plotly',
+    'build_series',
+    'series_selector',
+    'plot_series',
     'OBSERVABLES',
     'predicted_observable',
     'normalize_fit_dataframe',

@@ -83,3 +83,42 @@ def test_viz_helper_apply_functions():
     apply_axis_plotly(f2, {"x_scale": "Linear", "y_scale": "Log",
                            "xlim": (None, None), "ylim": (0.0, 1e4)})
     assert f2.layout.yaxis.range is None
+
+
+def test_entity_series_selector_renders():
+    """After a run, the Bacterial tab offers per-compartment series checkboxes
+    (registry-driven), with the defaults reproducing the previous view."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    labels = [c.label for c in at.checkbox]
+    # the aggregate + per-strain active series are offered and on by default
+    assert "Total viable" in labels, labels
+    assert any("(active)" in (l or "") for l in labels), labels
+    tv = [c for c in at.checkbox if c.label == "Total viable"][0]
+    assert tv.value is True
+
+
+def test_build_series_registry():
+    """build_series enumerates compartments with sane defaults (active/dormant on,
+    infected/hibernating off) and every getter returns a finite trajectory."""
+    import numpy as np
+    from pbisim import ModelBuilder, PBIModel, solve_ode
+    from pbisim_app.viz_helper import build_series
+    b = (ModelBuilder(n_bacteria=2, n_phages=1, n_latent=2, n_depth=2)
+         .with_growth_rates([1.2, 1.1])
+         .with_dormancy(dormancy_rate=np.array([0.1, 0.1]),
+                        resuscitation_rate=np.array([0.05, 0.05]),
+                        dormancy_diffusion_rate=np.array([0.02, 0.02])))
+    cfg = b.build()
+    r = solve_ode(PBIModel(cfg, initial_B=np.array([1e7, 10.0]),
+                           initial_P=np.array([1e6]), initial_S=1.0), t_end=5, dt=1.0)
+    strains = [{"name": "WT", "dormancy_enabled": True}, {"name": "Mut", "dormancy_enabled": True}]
+    S = build_series(r, config=cfg, strains=strains, phages=[{"name": "P0", "pk_mode": "None"}],
+                     antibiotics=[], builder_mode="Direct (ModelBuilder)")
+    by_key = {s.key: s for s in S}
+    assert by_key["total_viable"].default and by_key["B0"].default and by_key["D_0"].default
+    assert not by_key["I_0"].default and not by_key["H_0"].default
+    for s in S:
+        assert np.isfinite(np.asarray(s.getter(r), dtype=float)).all()

@@ -1522,56 +1522,34 @@ def render():
                               legend=dict(orientation="h", yanchor="bottom", y=-0.28, x=0))
             return fig
 
-        # Bacterial Dynamics Plot
-        with plot_tabs[0]:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=t, y=np.maximum(total_bacteria, 1.0), mode="lines",
-                                     name="Total Viable", line=dict(color="#16211f", width=3)))
-            if builder_mode == "Binary Genotypes (BRG)":
-                import itertools
-                combs = list(itertools.product([0, 1], repeat=len(phages) + len(antibiotics)))
-                labels = []
-                for comb in combs:
-                    if len(antibiotics) == 0:
-                        lbl = "".join(map(str, comb))
-                    else:
-                        p_lbl = "".join(map(str, comb[:len(phages)])) if len(phages) > 0 else ""
-                        a_lbl = "".join(map(str, comb[len(phages):]))
-                        lbl = f"phi{p_lbl}_abx{a_lbl}" if len(phages) > 0 else f"abx{a_lbl}"
-                    labels.append(lbl)
-                for j in range(len(labels)):
-                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"B{j}"), 1.0),
-                                             mode="lines", name=labels[j], line=dict(dash="dash")))
-            else:
-                for j in range(len(strains)):
-                    name = strains[j]["name"]
-                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"B{j}"), 1.0),
-                                             mode="lines", name=f"{name} (Active)", line=dict(dash="dash")))
-                    if strains[j].get("dormancy_enabled", False):
-                        D_total = np.zeros_like(t)
-                        for q in range(strains[j].get("dormancy_depth", 1)):
-                            D_total += result.get(f"D{q}_{j}")
-                        fig.add_trace(go.Scatter(x=t, y=np.maximum(D_total, 1.0),
-                                                 mode="lines", name=f"{name} (Dormant)", line=dict(dash="dot")))
-            _sim_layout(fig, "Bacterial Population Trajectories", "Density (cells/mL)")
-            apply_axis_plotly(fig, plot_axis_controls("sim_bact", default_y="Log"))
-            st.plotly_chart(fig, width="stretch")
+        # Plottable-series registry (single source of truth for entity choices).
+        _series = build_series(result, config=config, strains=strains, phages=phages,
+                               antibiotics=antibiotics, builder_mode=builder_mode)
 
-        # Phage Dynamics Plot
-        with plot_tabs[1]:
-            if len(phages) > 0:
-                fig = go.Figure()
-                for j in range(len(phages)):
-                    name = phages[j]["name"]
-                    fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"P{j}"), 1.0),
-                                             mode="lines", name=f"{name} (Infection Site)"))
-                    if phages[j]["pk_mode"] != "None":
-                        Vc = phages[j].get("Vc", 5000.0)
-                        fig.add_trace(go.Scatter(x=t, y=np.maximum(result.get(f"Pc{j}") / Vc, 1.0),
-                                                 mode="lines", name=f"{name} (Blood Conc)", line=dict(dash="dash")))
-                _sim_layout(fig, "Phage Population Trajectories", "Density (phages/mL)")
-                apply_axis_plotly(fig, plot_axis_controls("sim_phage", default_y="Log"))
+        # Bacterial Dynamics Plot — pick which compartments to show.
+        with plot_tabs[0]:
+            _bact = [s for s in _series if s.category == "Bacteria"]
+            st.caption("Series to plot:")
+            _chosen = series_selector("sim_bact_sel", _bact)
+            if _chosen:
+                fig = plot_series(result, _chosen, plot_axis_controls("sim_bact", default_y="Log"),
+                                  title="Bacterial Population Trajectories", y_label="Density (cells/mL)")
                 st.plotly_chart(fig, width="stretch")
+            else:
+                st.info("Select at least one series to plot.")
+
+        # Phage Dynamics Plot — pick which phage series to show.
+        with plot_tabs[1]:
+            _phg = [s for s in _series if s.category == "Phage"]
+            if _phg:
+                st.caption("Series to plot:")
+                _chosen = series_selector("sim_phage_sel", _phg)
+                if _chosen:
+                    fig = plot_series(result, _chosen, plot_axis_controls("sim_phage", default_y="Log"),
+                                      title="Phage Population Trajectories", y_label="Density (phages/mL)")
+                    st.plotly_chart(fig, width="stretch")
+                else:
+                    st.info("Select at least one series to plot.")
             else:
                 st.info("No phages were configured in this simulation.")
 
