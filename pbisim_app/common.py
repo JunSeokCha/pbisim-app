@@ -2038,19 +2038,26 @@ def _repro_solve_kwargs():
 
 
 def _repro_prerun_lines(indent, t_prerun):
-    """Emit the per-run pre-run block (carry B/D/S/Imm) at the given indent, or []."""
-    if not t_prerun:
-        return []
+    """Emit the per-run pre-run block (carry B/D/S/Imm) at the given indent.
+
+    Pops a sweep's ``_t_prerun_override`` (set by apply_sweep_parameter when the
+    pre-run duration is the swept parameter) so the swept value is used AND the key
+    never reaches PBIModel; falls back to the fixed base duration otherwise. Returns
+    [] only when there is neither a base pre-run nor any chance of a swept one."""
     p = indent
+    base = float(t_prerun or 0.0)
     lines = [
-        f"{p}ic = stationary_phase_ic(c_k, t_prerun={t_prerun}, B0=ib_k)",
-        f"{p}ib_k, is_k = ic.B, max(float(ic.S), 0.0)",
-        f"{p}if ic.D is not None: mk_k['initial_D'] = ic.D",
-        f"{p}if ic.Imm is not None: mk_k['initial_Imm'] = ic.Imm",
+        f"{p}_tp = mk_k.pop('_t_prerun_override', None)",
+        f"{p}_tp = {base} if _tp is None else _tp",
+        f"{p}if _tp and _tp > 0:",
+        f"{p}    ic = stationary_phase_ic(c_k, t_prerun=_tp, B0=ib_k)",
+        f"{p}    ib_k, is_k = ic.B, max(float(ic.S), 0.0)",
+        f"{p}    if ic.D is not None: mk_k['initial_D'] = ic.D",
+        f"{p}    if ic.Imm is not None: mk_k['initial_Imm'] = ic.Imm",
     ]
     if (st.session_state.get("int_prerun_inherit_debris", True)
             and st.session_state.get("int_debris_enabled", False)):
-        lines.append(f"{p}if ic.Debris is not None: mk_k['initial_Debris'] = ic.Debris")
+        lines.append(f"{p}    if ic.Debris is not None: mk_k['initial_Debris'] = ic.Debris")
     return lines
 
 

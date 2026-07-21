@@ -34,13 +34,24 @@ def test_run_button_is_primary():
 
 
 def test_plot_axis_controls_render_after_run():
-    """The 'Plot options' axis controls appear once results exist."""
+    """The 'Plot options' axis-control toggle appears once results exist."""
     at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
-    labels = [e.label for e in at.expander]
+    labels = [c.label for c in at.checkbox]
     assert any("Plot options" in (l or "") for l in labels), labels
+
+
+def test_axis_limit_pair_parsing():
+    """The 'min, max' box parses full and partial ranges; a lone value autoscales."""
+    from pbisim_app.viz_helper import _pair
+    assert _pair("1, 1e9") == (1.0, 1e9)
+    assert _pair("0,48") == (0.0, 48.0)
+    assert _pair("1,") == (1.0, None)          # partial (mpl autoscales the top)
+    assert _pair(", 1e9") == (None, 1e9)
+    assert _pair("") == (None, None)
+    assert _pair("5") == (None, None)          # ambiguous single value -> ignore
 
 
 def test_viz_helper_apply_functions():

@@ -14,54 +14,62 @@ pure (no Streamlit) so they can be unit-tested. Blank limit = autoscale.
 from __future__ import annotations
 
 import math
+import re
 
 import streamlit as st
 
 SCALES = ["Linear", "Log"]
 
 
-def _num(v):
-    """Parse a limit text box: blank/invalid -> None (autoscale)."""
-    v = (v or "").strip()
-    if not v:
-        return None
-    try:
-        return float(v)
-    except ValueError:
-        return None
+def _pair(text):
+    """Parse a 'min, max' axis-range box into a (lo, hi) tuple.
+
+    Comma- or space-separated; either side may be blank for autoscale on that
+    side. A single value (ambiguous — min or max?) or unparseable text autoscales
+    both. So '1, 1e9' -> (1.0, 1e9); '1,' -> (1.0, None); ', 1e9' -> (None, 1e9);
+    '' -> (None, None).
+    """
+    text = (text or "").strip()
+    if not text:
+        return (None, None)
+    parts = re.split(r"[,\s]+", text)
+    if len(parts) < 2:
+        return (None, None)  # single value is ambiguous — ignore
+
+    def _num(s):
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return None
+
+    return (_num(parts[0]), _num(parts[1]))
 
 
 def plot_axis_controls(key_prefix, *, default_x="Linear", default_y="Log",
-                       label="Plot options", expanded=False):
-    """Render the axis-control expander and return an options dict.
+                       label="Plot options"):
+    """Compact axis controls (scale + limits) for a plot, returned as an options
+    dict for apply_axis_mpl/apply_axis_plotly.
 
-    Note: these are view preferences rendered per page; like other Streamlit
-    widgets they reset to defaults if you navigate away and back.
+    Rendered behind a *keyed* checkbox rather than an expander: a keyed widget's
+    state persists across reruns, so typing a limit and pressing Enter no longer
+    collapses the panel. Limits are one 'min, max' field per axis (both together)
+    rather than four separate boxes.
     """
-    with st.expander(label, expanded=expanded):
-        c1, c2 = st.columns(2)
-        with c1:
-            x_scale = st.selectbox("X axis", SCALES, index=SCALES.index(default_x),
-                                   key=f"{key_prefix}_xs")
-        with c2:
-            y_scale = st.selectbox("Y axis", SCALES, index=SCALES.index(default_y),
-                                   key=f"{key_prefix}_ys")
-        st.caption("Axis limits — leave blank to autoscale.")
-        c3, c4, c5, c6 = st.columns(4)
-        with c3:
-            xmin = st.text_input("X min", key=f"{key_prefix}_xmin")
-        with c4:
-            xmax = st.text_input("X max", key=f"{key_prefix}_xmax")
-        with c5:
-            ymin = st.text_input("Y min", key=f"{key_prefix}_ymin")
-        with c6:
-            ymax = st.text_input("Y max", key=f"{key_prefix}_ymax")
-    return {
-        "x_scale": x_scale,
-        "y_scale": y_scale,
-        "xlim": (_num(xmin), _num(xmax)),
-        "ylim": (_num(ymin), _num(ymax)),
-    }
+    defaults = {"x_scale": default_x, "y_scale": default_y,
+                "xlim": (None, None), "ylim": (None, None)}
+    if not st.checkbox(label, key=f"{key_prefix}_show"):
+        return defaults
+    c1, c2 = st.columns(2)
+    x_scale = c1.selectbox("X axis", SCALES, index=SCALES.index(default_x),
+                           key=f"{key_prefix}_xs")
+    y_scale = c2.selectbox("Y axis", SCALES, index=SCALES.index(default_y),
+                           key=f"{key_prefix}_ys")
+    c3, c4 = st.columns(2)
+    xr = c3.text_input("X limits (min, max)", key=f"{key_prefix}_xr",
+                       placeholder="auto — e.g. 0, 48")
+    yr = c4.text_input("Y limits (min, max)", key=f"{key_prefix}_yr",
+                       placeholder="auto — e.g. 1, 1e9")
+    return {"x_scale": x_scale, "y_scale": y_scale, "xlim": _pair(xr), "ylim": _pair(yr)}
 
 
 def apply_axis_mpl(ax, opts):

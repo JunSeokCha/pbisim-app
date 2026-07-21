@@ -61,6 +61,14 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         "type": "scalar",
         "field": "imm_stim50",
     }
+    # Pre-run duration is an app-level step (stationary_phase_ic before treatment),
+    # NOT a ModelConfig field — apply_sweep_parameter stashes the swept value and the
+    # sweep loop runs the pre-run per point (still honouring the debris-inheritance
+    # choice, since each duration accumulates a different amount of debris).
+    params["Pre-run duration (hours)"] = {
+        "type": "prerun",
+        "default": 24.0,
+    }
     # Dormancy sensing thresholds (None → inherit growth Ks / K; give a numeric
     # `default` so the 1D UI has a sensible nominal even when the field is None).
     params["Dormancy Nutrient Half-saturation (Ks_dorm)"] = {
@@ -397,6 +405,12 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
 
     elif param_type == "initial_S":
         initial_S = val
+
+    elif param_type == "prerun":
+        # Not a ModelConfig field — the app applies the pre-run (stationary_phase_ic)
+        # before the treatment solve. Stash the swept duration for the sweep loop to
+        # pick up (it pops "_t_prerun_override" before building the PBIModel).
+        model_kwargs["_t_prerun_override"] = float(val)
 
     return config, initial_B, initial_P, initial_S, model_kwargs
 

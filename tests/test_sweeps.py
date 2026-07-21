@@ -389,3 +389,23 @@ def test_get_od_raises_without_debris_module():
     r = solve_ode(m, t_end=5.0, dt=1.0)
     with pytest.raises(Exception):
         r.get_od()
+
+
+def test_prerun_duration_is_sweepable():
+    """The pre-run duration can be swept as a 1D parameter (0 h = no pre-run);
+    each point runs stationary_phase_ic with that duration."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    at.session_state["p1_sweep_label"] = "Pre-run duration (hours)"
+    at.run()
+    at.session_state["ps_1d_min"] = 0.0
+    at.session_state["ps_1d_max"] = 24.0
+    at.session_state["ps_1d_steps"] = 3
+    at.session_state["ps_1d_spacing"] = "Linear"
+    at.run()
+    [b for b in at.button if "Run 1D Sweep" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    res = at.session_state["param_sweep_result"]
+    assert res and len(res["trajectories"]) == 3

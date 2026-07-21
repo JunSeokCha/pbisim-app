@@ -80,6 +80,8 @@ def render():
                 default_val = initial_P[meta1["index"]]
             elif meta1["type"] == "initial_S":
                 default_val = initial_S
+            elif meta1["type"] == "prerun":
+                default_val = st.session_state.get("int_t_prerun", 0.0) or meta1.get("default", 24.0)
 
             st.caption(f"Nominal Value: `{default_val:.2e}`" if isinstance(default_val, (int, float)) else f"Nominal Value: `{default_val}`")
             
@@ -190,7 +192,9 @@ def render():
 
                     # equilibrate pre-treatment prerun — carry the full stationary
                     # state (B, D, S, Imm), not just B/S (see run_sim_from_gui_params).
-                    t_prerun = st.session_state.get("int_t_prerun", 0.0)
+                    t_prerun = mk_k.pop("_t_prerun_override", None)
+                    if t_prerun is None:
+                        t_prerun = st.session_state.get("int_t_prerun", 0.0)
                     if t_prerun > 0:
                         ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
                         ib_k = ic.B
@@ -269,7 +273,9 @@ def render():
                     for lbl in labels:
                         c_k, ib_k, ip_k, is_k, mk_k = apply_sweep_parameter(
                             series[lbl][k], sweep_params[lbl], c_k, ib_k, ip_k, is_k, mk_k)
-                    t_prerun = st.session_state.get("int_t_prerun", 0.0)
+                    t_prerun = mk_k.pop("_t_prerun_override", None)
+                    if t_prerun is None:
+                        t_prerun = st.session_state.get("int_t_prerun", 0.0)
                     if t_prerun > 0:
                         ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
                         ib_k = ic.B
@@ -347,7 +353,9 @@ def render():
                         )
 
                         # equilibrate — carry the full stationary state (B, D, S, Imm).
-                        t_prerun = st.session_state.get("int_t_prerun", 0.0)
+                        t_prerun = mk_k.pop("_t_prerun_override", None)
+                        if t_prerun is None:
+                            t_prerun = st.session_state.get("int_t_prerun", 0.0)
                         if t_prerun > 0:
                             ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
                             ib_k = ic.B
