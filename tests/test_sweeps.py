@@ -406,6 +406,8 @@ def test_prerun_duration_is_sweepable():
     at.run()
     at.session_state["current_page_radio"] = "Parameter Sweeps"
     at.run()
+    at.session_state["p1_cat"] = "Structure & pre-run"      # parameters are category-grouped
+    at.run()
     at.session_state["p1_sweep_label"] = "Pre-run duration (hours)"
     at.run()
     at.session_state["ps_1d_min"] = 0.0
@@ -437,3 +439,28 @@ def test_sweep_exposes_mutation_and_pseudolysogeny():
     c, *_ = apply_sweep_parameter(1e-6, p[mk], cfg, np.array([1e7, 10.0]), np.array([1e6]), 1.0, {})
     assert c.mutation_rates[1, 0] == 1e-6           # WT(0) → Mut(1) rate set
     assert np.allclose(c.mutation_rates.sum(axis=0), 0.0), "mutation not mass-conserving"
+
+
+def test_sweep_all_broadcast_and_categorization():
+    """Matrix params gain an '(ALL strains × phages)' broadcast (sets the whole
+    matrix), and every sweep parameter is grouped into a builder-style category."""
+    import numpy as np
+    from pbisim import ModelBuilder
+    from pbisim_app.sweep_helper import (
+        get_sweep_parameters, apply_sweep_parameter, categorize_sweep_params, sweep_category,
+    )
+    cfg = ModelBuilder(n_bacteria=2, n_phages=2).with_growth_rates([1.2, 1.1]).build()
+    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}, {"name": "Mut"}],
+                             phages=[{"name": "P0"}, {"name": "P1"}])
+    assert "Adsorption (ALL strains × phages)" in p
+    mk = "Adsorption (ALL strains × phages)"
+    c, *_ = apply_sweep_parameter(3e-8, p[mk], cfg, np.array([1e7, 10.0]), np.array([1e6, 1e6]), 1.0, {})
+    assert np.allclose(c.adsorption_rates, 3e-8)   # whole matrix set
+
+    cats = categorize_sweep_params(p)
+    assert set(cats) <= {"Bacterial", "Phage", "Immune", "Nutrient & environment",
+                         "Antibiotic", "OD & debris", "Initial conditions", "Structure & pre-run", "Other"}
+    # every parameter lands in exactly one category
+    assert sum(len(v) for v in cats.values()) == len(p)
+    assert sweep_category("Adsorption (ALL strains × phages)", p[mk]) == "Phage"
+    assert sweep_category("Growth Rate - WT", {"type": "array1d", "field": "growth_rates"}) == "Bacterial"

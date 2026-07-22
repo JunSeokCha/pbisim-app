@@ -335,8 +335,83 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             params[label] = {"type": typ, "field": field}
     if config.n_phages > 1:
         params["Phage Decay Rate (ALL phages)"] = {"type": "array1d_broadcast", "field": "phage_decay_rates"}
+        if getattr(config, "phage_decay_Km", None) is not None:
+            params["Phage Decay Km (ALL phages)"] = {"type": "array1d_broadcast", "field": "phage_decay_Km"}
+
+    # Strain × phage matrix params — one value across every strain AND phage.
+    if config.n_phages >= 1 and config.n_bacteria * config.n_phages > 1:
+        for label, field in [
+            ("Adsorption (ALL strains × phages)", "adsorption_rates"),
+            ("Dormant Adsorption (ALL strains × phages)", "adsorption_rates_dormant"),
+            ("Burst Size (ALL strains × phages)", "burst_sizes"),
+            ("Latent Period (ALL strains × phages)", "latent_periods"),
+            ("Dormant Latent Period (ALL strains × phages)", "latent_periods_dormant"),
+            ("Dormant Adsorption Attenuation (ALL strains × phages)", "attenuation_rate"),
+        ]:
+            params[label] = {"type": "array2d_broadcast", "field": field}
+        for field, lbl in [("hibernation_rate", "Hibernation Rate (I→H)"),
+                           ("lytic_resumption_rate", "Lytic Resumption Rate (H→I)")]:
+            if getattr(config, field, None) is not None:
+                params[f"{lbl} (ALL strains × phages)"] = {"type": "array2d_broadcast", "field": field}
+
+    # Antibiotic PD matrix params — one value across every strain × antibiotic.
+    if config.n_antibiotics > 0 and config.pd_config is not None \
+            and config.n_bacteria * config.n_antibiotics > 1:
+        for label, field in [
+            ("Emax (ALL strains × abx)", "abx_emax"),
+            ("EC50 (ALL strains × abx)", "abx_ec50"),
+            ("Hill (ALL strains × abx)", "abx_hill"),
+        ]:
+            params[label] = {"type": "pd_array2d_broadcast", "field": field}
 
     return params
+
+
+_SWEEP_CATEGORY_ORDER = [
+    "Bacterial", "Phage", "Immune", "Nutrient & environment",
+    "Antibiotic", "OD & debris", "Initial conditions", "Structure & pre-run", "Other",
+]
+
+
+def sweep_category(label: str, meta: dict) -> str:
+    """Assign a sweepable parameter to a builder-style category so the UI can group
+    them (mirrors the Interactive Simulator's parameter sections)."""
+    t = meta.get("type", "")
+    field = meta.get("field", "")
+    if t in ("initial_B", "initial_B_broadcast", "initial_P", "initial_S"):
+        return "Initial conditions"
+    if t in ("prerun", "dimension"):
+        return "Structure & pre-run"
+    if t == "mutation":
+        return "Bacterial"
+    if field.startswith("imm_") or "Immune" in label:
+        return "Immune"
+    if field in ("monod_constant", "carrying_capacity", "recycle_fraction", "s_in", "s_out",
+                 "monod_constant_lysis", "dormancy_monod_constant", "dormancy_carrying_capacity"):
+        return "Nutrient & environment"
+    if field in ("od_to_cfu_conversion_factor", "debris_kdis", "debris_u", "debris_v"):
+        return "OD & debris"
+    if field in ("growth_rates", "bacteria_to_resource_ratio", "dormancy_rate", "resuscitation_rate",
+                 "dormancy_diffusion_rate", "death_rate_B", "death_rate_D"):
+        return "Bacterial"
+    if field in ("phage_decay_rates", "phage_decay_Km", "adsorption_rates", "adsorption_rates_dormant",
+                 "burst_sizes", "latent_periods", "latent_periods_dormant", "attenuation_rate",
+                 "hibernation_rate", "lytic_resumption_rate"):
+        return "Phage"
+    if t in ("pk_array1d", "pd_array2d", "pd_array2d_broadcast") \
+            or field in ("k_elim", "Vc", "abx_emax", "abx_ec50", "abx_hill"):
+        return "Antibiotic"
+    return "Other"
+
+
+def categorize_sweep_params(params: dict) -> dict:
+    """Group sweep-param labels by category, in a stable category order; each
+    category's labels are sorted. Empty categories are dropped."""
+    from collections import OrderedDict
+    groups = OrderedDict((c, []) for c in _SWEEP_CATEGORY_ORDER)
+    for label, meta in params.items():
+        groups.setdefault(sweep_category(label, meta), []).append(label)
+    return OrderedDict((c, sorted(ls)) for c, ls in groups.items() if ls)
 
 
 def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, initial_S, model_kwargs) -> tuple:
@@ -413,6 +488,11 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
         arr[meta["index_row"], meta["index_col"]] = val
         setattr(config, meta["field"], arr)
 
+    elif param_type == "array2d_broadcast":
+        arr = np.copy(getattr(config, meta["field"]))
+        arr[:, :] = val   # same value for every strain × phage
+        setattr(config, meta["field"], arr)
+
     elif param_type == "pk_array1d":
         # pk_array1d always targets the antibiotic PKConfig, not PhagePKConfig.
         # Using phage_pk_config here when both are set would corrupt phage PK params.
@@ -426,6 +506,13 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
         pd_config = dataclasses.replace(config.pd_config)
         arr = np.copy(getattr(pd_config, meta["field"]))
         arr[meta["index_row"], meta["index_col"]] = val
+        setattr(pd_config, meta["field"], arr)
+        config = dataclasses.replace(config, pd_config=pd_config)
+
+    elif param_type == "pd_array2d_broadcast":
+        pd_config = dataclasses.replace(config.pd_config)
+        arr = np.copy(getattr(pd_config, meta["field"]))
+        arr[:, :] = val
         setattr(pd_config, meta["field"], arr)
         config = dataclasses.replace(config, pd_config=pd_config)
 

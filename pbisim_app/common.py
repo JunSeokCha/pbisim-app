@@ -67,6 +67,7 @@ from pbisim_app.sweep_helper import (
     apply_sweep_parameter,
     parse_comma_separated_series,
     pad_vectors,
+    categorize_sweep_params,
 )
 
 
@@ -2325,6 +2326,7 @@ __all__ = [
     'plot_pkpd_trajectories_plotly',
     'build_regimen_doses',
     'get_sweep_parameters',
+    'categorize_sweep_params',
     'apply_sweep_parameter',
     'parse_comma_separated_series',
     'pad_vectors',

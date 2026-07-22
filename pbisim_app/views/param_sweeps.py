@@ -32,6 +32,21 @@ def render():
 
     sweep_params = get_sweep_parameters(nominal_config, strains_gui, phages_gui, antibiotics_gui)
     param_labels = sorted(list(sweep_params.keys()))
+    # Group the (many) sweepable parameters by builder-style category so they're
+    # easy to find. `_cat_ordered` = all labels in category order (for the coupled
+    # multiselect, so related params cluster).
+    _cats = categorize_sweep_params(sweep_params)
+    _cat_names = list(_cats)
+    _cat_ordered = [lbl for c in _cat_names for lbl in _cats[c]]
+
+    def _pick_param(prefix, cat_label, param_label):
+        """A category selectbox + a parameter selectbox filtered to that category.
+        Drops a persisted parameter choice that no longer belongs to the category."""
+        cat = st.selectbox(cat_label, _cat_names, key=f"{prefix}_cat")
+        opts = _cats.get(cat, [])
+        if st.session_state.get(f"{prefix}_sweep_label") not in opts:
+            st.session_state.pop(f"{prefix}_sweep_label", None)
+        return st.selectbox(param_label, opts, key=f"{prefix}_sweep_label")
 
     col_setup, col_run = st.columns([1, 2])
 
@@ -39,7 +54,7 @@ def render():
         st.markdown("### Configure Parameters")
         
         if sweep_type == "1D Sweep":
-            param1_label = st.selectbox("Select Parameter", param_labels, key="p1_sweep_label")
+            param1_label = _pick_param("p1", "Category", "Parameter")
             meta1 = sweep_params[param1_label]
             # Re-autoscale the range widgets when the swept parameter changes (their
             # value= default depends on the nominal value; a persisted key would pin it).
@@ -69,6 +84,12 @@ def render():
                 default_val = float(initial_B[0]) if len(initial_B) else 1e7
             elif meta1["type"] == "array2d":
                 default_val = getattr(nominal_config, meta1["field"])[meta1["index_row"], meta1["index_col"]]
+            elif meta1["type"] == "array2d_broadcast":
+                _arr = getattr(nominal_config, meta1["field"])
+                default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
+            elif meta1["type"] == "pd_array2d_broadcast":
+                _arr = getattr(nominal_config.pd_config, meta1["field"])
+                default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
             elif meta1["type"] == "pk_array1d":
                 pk_config = nominal_config.phage_pk_config or nominal_config.pk_config
                 default_val = getattr(pk_config, meta1["field"])[meta1["index"]]
@@ -113,7 +134,7 @@ def render():
             run_sweep = st.button("Run 1D Sweep", width="stretch", type="primary")
 
         elif sweep_type == "2D Sweep":
-            param1_label = st.selectbox("Select Parameter 1 (X-axis)", param_labels, key="p1_sweep_label")
+            param1_label = _pick_param("p1", "Parameter 1 category (X-axis)", "Parameter 1")
             meta1 = sweep_params[param1_label]
             
             c1, c2, c3 = st.columns(3)
@@ -126,7 +147,7 @@ def render():
             spacing = st.selectbox("P1 Spacing", ["Linear", "Logarithmic"], key="p1_spacing")
             
             st.markdown("---")
-            param2_label = st.selectbox("Select Parameter 2 (Y-axis)", param_labels, key="p2_sweep_label")
+            param2_label = _pick_param("p2", "Parameter 2 category (Y-axis)", "Parameter 2")
             meta2 = sweep_params[param2_label]
             
             c4, c5, c6 = st.columns(3)
@@ -148,7 +169,7 @@ def render():
                 "across strains. Example — (dormancy rate, resuscitation rate) = "
                 "(0, 1), (0.5, 0.5), (1, 0)."
             )
-            coupled_labels = st.multiselect("Parameters to sweep together", param_labels, key="pc_labels")
+            coupled_labels = st.multiselect("Parameters to sweep together (grouped by category)", _cat_ordered, key="pc_labels")
             for _ci, _lbl in enumerate(coupled_labels):
                 _meta = sweep_params[_lbl]
                 st.text_input(
