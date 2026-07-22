@@ -154,6 +154,24 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             "index": i,
         }
 
+    # 2b. Strain→strain mutation rates (resistance evolution). Mass-conserving:
+    # sweeping origin→dest rebalances the origin column's diagonal (see the
+    # "mutation" handler in apply_sweep_parameter).
+    if config.n_bacteria > 1 and getattr(config, "mutation_rates", None) is not None:
+        def _sname(k):
+            if strains and k < len(strains):
+                return strains[k]["name"]
+            if getattr(config, "strain_labels", None) and k < len(config.strain_labels):
+                return config.strain_labels[k]
+            return f"Strain {k}"
+        for _o in range(config.n_bacteria):
+            for _d in range(config.n_bacteria):
+                if _o == _d:
+                    continue
+                params[f"Mutation Rate - {_sname(_o)} → {_sname(_d)}"] = {
+                    "type": "mutation", "origin": _o, "dest": _d, "default": 1e-7,
+                }
+
     # 3. Phage-specific parameters
     for j in range(config.n_phages):
         phage_name = f"Phage {j}"
@@ -165,6 +183,10 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
             "field": "phage_decay_rates",
             "index": j,
         }
+        if getattr(config, "phage_decay_Km", None) is not None:
+            params[f"Phage Decay Km (MM saturation) - {phage_name}"] = {
+                "type": "array1d", "field": "phage_decay_Km", "index": j,
+            }
 
         # 2D arrays: adsorption, burst, latent (bacteria x phage)
         for i in range(config.n_bacteria):
@@ -210,6 +232,16 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
                 "index_row": i,
                 "index_col": j,
             }
+            # Pseudolysogeny (only present when enabled): I→H hibernation and H→I
+            # lytic resumption, per strain × phage.
+            if getattr(config, "hibernation_rate", None) is not None:
+                params[f"Hibernation Rate (I→H) - {phage_name} on {strain_name}"] = {
+                    "type": "array2d", "field": "hibernation_rate", "index_row": i, "index_col": j,
+                }
+            if getattr(config, "lytic_resumption_rate", None) is not None:
+                params[f"Lytic Resumption Rate (H→I) - {phage_name} on {strain_name}"] = {
+                    "type": "array2d", "field": "lytic_resumption_rate", "index_row": i, "index_col": j,
+                }
 
     # 4. Antibiotics-specific parameters
     if config.n_antibiotics > 0 and config.pk_config is not None:
@@ -405,6 +437,18 @@ def apply_sweep_parameter(val: float, meta: dict, config, initial_B, initial_P, 
 
     elif param_type == "initial_S":
         initial_S = val
+
+    elif param_type == "mutation":
+        # Strain→strain mutation rate. mutation_rates is a mass-conserving generator
+        # (Bc = B + M@B, each column sums to 0), so set the off-diagonal origin→dest
+        # entry and rebalance that column's diagonal, keeping total bacteria conserved.
+        M = np.copy(config.mutation_rates)
+        o, d = meta["origin"], meta["dest"]
+        M[d, o] = val
+        col = M[:, o].copy()
+        col[o] = 0.0
+        M[o, o] = -float(np.sum(col))
+        config = dataclasses.replace(config, mutation_rates=M)
 
     elif param_type == "prerun":
         # Not a ModelConfig field — the app applies the pre-run (stationary_phase_ic)

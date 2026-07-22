@@ -1551,6 +1551,8 @@ def build_nominal_config_from_gui():
                     name=p["name"],
                     adsorption_s=p.get("adsorption_s", 5e-8),
                     adsorption_r=p.get("adsorption_r", 0.0),
+                    adsorption_dormant_s=p.get("adsorption_dormant_s", 0.0),
+                    adsorption_dormant_r=p.get("adsorption_dormant_r", 0.0),
                     burst_size_s=p["burst_sizes"],
                     latent_period_s=p["latent_periods"],
                     decay_rate=p["phage_decay_rates"],

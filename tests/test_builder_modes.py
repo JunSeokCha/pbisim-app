@@ -584,3 +584,21 @@ def test_count_increment_sticks_no_revert():
         at.run()  # the follow-up rerun (the 'blink') must not revert it
         assert len(at.session_state[state_key]) == start + 1, f"{label} reverted"
         assert [n for n in at.number_input if n.label == label][0].value == start + 1
+
+
+def test_brg_dormant_adsorption_wired():
+    """BRG exposes an adsorption-to-dormant widget and carries it into the built
+    config (previously missing — dormant adsorption was silently 0 in BRG)."""
+    import numpy as np
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at.run()
+    [s for s in at.selectbox if s.label == "Bacterial Population Builder Mode"][0] \
+        .set_value("Binary Genotypes (BRG)").run()
+    ni = [n for n in at.number_input if n.label == "Adsorption to dormant WT (mL·h⁻¹)"]
+    assert ni, "BRG dormant-adsorption widget missing"
+    ni[0].set_value(5e-9).run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    cfg = at.session_state["simulation_config"]
+    assert np.any(np.asarray(cfg.adsorption_rates_dormant) > 0), "dormant adsorption not applied"

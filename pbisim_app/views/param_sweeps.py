@@ -82,6 +82,11 @@ def render():
                 default_val = initial_S
             elif meta1["type"] == "prerun":
                 default_val = st.session_state.get("int_t_prerun", 0.0) or meta1.get("default", 24.0)
+            elif meta1["type"] == "mutation":
+                _M = getattr(nominal_config, "mutation_rates", None)
+                default_val = float(_M[meta1["dest"], meta1["origin"]]) if _M is not None else 0.0
+                if not default_val:
+                    default_val = meta1.get("default", 1e-7)
 
             st.caption(f"Nominal Value: `{default_val:.2e}`" if isinstance(default_val, (int, float)) else f"Nominal Value: `{default_val}`")
             

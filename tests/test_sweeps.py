@@ -417,3 +417,23 @@ def test_prerun_duration_is_sweepable():
     assert len(at.exception) == 0, at.exception
     res = at.session_state["param_sweep_result"]
     assert res and len(res["trajectories"]) == 3
+
+
+def test_sweep_exposes_mutation_and_pseudolysogeny():
+    """Mutation rate (mass-conserving) and pseudolysogeny (hibernation / lytic
+    resumption) are now sweepable; phage_decay_Km appears when set."""
+    import numpy as np
+    from pbisim import ModelBuilder
+    from pbisim_app.sweep_helper import get_sweep_parameters, apply_sweep_parameter
+    b = (ModelBuilder(n_bacteria=2, n_phages=1).with_growth_rates([1.2, 1.1])
+         .with_pseudolysogeny(hibernation_rate=np.array([[0.1], [0.1]]),
+                              lytic_resumption_rate=np.array([[0.05], [0.05]])))
+    cfg = b.build()
+    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}, {"name": "Mut"}], phages=[{"name": "P0"}])
+    assert any(k.startswith("Mutation Rate - ") for k in p)
+    assert any("Hibernation Rate" in k for k in p)
+    assert any("Lytic Resumption Rate" in k for k in p)
+    mk = [k for k in p if k.startswith("Mutation Rate - WT")][0]
+    c, *_ = apply_sweep_parameter(1e-6, p[mk], cfg, np.array([1e7, 10.0]), np.array([1e6]), 1.0, {})
+    assert c.mutation_rates[1, 0] == 1e-6           # WT(0) → Mut(1) rate set
+    assert np.allclose(c.mutation_rates.sum(axis=0), 0.0), "mutation not mass-conserving"

@@ -513,6 +513,8 @@ def render():
                             "Vc": 5000.0, "k_elim": 0.2, "k_in": 0.1, "k_out": 0.05, "Vi": 10.0,
                             "adsorption_s": 5e-8,
                             "adsorption_r": 0.0,
+                            "adsorption_dormant_s": 0.0,
+                            "adsorption_dormant_r": 0.0,
                             "fitness_cost": 0.05,
                             "mu": 1e-7,
                         })
@@ -524,6 +526,13 @@ def render():
                         phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
                         phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (mL·h⁻¹)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
                         phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (mL·h⁻¹)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
+                        phages[idx]["adsorption_dormant_s"] = st.number_input(
+                            "Adsorption to dormant WT (mL·h⁻¹)", value=float(phages[idx].get("adsorption_dormant_s", 0.0)),
+                            format="%.2e", key=f"brg_phg_ads_dorm_s_{idx}",
+                            help="Adsorption rate to dormant/persister WT cells (0 = phage cannot infect dormant cells).")
+                        phages[idx]["adsorption_dormant_r"] = st.number_input(
+                            "Adsorption to dormant Res (mL·h⁻¹)", value=float(phages[idx].get("adsorption_dormant_r", 0.0)),
+                            format="%.2e", key=f"brg_phg_ads_dorm_r_{idx}")
                         phages[idx]["burst_sizes"] = st.number_input("Burst size (PFU/cell)", value=float(phages[idx]["burst_sizes"]), step=10.0, key=f"brg_phg_burst_{idx}")
                         phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx]["latent_periods"]), step=0.1, key=f"brg_phg_latent_{idx}")
                         phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"brg_phg_decay_{idx}")
