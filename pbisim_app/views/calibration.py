@@ -160,6 +160,30 @@ def render():
                            "Tune `od_to_cfu` and the debris rates in *Global & structural* below.")
             _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
+            # Per-arm conditions — each group can carry its own growth phase (pre-run),
+            # initial density B₀, and MOI, so e.g. log-phase and stationary-phase CFU
+            # (same observable, different condition) can be fit together. MOI auto-fills
+            # from the data; B₀ defaults to the nominal inoculum.
+            _nom_b0 = float(sum(float(_s.get("initial_B", 0.0))
+                                for _s in st.session_state.get("int_strains", []))) or 1e7
+            _arm_cond = {}
+            with st.expander("Per-arm conditions (growth phase · B₀ · MOI)", expanded=False):
+                st.caption("Log phase → pre-run 0 (fresh inoculum). Stationary phase → set a "
+                           "pre-run duration to equilibrate toward carrying capacity before t=0. "
+                           "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
+                for _arm in _sel_arms:
+                    _cc = st.columns([2, 1, 1, 1])
+                    _cc[0].markdown(f"**{_arm}**")
+                    _arm_cond[_arm] = {
+                        "b0": _cc[1].number_input("B₀ (CFU/mL)", value=_nom_b0, format="%.2e",
+                                                  key=f"fit_cond_b0_{_arm}"),
+                        "prerun": _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
+                                                      key=f"fit_cond_prerun_{_arm}"),
+                        "moi": _cc[3].number_input("MOI", format="%g",
+                                                   value=float(_conds.get(_arm, {}).get("moi", 0.0)),
+                                                   key=f"fit_cond_moi_{_arm}"),
+                    }
+
             # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
             # Edit the model's ACTUAL parameter values (absolute, per entity — like
             # the Interactive Simulator), not multipliers. These widgets read from
@@ -361,14 +385,31 @@ def render():
                     _method = st.session_state.get("int_solver_method", "BDF")
                     _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
                     # One simulation per arm; every selected observable is projected from
-                    # that single trajectory into its own panel (small multiples).
+                    # that single trajectory into its own panel (small multiples). Each arm
+                    # applies its own condition: B₀ (scales the inoculum, preserving strain
+                    # proportions), a growth-phase pre-run (stationary_phase_ic), and MOI.
                     _panels, _metrics = {}, []
                     for _arm in _sel_arms:
-                        _moi = float(_conds.get(_arm, {}).get("moi", 0.0))
+                        _cond = _arm_cond.get(_arm, {})
+                        _arm_b0 = float(_cond.get("b0", _B0)) or _B0
+                        _arm_prerun = float(_cond.get("prerun", 0.0) or 0.0)
+                        _moi = float(_cond.get("moi", _conds.get(_arm, {}).get("moi", 0.0)))
+                        _armB = _iB * (_arm_b0 / _B0) if _B0 > 0 else _iB
                         _armP = np.zeros(len(_iP))
                         if len(_iP):
-                            _armP[0] = _moi * _B0
-                        _m = PBIModel(_config, initial_B=_iB, initial_P=_armP, initial_S=_iS, **_mk)
+                            _armP[0] = _moi * _arm_b0
+                        _mk_arm = dict(_mk)
+                        _iS_arm = _iS
+                        if _arm_prerun > 0:
+                            _ic = stationary_phase_ic(_config, t_prerun=_arm_prerun, B0=_armB)
+                            _armB = _ic.B
+                            _iS_arm = max(float(_ic.S), 0.0)
+                            if _ic.D is not None:
+                                _mk_arm["initial_D"] = _ic.D
+                            if _ic.Imm is not None:
+                                _mk_arm["initial_Imm"] = _ic.Imm
+                            _carry_prerun_debris(_ic, _mk_arm)
+                        _m = PBIModel(_config, initial_B=_armB, initial_P=_armP, initial_S=_iS_arm, **_mk_arm)
                         _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
                         for _ok in _sel_obs:
                             _sp = OBSERVABLES.get(_ok, {"log": True, "link": None, "label": _ok})
@@ -390,7 +431,8 @@ def render():
                                 "obs_hi": _d["hi"].to_numpy() if _has_band else None,
                                 "is_raw": _stat_key == "raw",
                             })
-                            _metrics.append({"observable": _sp.get("label", _ok), "group": _arm, "MOI": _moi,
+                            _metrics.append({"observable": _sp.get("label", _ok), "group": _arm,
+                                             "B₀": _arm_b0, "pre-run (h)": _arm_prerun, "MOI": _moi,
                                              "n_points": len(_d),
                                              "RMSE": fit_residual(_r.time, _pred, _d["time"].values,
                                                                   _d["value"].values, _sp.get("log", False))})

@@ -172,3 +172,34 @@ def test_multi_observable_overlay_small_multiples():
     # the observables multiselect defaulted to both present observables
     ms = [m for m in at.multiselect if m.key == "fit_obs_sel"][0]
     assert set(ms.value) == {"cfu", "od"}
+
+
+def _two_arm_cfu_dataset():
+    """Two CFU arms (no phage) so a per-arm pre-run is the only thing that differs."""
+    rows = []
+    for phage in ("MXP1", "MXP2"):
+        for t in (0.0, 2.0, 4.0):
+            rows.append({"PHAGE": phage, "MOI": 0.0, "TIME": t, "OBS": "cfu", "DV": 1e7})
+    return pd.DataFrame(rows)
+
+
+def test_per_arm_prerun_condition_changes_trajectory():
+    """A per-arm pre-run (stationary phase) changes only that arm's model
+    trajectory, so log-phase and stationary-phase data can be fit together."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _two_arm_cfu_dataset(), "time": "TIME", "value": "DV",
+        "observable": "OBS", "arm_cols": ["PHAGE"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_cond_prerun_MXP1"] = 12.0   # MXP1 stationary; MXP2 log-phase
+    at.run()
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    ovr = at.session_state["calib_overlay_result"]
+    cfu = [p for p in ovr["panels"] if p["obs"] == "cfu"][0]
+    ser = {s["label"]: np.asarray(s["pred"], dtype=float) for s in cfu["series"]}
+    assert not np.allclose(ser["MXP1"], ser["MXP2"]), "pre-run did not change the arm"
+    assert any(m.get("pre-run (h)") == 12.0 for m in ovr["metrics"])
