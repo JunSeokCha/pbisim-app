@@ -126,7 +126,10 @@ with open(os.path.join(os.path.dirname(__file__), "static", "styles.css"), encod
 from pbisim_app.viz_helper import apply_mpl_theme
 apply_mpl_theme()
 
-
+# Optional shared-credential gate (active only when APP_PASSWORD[_HASH] is set in the
+# environment). Blocks everything below until signed in; a no-op locally.
+from pbisim_app.auth import require_login, sign_out_control
+require_login()
 
 
 _init_app_state()
@@ -254,6 +257,8 @@ with st.sidebar:
         index=_pages.index(st.session_state.current_page),
     )
     st.session_state.current_page = st.session_state.current_page_radio
+
+    sign_out_control()
 
     st.markdown("---")
     with st.expander("AI & model settings", expanded=False):

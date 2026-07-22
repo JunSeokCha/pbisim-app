@@ -176,6 +176,15 @@ python -m streamlit run pbisim_app/app.py
 # or, once installed:  pbisim-app
 ```
 
+## Access gate (deployment)
+
+`pbisim_app/auth.py` adds an optional shared-credential sign-in (`require_login()`,
+called early in `app.py`). It is **active only when `APP_PASSWORD` or
+`APP_PASSWORD_HASH` is set in the environment** — set it in the Render dashboard
+(Environment vars; never commit), leave it unset locally. Optional `APP_USERNAME`.
+Basic gate to keep the public out, NOT enterprise SSO; the AI exec sandbox is still
+research-grade, so only share the password with trusted people.
+
 ---
 
 ## Known gaps / next steps

@@ -95,3 +95,19 @@
 
     .info-banner { background: var(--teal-tint); border-left:3px solid var(--teal);
       padding:12px 16px; border-radius:4px; margin-bottom:20px; color: var(--ink); }
+
+/* Chat input — make the bottom prompt box obviously an input (bordered card,
+   teal focus ring) rather than reading as flat page background. */
+[data-testid="stChatInput"] {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(22,33,31,0.06);
+}
+[data-testid="stChatInput"]:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-tint);
+}
+[data-testid="stChatInput"] textarea { background: transparent; }
+[data-testid="stChatInput"] textarea::placeholder { color: var(--label); }
+[data-testid="stChatInputSubmitButton"] { color: var(--teal); }
