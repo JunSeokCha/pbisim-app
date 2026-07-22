@@ -389,6 +389,31 @@ def _sweep_summary_tiles(df_summary):
     st.markdown("<br>", unsafe_allow_html=True)
 
 
+def counted_number_input(label, current_len, widget_key, *, min_value=0, max_value=10, help=None):
+    """A "number of items" input that doesn't fight the list it resizes.
+
+    The classic Streamlit bug: `st.number_input(value=len(items))` (no key) reverts
+    the user's change because `value=` is recomputed from the very list the widget
+    mutates. Here the widget is keyed (so it persists), and a marker reconciles it
+    with the list: when the list length changes for an EXTERNAL reason (scenario /
+    parts load, reset) the widget re-seeds to the new length; otherwise the widget
+    drives the resize. Returns the chosen count (int)."""
+    mark = f"_{widget_key}_mark"
+    # Re-seed the widget from the list when the length changed externally (marker
+    # mismatch) OR the widget key was dropped — Streamlit discards a widget's key
+    # when it isn't rendered on a rerun (e.g. while another page is showing), and a
+    # keyed number_input with no stored value would otherwise default to min_value
+    # and silently trim the list.
+    if st.session_state.get(mark) != current_len or widget_key not in st.session_state:
+        st.session_state[widget_key] = int(min(max(current_len, min_value), max_value))
+        st.session_state[mark] = current_len
+    n = int(st.number_input(label, min_value=min_value, max_value=max_value, step=1,
+                            key=widget_key, help=help))
+    if n != current_len:
+        st.session_state[mark] = n   # remember: this change was widget-driven
+    return n
+
+
 def load_preset_to_state(params: dict):
     """Deep copy preset parameters into st.session_state variables."""
     # 0. Clear old simulation results to prevent dimension mismatch crashes
@@ -2318,6 +2343,7 @@ __all__ = [
     '_carry_prerun_debris',
     '_safe_od',
     '_sweep_summary_tiles',
+    'counted_number_input',
     'load_preset_to_state',
     'configure_summary',
     'apply_ai_configuration',

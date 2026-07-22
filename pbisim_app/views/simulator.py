@@ -106,9 +106,7 @@ def render():
             with col1:
                 st.markdown("### Bacterial Strains")
 
-                n_strains = st.number_input(
-                    "Number of strains", min_value=1, max_value=10, value=len(strains)
-                )
+                n_strains = counted_number_input("Number of strains", len(strains), "direct_n_strains", min_value=1, max_value=10)
                 if n_strains != len(strains):
                     st.session_state.simulation_result = None
                     st.session_state.simulation_config = None
@@ -265,9 +263,7 @@ def render():
             with col2:
                 st.markdown("### Phage Strains")
 
-                n_phages = st.number_input(
-                    "Number of phages", min_value=0, max_value=10, value=len(phages)
-                )
+                n_phages = counted_number_input("Number of phages", len(phages), "direct_n_phages", min_value=0, max_value=10)
                 if n_phages != len(phages):
                     st.session_state.simulation_result = None
                     st.session_state.simulation_config = None
@@ -503,7 +499,7 @@ def render():
                 # Renders the loci count
                 st.markdown("---")
                 st.markdown("### Phage Loci")
-                n_phg_loci = st.number_input("Number of phage species (loci)", min_value=1, max_value=10, value=max(len(phages), 1))
+                n_phg_loci = counted_number_input("Number of phage species (loci)", len(phages), "brg_n_phg_loci", min_value=1, max_value=10)
                 if n_phg_loci != len(phages):
                     phages = phages[:n_phg_loci]
                     while len(phages) < n_phg_loci:
@@ -634,7 +630,7 @@ def render():
             with col1:
                 st.markdown("### Custom Bacterial Strains")
                 
-                n_strains = st.number_input("Number of custom strains", min_value=1, max_value=10, value=max(len(strains), 1))
+                n_strains = counted_number_input("Number of custom strains", len(strains), "ss_n_strains", min_value=1, max_value=10)
                 if n_strains != len(strains):
                     strains = strains[:n_strains]
                     while len(strains) < n_strains:
@@ -738,7 +734,7 @@ def render():
 
             with col2:
                 st.markdown("### Phage Strains")
-                n_phages = st.number_input("Number of phages", min_value=0, max_value=10, value=len(phages))
+                n_phages = counted_number_input("Number of phages", len(phages), "ss_n_phages", min_value=0, max_value=10)
                 if n_phages != len(phages):
                     phages = phages[:n_phages]
                     while len(phages) < n_phages:

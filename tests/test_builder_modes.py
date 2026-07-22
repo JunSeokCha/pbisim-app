@@ -566,3 +566,21 @@ def test_prerun_inherit_debris_checkbox():
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
     assert at.session_state["simulation_result"] is not None
+
+
+def test_count_increment_sticks_no_revert():
+    """Increasing the number of phages / bacteria persists — it must not blink back
+    to the previous value on the follow-up rerun (the keyless value=len() self-fight)."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=140)
+    at.run()
+    for label, state_key in (("Number of phages", "int_phages"),
+                             ("Number of strains", "int_strains")):
+        ni = [n for n in at.number_input if n.label == label]
+        assert ni, f"{label} input missing"
+        start = len(at.session_state[state_key])
+        ni[0].set_value(start + 1).run()
+        assert len(at.session_state[state_key]) == start + 1, f"{label} did not increase"
+        at.run()  # the follow-up rerun (the 'blink') must not revert it
+        assert len(at.session_state[state_key]) == start + 1, f"{label} reverted"
+        assert [n for n in at.number_input if n.label == label][0].value == start + 1
