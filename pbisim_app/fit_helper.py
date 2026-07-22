@@ -20,11 +20,15 @@ import pandas as pd
 #   link = None                      -> signal = model quantity        (CFU, PFU)
 #   link = (param, "div", default)   -> signal = model quantity / param (OD)
 #   link = (param, "mul", default)   -> signal = model quantity * param (luminescence)
+# `log` is the PLOT-axis default (log for CFU/PFU, linear for OD). `floor_log10` is
+# the detection floor used by the OBJECTIVE, which — matching pbisim-fit's NLS — is
+# always computed in log10 space with these per-observable floors (values are clipped
+# to 10**floor before log10). pbisim-fit: floor_log10=1.0 (CFU/PFU), -2.5 (OD).
 OBSERVABLES = {
-    "cfu": {"label": "CFU/mL",               "prefixes": ("B", "D", "I", "H"), "log": True,  "link": None},
-    "pfu": {"label": "PFU/mL",               "prefixes": ("P",),               "log": True,  "link": None},
-    "od":  {"label": "Optical density (OD)", "prefixes": ("B", "D", "I", "H"), "log": False, "link": ("od_to_cfu", "div", 1e9)},
-    "lum": {"label": "Luminescence (RLU)",   "prefixes": ("B",),               "log": True,  "link": ("rlu_per_cell", "mul", 1.0)},
+    "cfu": {"label": "CFU/mL",               "prefixes": ("B", "D", "I", "H"), "log": True,  "link": None,                        "floor_log10": 1.0},
+    "pfu": {"label": "PFU/mL",               "prefixes": ("P",),               "log": True,  "link": None,                        "floor_log10": 1.0},
+    "od":  {"label": "Optical density (OD)", "prefixes": ("B", "D", "I", "H"), "log": False, "link": ("od_to_cfu", "div", 1e9),   "floor_log10": -2.5},
+    "lum": {"label": "Luminescence (RLU)",   "prefixes": ("B",),               "log": True,  "link": ("rlu_per_cell", "mul", 1.0), "floor_log10": 1.0},
 }
 
 
@@ -196,3 +200,108 @@ def fit_residual(model_time, model_signal, data_time, data_value, log_scale):
     diff = pred - obs
     diff = diff[np.isfinite(diff)]
     return float(np.sqrt(np.mean(diff ** 2))) if len(diff) else float("nan")
+
+
+def residual_vector_log10(model_time, model_signal, data_time, data_value, floor_log10):
+    """log10-space residuals (model interpolated to the data times), with a detection
+    floor — the exact form pbisim-fit's NLS minimises. Both prediction and observation
+    are clipped to ``10**floor_log10`` before log10, so all observables are compared on
+    a common, order-of-magnitude scale. Returns the finite residual array (poolable
+    across observables/arms to form the joint objective)."""
+    pred = np.interp(np.asarray(data_time, float), np.asarray(model_time, float),
+                     np.asarray(model_signal, float))
+    obs = np.asarray(data_value, float)
+    floor = 10.0 ** float(floor_log10)
+    pred = np.log10(np.maximum(pred, floor))
+    obs = np.log10(np.maximum(obs, floor))
+    diff = pred - obs
+    return diff[np.isfinite(diff)]
+
+
+def config_param_snapshot(config):
+    """JSON-able snapshot of the current model's fittable biological parameters — the
+    warm-start reference for pbisim-fit (its FreeParamSpec path mapping is a later
+    phase; this captures the current *values*)."""
+    def _j(v):
+        if v is None:
+            return None
+        a = np.asarray(v)
+        return a.tolist() if a.ndim else float(a)
+    fields = ["growth_rates", "bacteria_to_resource_ratio", "monod_constant", "carrying_capacity",
+              "adsorption_rates", "adsorption_rates_dormant", "burst_sizes", "latent_periods",
+              "latent_periods_dormant", "phage_decay_rates", "death_rate_B", "death_rate_D",
+              "dormancy_rate", "resuscitation_rate", "dormancy_diffusion_rate", "mutation_rates",
+              "od_to_cfu_conversion_factor"]
+    snap = {}
+    for f in fields:
+        v = getattr(config, f, None)
+        if v is not None:
+            snap[f] = _j(v)
+    return snap
+
+
+def build_fit_spec(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None,
+                   model_params=None, notes=None):
+    """Assemble a pbisim-fit *fit specification* from the calibration state.
+
+    Returns a JSON-serializable dict whose ``dataset`` maps onto
+    ``pbisim_fit.ExperimentalDataset.from_dict`` (arms carry their observable arrays
+    aligned to a shared ``time`` grid — ``None`` marks unmeasured points, i.e. NaN —
+    plus the per-arm growth-phase/inoculum conditions and MOI dose), and whose
+    ``nls_cfg`` maps onto ``pbisim_fit.NLSConfig`` (obs_keys + detection floors).
+    ``warm_start`` holds the current parameter values.
+    """
+    sel_obs = list(sel_obs)
+    m = agg[agg["arm"].isin(sel_arms) & agg["observable"].isin(sel_obs)]
+    times = sorted(float(t) for t in m["time"].unique())
+    tindex = {t: i for i, t in enumerate(times)}
+
+    arms_out = {}
+    for arm in sel_arms:
+        cond = arm_cond.get(arm, {})
+        entry, has_data = {}, False
+        for ok in sel_obs:
+            col = [None] * len(times)
+            d = m[(m["arm"] == arm) & (m["observable"] == ok)]
+            for _, r in d.iterrows():
+                col[tindex[float(r["time"])]] = float(r["value"])
+                has_data = True
+            if any(v is not None for v in col):
+                entry[ok] = col
+        if not has_data:
+            continue
+        moi = float(cond.get("moi", 0.0) or 0.0)
+        if moi > 0:
+            entry["doses"] = [{"time": 0.0, "amount": f"MOI:{moi:g}", "target": "phage"}]
+        pr = float(cond.get("prerun", 0.0) or 0.0)
+        if pr > 0:
+            entry["pretreatment_h"] = pr           # stationary pre-grow (TreatmentRecord)
+        b0 = cond.get("b0")
+        if b0:
+            entry["pretreatment_inoculum"] = float(b0)
+        arms_out[arm] = entry
+
+    data_type = "od_assay" if set(sel_obs) == {"od"} else "time_kill"
+    metadata = {"od_to_cfu_cv": 0.30}
+    if od_to_cfu is not None:
+        metadata["od_to_cfu"] = float(od_to_cfu)
+    if notes:
+        metadata["notes"] = notes
+
+    nls_cfg = {"obs_keys": sel_obs}
+    _floor_key = {"cfu": "floor_log10", "od": "od_floor_log10",
+                  "pfu": "pfu_floor_log10", "phage_blood": "phage_blood_floor_log10"}
+    for ok in sel_obs:
+        fl = OBSERVABLES.get(ok, {}).get("floor_log10")
+        if fl is not None and ok in _floor_key:
+            nls_cfg[_floor_key[ok]] = fl
+
+    spec = {
+        "schema_version": 1,
+        "generated_by": "pbisim-app calibration",
+        "dataset": {"data_type": data_type, "time": times, "arms": arms_out, "metadata": metadata},
+        "nls_cfg": nls_cfg,
+    }
+    if model_params:
+        spec["warm_start"] = model_params
+    return spec

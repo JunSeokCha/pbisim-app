@@ -142,3 +142,41 @@ def test_fit_residual_zero_and_positive():
     # a mismatch is positive and finite
     r = fit_residual(t, model, t, np.array([1.0, 1.0, 1.0]), log_scale=True)
     assert r > 0 and np.isfinite(r)
+
+
+def test_residual_vector_log10_and_floor():
+    """log10 residuals: perfect fit → zeros; both sides clipped to the floor."""
+    import numpy as np
+    from pbisim_app.fit_helper import residual_vector_log10
+    r = residual_vector_log10([0, 1, 2], [1e7, 1e6, 1e5], [0, 1, 2], [1e7, 1e6, 1e5], 1.0)
+    assert np.allclose(r, 0.0)
+    # both pred and obs below the floor (10^1=10) → clipped equal → zero residual
+    r2 = residual_vector_log10([0, 1], [1.0, 2.0], [0, 1], [3.0, 4.0], 1.0)
+    assert np.allclose(r2, 0.0)
+
+
+def test_build_fit_spec_maps_to_pbisim_fit():
+    """build_fit_spec produces a pbisim-fit-shaped dataset (arms w/ observable arrays,
+    MOI dose, pretreatment_h/inoculum) + NLSConfig floors + warm-start; JSON-safe."""
+    import json
+    import numpy as np
+    import pandas as pd
+    from pbisim_app.fit_helper import build_fit_spec
+    agg = pd.DataFrame([
+        {"arm": "A", "observable": "cfu", "time": 0.0, "value": 1e7, "lo": np.nan, "hi": np.nan},
+        {"arm": "A", "observable": "od", "time": 0.0, "value": 0.05, "lo": np.nan, "hi": np.nan},
+        {"arm": "B", "observable": "cfu", "time": 2.0, "value": 1e5, "lo": np.nan, "hi": np.nan},
+    ])
+    spec = build_fit_spec(agg, ["A", "B"], ["cfu", "od"],
+                          {"A": {"b0": 1e7, "prerun": 12.0, "moi": 1.0}, "B": {"prerun": 0.0, "moi": 0.0}},
+                          od_to_cfu=8e8, model_params={"growth_rates": [1.2]})
+    ds = spec["dataset"]
+    assert set(ds["arms"]) == {"A", "B"}
+    assert "cfu" in ds["arms"]["A"] and "od" in ds["arms"]["A"]
+    assert ds["arms"]["A"]["pretreatment_h"] == 12.0          # stationary phase
+    assert ds["arms"]["A"]["doses"][0]["amount"] == "MOI:1"   # MOI dose
+    assert spec["nls_cfg"]["obs_keys"] == ["cfu", "od"]
+    assert spec["nls_cfg"]["od_floor_log10"] == -2.5
+    assert spec["dataset"]["metadata"]["od_to_cfu"] == 8e8
+    assert "warm_start" in spec
+    json.dumps(spec)   # must be serializable (no NaN/ndarray)

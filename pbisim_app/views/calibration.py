@@ -431,44 +431,45 @@ def render():
                                 "obs_hi": _d["hi"].to_numpy() if _has_band else None,
                                 "is_raw": _stat_key == "raw",
                             })
+                            _resid = residual_vector_log10(_r.time, _pred, _d["time"].values,
+                                                           _d["value"].values, _sp.get("floor_log10", 1.0))
                             _metrics.append({"observable": _sp.get("label", _ok), "group": _arm,
                                              "B₀": _arm_b0, "pre-run (h)": _arm_prerun, "MOI": _moi,
                                              "n_points": len(_d),
-                                             "RMSE": fit_residual(_r.time, _pred, _d["time"].values,
-                                                                  _d["value"].values, _sp.get("log", False))})
+                                             "RMSE (log₁₀)": float(np.sqrt(np.mean(_resid ** 2))) if _resid.size else float("nan")})
 
-                    # Per-observable pooled RMSE + R² (model interpolated onto obs times;
-                    # log10 space for logged observables), plus a combined objective =
-                    # equal-weight mean of the per-observable RMSEs.
-                    _panel_list, _rmses = [], []
+                    # Every observable is scored in log10 space with its detection floor
+                    # (matching pbisim-fit's NLS objective — no unit-mixing, no weights).
+                    # The combined objective J is the pooled RMSE over EVERY residual (the
+                    # one big least-squares vector NLS minimises), not a mean of per-obs
+                    # RMSEs. (_pan["log"] is left as the plot-axis default: OD stays linear.)
+                    _panel_list, _all_resid = [], []
                     for _ok, _pan in _panels.items():
+                        _floor = 10.0 ** float(OBSERVABLES.get(_ok, {}).get("floor_log10", 1.0))
                         _oa, _pa = [], []
                         for _s in _pan["series"]:
                             _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
                             _ov = np.asarray(_s["obs_value"], dtype=float)
-                            if _pan["log"]:
-                                _pt = np.log10(np.maximum(_pt, 1e-30))
-                                _ov = np.log10(np.maximum(_ov, 1e-30))
-                            _oa.append(_ov)
-                            _pa.append(np.asarray(_pt, dtype=float))
+                            _oa.append(np.log10(np.maximum(_ov, _floor)))
+                            _pa.append(np.log10(np.maximum(_pt, _floor)))
                         _oa = np.concatenate(_oa) if _oa else np.array([])
                         _pa = np.concatenate(_pa) if _pa else np.array([])
                         _msk = np.isfinite(_oa) & np.isfinite(_pa)
                         _oa, _pa = _oa[_msk], _pa[_msk]
-                        _rmse = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
+                        _pan["rmse"] = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
                         _sst = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
-                        _pan["rmse"] = _rmse
                         _pan["r2"] = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _sst) if _sst > 0 else float("nan")
                         _pan["n"] = int(_oa.size)
                         _panel_list.append(_pan)
-                        if np.isfinite(_rmse):
-                            _rmses.append(_rmse)
+                        if _oa.size:
+                            _all_resid.append(_oa - _pa)
 
+                    _all = np.concatenate(_all_resid) if _all_resid else np.array([])
                     _stat_label = _stat if _stat_key != "raw" else "raw points"
                     st.session_state["calib_overlay_result"] = {
                         "panels": _panel_list,
                         "metrics": _metrics,
-                        "combined": float(np.mean(_rmses)) if _rmses else float("nan"),
+                        "combined": float(np.sqrt(np.mean(_all ** 2))) if _all.size else float("nan"),
                         "stat_label": _stat_label,
                         "title": (f"Model vs observations ({_stat_label}"
                                   + (f" + {_band_choice} band)" if _band else ")")),
@@ -500,14 +501,14 @@ def render():
                     f"""<div class="metric-container">
                         <div class="metric-label">Combined objective J</div>
                         <div class="metric-value">{_cval:.3f}</div>
-                        <div class="metric-sub">equal-weight mean of per-observable RMSE</div>
+                        <div class="metric-sub">pooled log₁₀ least-squares — the pbisim-fit NLS objective</div>
                     </div>""", unsafe_allow_html=True)
                 for _ci, _pan in enumerate(_ovr["panels"]):
                     _cols[_ci + 1].markdown(
                         f"""<div class="metric-container">
                             <div class="metric-label">{_pan['label']} · R²</div>
                             <div class="metric-value">{_pan['r2']:.3f}</div>
-                            <div class="metric-sub">RMSE{' (log₁₀)' if _pan['log'] else ''} {_pan['rmse']:.3f} · n={_pan['n']}</div>
+                            <div class="metric-sub">RMSE (log₁₀) {_pan['rmse']:.3f} · n={_pan['n']}</div>
                         </div>""", unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -543,6 +544,27 @@ def render():
                 st.caption("Edit the parameter values above and re-overlay to improve the fit "
                            "(minimise the combined objective). Edits update the live model directly "
                            "and can be saved as Parts in the Library.")
+
+            # ── 5b · Export fit specification (pbisim-fit hand-off) ───────────
+            st.markdown("### 5b · Export fit specification")
+            st.caption("Bundle the data (long format), per-arm conditions (growth phase / B₀ / MOI), "
+                       "the selected observables + detection floors, and the current parameter values "
+                       "into a **pbisim-fit specification** — exactly the inputs its NLS `refine_nls` / "
+                       "`fit()` consume (dataset → ExperimentalDataset, nls_cfg → NLSConfig).")
+            try:
+                _spec_cfg, _sB, _sP, _sS, _smk = build_nominal_config_from_gui()
+                _od_link = _link_vals.get("od")
+                if _od_link is None and _debris_on:
+                    _od_link = st.session_state.get("int_od_to_cfu_conversion_factor")
+                _spec = build_fit_spec(_agg, _sel_arms, _sel_obs, _arm_cond,
+                                       od_to_cfu=_od_link,
+                                       model_params=config_param_snapshot(_spec_cfg))
+                st.download_button(
+                    "Download fit spec (JSON)", data=json.dumps(_spec, indent=2),
+                    file_name="pbisim_fit_spec.json", mime="application/json",
+                    key="fit_export_spec", width="stretch")
+            except Exception as _e:
+                st.caption(f"(Select at least one group and observable first — {_e})")
 
         # ── 6. Save the calibrated model ─────────────────────────────────────
         if _ds:

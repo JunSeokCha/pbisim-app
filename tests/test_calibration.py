@@ -203,3 +203,19 @@ def test_per_arm_prerun_condition_changes_trajectory():
     ser = {s["label"]: np.asarray(s["pred"], dtype=float) for s in cfu["series"]}
     assert not np.allclose(ser["MXP1"], ser["MXP2"]), "pre-run did not change the arm"
     assert any(m.get("pre-run (h)") == 12.0 for m in ovr["metrics"])
+
+
+def test_export_fit_spec_available_after_data():
+    """The 'Export fit specification' hand-off (pbisim-fit) appears once data is loaded."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _multi_observable_dataset(), "time": "TIME", "value": "DV",
+        "observable": "OBS", "arm_cols": ["PHAGE"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    assert any("Export fit specification" in (m.value or "") for m in at.markdown)
+    # the spec built successfully (not the "select a group first" error fallback)
+    assert not any("Select at least one group" in (m.value or "") for m in at.markdown)
