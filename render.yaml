@@ -25,6 +25,14 @@ services:
       # fine-grained READ-ONLY GitHub PAT scoped to the pbisim repo — set in dashboard
       - key: PBISIM_TOKEN
         sync: false
+      # git ref of the private estimation package (powers the Calibration fit)
+      - key: PBISIM_FIT_REF
+        value: main
+      # READ-ONLY PAT for the pbisim-fit repo. OMIT if PBISIM_TOKEN already has read
+      # access to pbisim-fit (the build falls back to it); set only if you use a
+      # separate per-repo token.
+      - key: PBISIM_FIT_TOKEN
+        sync: false
       # Optional. If set, ALL visitors use this key (cost/abuse risk — see DEPLOY.md).
       # Omit it to force each user to enter their own key in the sidebar.
       - key: ANTHROPIC_API_KEY

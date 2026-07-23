@@ -32,6 +32,17 @@ ARG PBISIM_REF=main
 RUN test -n "$PBISIM_TOKEN" || (echo "ERROR: PBISIM_TOKEN build arg is required" >&2; exit 1) \
     && pip install "git+https://${PBISIM_TOKEN}@github.com/phage-therapy-sim/pbisim.git@${PBISIM_REF}"
 
+# --- 1b. Private estimation package `pbisim-fit` (powers the Calibration NLS fit).
+#         Its CORE is torch-free (torch lives only in the [sbi]/[neural_ode] extras,
+#         which we do NOT install), so this stays lightweight and fits the free tier.
+#         Reuses PBISIM_TOKEN when PBISIM_FIT_TOKEN is unset — set a separate token
+#         only if your fine-grained PAT is scoped to a single repo. ---
+ARG PBISIM_FIT_TOKEN=
+ARG PBISIM_FIT_REF=main
+RUN FIT_TOKEN="${PBISIM_FIT_TOKEN:-$PBISIM_TOKEN}" \
+    && test -n "$FIT_TOKEN" || (echo "ERROR: PBISIM_FIT_TOKEN or PBISIM_TOKEN is required" >&2; exit 1) \
+    && pip install "git+https://${FIT_TOKEN}@github.com/phage-therapy-sim/pbisim-fit.git@${PBISIM_FIT_REF}"
+
 # --- 2. App source + remaining deps (editable so prompts/ resolves at runtime) ---
 WORKDIR /app
 COPY . /app

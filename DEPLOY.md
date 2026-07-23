@@ -38,9 +38,13 @@ GitHub → **Settings → Developer settings → Fine-grained tokens → Generat
 1. Render Dashboard → **New → Blueprint** → connect this repo. Render reads `render.yaml`.
 2. When prompted, set the `sync: false` values:
    - `PBISIM_TOKEN` = the token from step 1 (**secret**)
+   - `PBISIM_FIT_TOKEN` = a READ-ONLY PAT for the **pbisim-fit** repo (powers the
+     Calibration NLS fit). **Omit it** if `PBISIM_TOKEN` already has read access to
+     pbisim-fit — the build falls back to it. Set it only for a separate per-repo token.
    - `ANTHROPIC_API_KEY` = leave **empty** for public use (users enter their own key);
      set it only for a private/gated deployment (see §5).
-   - `PBISIM_REF` defaults to `main` — pin to a tag (e.g. `v1.0.0`) for stability.
+   - `PBISIM_REF` / `PBISIM_FIT_REF` default to `main` — pin to tags for stability.
+     (pbisim-fit installs its torch-free core only — the fitting import is lazy.)
 3. Deploy. Render exposes these env vars to the Docker build as build ARGs, so the
    Dockerfile's `ARG PBISIM_TOKEN` / `ARG PBISIM_REF` are populated automatically.
    Confirm in the build logs that the `pip install git+https://***@github.com/...`

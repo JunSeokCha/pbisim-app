@@ -21,10 +21,12 @@ dependencies = [
 
 [project.optional-dependencies]
 fit = [
-    # PLANNED, not yet wired up. pbisim-app is a validated feasibility prototype;
-    # full development (incl. this fit integration) is deferred until pbisim-fit
-    # v1.0 ships. Intended hook: pbisim_fit.output.to_model_config. See
-    # ../ECOSYSTEM.md §3.5 / §5.3.
+    # WIRED UP: the Calibration page runs pbisim-fit's NLS (imported lazily, so the
+    # app starts torch-free). pbisim-fit is PRIVATE (not on PyPI), so this extra is a
+    # marker only — install it from the private repo instead:
+    #   local dev : pip install -e ../pbisim-fit
+    #   deploy    : the Dockerfile installs it from GitHub (see PBISIM_FIT_* build args)
+    # Do NOT add the pbisim-fit[sbi]/[neural_ode] extras — they pull torch (~2 GB).
     "pbisim-fit>=0.1",
 ]
 dev = [
