@@ -10,6 +10,7 @@ from __future__ import annotations
 import faulthandler
 import copy
 import dataclasses as _dc
+import contextlib
 import io
 import json
 import os
@@ -326,6 +327,13 @@ def _init_app_state():
     if "user_scenarios" not in st.session_state:
         # name -> {"annotation": str, "schema_version": int, "state": {...}}
         st.session_state.user_scenarios = {}
+    if "user_models" not in st.session_state:
+        # name -> {"description": str, "source": str, "schema_version": int,
+        #          "state": {model data keys}} — organism/kinetics only (see dump_model)
+        st.session_state.user_models = {}
+    if "active_model" not in st.session_state:
+        # Which Model the builder currently reflects (label in the Models list).
+        st.session_state.active_model = WORKING_DRAFT_LABEL
     if "parts_library" not in st.session_state:
         # {category: {name: {"source","annotation","reference_host?","params"}}}
         st.session_state.parts_library = {"bacteria": {}, "phages": {}, "antibiotics": {}}
@@ -490,6 +498,7 @@ def load_preset_to_state(params: dict):
     st.session_state["int_debris_u"] = params.get("debris_u", 0.4)
     st.session_state["int_debris_v"] = params.get("debris_v", 0.2)
     st.session_state["int_debris_kdis"] = params.get("debris_kdis", 0.01)
+    st.session_state["int_dormant_od_fraction"] = params.get("dormant_od_fraction", 1.0)
     st.session_state["int_od_to_cfu_conversion_factor"] = params.get("od_to_cfu_conversion_factor", 2e8)
 
     # 5. Strains list
@@ -510,6 +519,7 @@ def load_preset_to_state(params: dict):
                 "dormancy_diffusion_rate": s.get("dormancy_diffusion_rate", 0.05),
                 "dormancy_signal": s.get("dormancy_signal", "nutrient"),
                 "resuscitation_signal": s.get("resuscitation_signal", "nutrient"),
+                "diffusion_signal": s.get("diffusion_signal", "constant"),
                 "initial_D": s.get("initial_D", 0.0),
             }
         )
@@ -654,6 +664,7 @@ def apply_ai_configuration(config: dict) -> str:
             st.session_state["int_brg_dorm_rate"] = base.get("dormancy_rate", 0.001)
             st.session_state["int_brg_resus_rate"] = base.get("resuscitation_rate", 0.1)
             st.session_state["int_brg_diff_rate"] = base.get("dormancy_diffusion_rate", 0.05)
+            st.session_state["int_brg_diffusion_signal"] = base.get("diffusion_signal", "constant")
             st.session_state["int_brg_death_rate_B"] = base.get("death_rate_B", 0.0)
             st.session_state["int_brg_death_rate_D"] = base.get("death_rate_D", 0.0)
             st.session_state["int_brg_use_eq_ic"] = bool(config.get("equilibrium_ic", False))
@@ -850,6 +861,217 @@ def import_scenarios_json(text: str) -> dict:
         if not isinstance(sc, dict) or "state" not in sc:
             raise ValueError(f"Scenario '{name}' is missing its 'state'.")
     return scenarios
+
+
+# ── Model registry ─────────────────────────────────────────────────────────────
+# A **Model** is the organism + kinetics + environment + solver configuration — the
+# subset of the input state that `build_nominal_config_from_gui` consumes. It is
+# deliberately NARROWER than a Scenario: dosing (`int_doses`), trial arms/IIV, and
+# every analysis-page setting (sweep ranges, calibration selections) are properties
+# of an *experiment*, not the model, so they are EXCLUDED. This decoupling is the
+# whole point — a saved Model is reused verbatim across the simulator, sweeps,
+# trials, and fitting without the live builder widgets contaminating those tasks.
+MODEL_SCHEMA_VERSION = 1
+
+# Analysis-only keys that live inside the scenario partition but must NOT be part of
+# a Model (they belong to the page running the experiment).
+_MODEL_EXCLUDE_KEYS = {"int_doses", "trial_arms", "trial_iiv_inputs"}
+
+
+def _is_model_data_key(k: str) -> bool:
+    """A model = the scenario data partition minus the analysis-only keys."""
+    return _is_scenario_data_key(k) and k not in _MODEL_EXCLUDE_KEYS
+
+
+def dump_model() -> dict:
+    """Snapshot the current live builder state as a JSON-safe Model (organism +
+    kinetics + environment + solver only — no dosing / trial / analysis settings)."""
+    return {
+        k: _json_safe(copy.deepcopy(st.session_state[k]))
+        for k in list(st.session_state.keys())
+        if _is_model_data_key(k)
+    }
+
+
+# Model widget-key prefixes to clear when loading a Model into the builder. Excludes
+# the analysis widget prefixes (dose_/rep_dose/single_dose/new_arm/trial_*) so that
+# swapping the organism model leaves the page's dosing / trial design untouched.
+_MODEL_WIDGET_PREFIXES = (
+    "int_", "str_", "phg_", "ss_", "brg_", "abx_", "ads_", "widget_builder_mode",
+)
+
+
+def apply_model_to_state(state: dict) -> None:
+    """Load a Model into the live builder, replacing the current organism/kinetics
+    config but leaving dosing / trial / analysis state intact."""
+    for k in list(st.session_state.keys()):
+        if k in _MODEL_EXCLUDE_KEYS:
+            continue
+        if (_is_model_data_key(k) or _ADS_DATA_RE.match(k)
+                or any(k.startswith(p) for p in _MODEL_WIDGET_PREFIXES)):
+            # never drop the analysis keys that share the int_ namespace
+            if k in _MODEL_EXCLUDE_KEYS:
+                continue
+            st.session_state.pop(k, None)
+    for k, v in state.items():
+        if k in _MODEL_EXCLUDE_KEYS:
+            continue
+        st.session_state[k] = copy.deepcopy(v)
+    st.session_state.simulation_result = None
+    st.session_state.simulation_config = None
+
+
+@contextlib.contextmanager
+def model_config_context(snapshot: dict | None):
+    """Temporarily swap the live model DATA keys to a frozen Model snapshot, so a
+    downstream build reads that Model regardless of the current builder widgets, then
+    restore. Only the model data keys are swapped — dosing / analysis state (owned by
+    the page) is left in place. ``snapshot=None`` is a no-op (use the live draft)."""
+    if snapshot is None:
+        yield
+        return
+    model_keys = [k for k in list(st.session_state.keys()) if _is_model_data_key(k)]
+    saved = {k: copy.deepcopy(st.session_state[k]) for k in model_keys}
+    try:
+        for k in model_keys:
+            st.session_state.pop(k, None)
+        for k, v in snapshot.items():
+            if k in _MODEL_EXCLUDE_KEYS:
+                continue
+            st.session_state[k] = copy.deepcopy(v)
+        yield
+    finally:
+        for k in [kk for kk in list(st.session_state.keys()) if _is_model_data_key(kk)]:
+            st.session_state.pop(k, None)
+        for k, v in saved.items():
+            st.session_state[k] = v
+
+
+def build_config_from_model(snapshot: dict | None = None):
+    """Build a pbisim config from a frozen Model snapshot (or the live builder draft
+    when ``snapshot is None``). Returns whatever `build_nominal_config_from_gui`
+    returns: (config, initial_B, initial_P, initial_S, model_kwargs)."""
+    with model_config_context(snapshot):
+        return build_nominal_config_from_gui()
+
+
+def resolve_model_snapshot(selection: str) -> dict | None:
+    """Map a Model selector value to a frozen snapshot (or None = live Working draft).
+
+    `selection` is a registry key: WORKING_DRAFT_LABEL, a demo name, or a user model
+    name. Demos are materialised on the default model + overrides."""
+    if selection in (None, WORKING_DRAFT_LABEL):
+        return None
+    demos = {d["name"]: d for d in DEMO_MODELS}
+    if selection in demos:
+        base = copy.deepcopy(st.session_state.get("_default_model_state") or {})
+        base.update(copy.deepcopy(demos[selection]["overrides"]))
+        return base
+    saved = st.session_state.get("user_models", {})
+    if selection in saved:
+        return copy.deepcopy(saved[selection]["state"])
+    return None
+
+
+def model_options() -> list[str]:
+    """Ordered Model selector options: live draft, prebuilt demos, then saved models."""
+    return ([WORKING_DRAFT_LABEL]
+            + [d["name"] for d in DEMO_MODELS]
+            + list(st.session_state.get("user_models", {}).keys()))
+
+
+def page_model_selector(page_key: str, label: str = "Model") -> str:
+    """Render a per-page Model selector (defaults to the active model) and return the
+    selection. Wrap the page body in ``model_config_context(resolve_model_snapshot(sel))``
+    so the whole task runs against the chosen Model, not the live builder widgets."""
+    opts = model_options()
+    cur = st.session_state.active_model if st.session_state.active_model in opts else WORKING_DRAFT_LABEL
+    key = f"{page_key}_model_sel"
+    if st.session_state.get(key) not in opts:
+        st.session_state.pop(key, None)
+    sel = st.selectbox(
+        label, opts, index=opts.index(cur), key=key,
+        help="Which Model this task runs against. 'Working draft (live)' uses the current "
+             "Interactive-Simulator builder state; saved/demo models are frozen snapshots, "
+             "immune to builder edits.")
+    if sel == WORKING_DRAFT_LABEL:
+        st.caption("Running against the **live builder draft** — edits in the Interactive "
+                   "Simulator flow through here.")
+    else:
+        st.caption(f"Running against frozen model **{sel}** — builder edits won't affect this.")
+    return sel
+
+
+WORKING_DRAFT_LABEL = "Working draft (live)"
+
+
+# ── Prebuilt demo models ───────────────────────────────────────────────────────
+# Small, curated set spanning distinct scenarios. Each is defined as overrides on
+# top of the default model (captured once at init as `_default_model_state`), so the
+# specs stay short and readable. Expand slowly as new representative cases are needed.
+DEMO_MODELS = [
+    {
+        "name": "Growth calibration (Monod)",
+        "description": "Single strain, nutrient-limited (Monod) growth to a plateau — "
+                       "the base model that fits the demonstration dataset "
+                       "(examples/tutorial_synthetic_brg.csv).",
+        "overrides": {
+            "int_builder_mode": "Direct (ModelBuilder)",
+            "int_strains": [{
+                "name": "Strain 0 (WT)", "initial_B": 5e6, "growth_rate": 1.2,
+                "bacteria_to_resource_ratio": 1e8, "death_rate_B": 0.0,
+                "dormancy_enabled": False,
+            }],
+            "int_phages": [{
+                "name": "Phage 0", "initial_P": 0.0, "adsorption_rates": 1e-8,
+                "adsorption_rates_dormant": 0.0, "burst_sizes": 50.0,
+                "latent_periods": 0.5, "phage_decay_rates": 0.1, "pk_mode": "None",
+            }],
+            "int_antibiotics": [],
+            "int_track_nutrients": True,
+            "int_growth_function": "monod_growth",
+            "int_monod_constant": 0.3,
+            "int_initial_S": 1.0,
+            "int_od_to_cfu_conversion_factor": 2e8,
+            "int_debris_enabled": True,
+            "int_debris_u": 0.4,
+            "int_debris_v": 0.2,
+            "int_debris_kdis": 0.01,
+            "int_immunity_enabled": False,
+        },
+    },
+    {
+        "name": "Two-strain resistance (WT + resistant)",
+        "description": "WT plus a phage-resistant strain (Direct mode), one phage. A good "
+                       "model to try reparameterization on — e.g. tie the two strains' "
+                       "growth rates to a single estimated value.",
+        "overrides": {
+            "int_builder_mode": "Direct (ModelBuilder)",
+            "int_strains": [
+                {"name": "WT", "initial_B": 1e7, "growth_rate": 1.2,
+                 "bacteria_to_resource_ratio": 1e8, "death_rate_B": 0.0, "dormancy_enabled": False},
+                {"name": "Resistant", "initial_B": 10.0, "growth_rate": 1.1,
+                 "bacteria_to_resource_ratio": 1e8, "death_rate_B": 0.0, "dormancy_enabled": False},
+            ],
+            "int_phages": [{
+                "name": "Phage 0", "initial_P": 1e6, "adsorption_rates": 1e-8,
+                "adsorption_rates_dormant": 0.0, "burst_sizes": 50.0,
+                "latent_periods": 0.5, "phage_decay_rates": 0.1, "pk_mode": "None",
+            }],
+            "int_antibiotics": [],
+            "int_track_nutrients": True,
+            "int_growth_function": "monod_growth",
+            "int_monod_constant": 0.3,
+            "int_initial_S": 1.0,
+            "int_od_to_cfu_conversion_factor": 2e8,
+            "int_debris_enabled": True,
+            "int_debris_u": 0.4,
+            "int_debris_v": 0.2,
+            "int_debris_kdis": 0.01,
+            "int_immunity_enabled": False,
+        },
+    },
+]
 
 
 # ── Parts library (Tier 2: composable bacteria / phages / antibiotics) ─────────
@@ -1067,6 +1289,48 @@ def dormancy_signal_functions(dsig, rsig):
     return _D.get(dsig, nutrient_dependent_dormancy), _R.get(rsig, nutrient_dependent_resuscitation)
 
 
+def diffusion_signal_functions(sig):
+    """Map a dormancy-depth diffusion signal string to the (deeper, shallower) pbisim
+    function pair (engine ``_DIFFUSION_SIGNALS``). ``constant`` = legacy symmetric,
+    nutrient-independent diffusion."""
+    from pbisim.dormancy.transitions import (
+        constant_diffusion, nutrient_dependent_diffusion_deeper,
+        nutrient_dependent_diffusion_shallower, density_dependent_diffusion_deeper,
+        density_dependent_diffusion_shallower, nutrient_and_density_diffusion_deeper,
+        nutrient_and_density_diffusion_shallower,
+    )
+    return {
+        "constant": (constant_diffusion, constant_diffusion),
+        "nutrient": (nutrient_dependent_diffusion_deeper, nutrient_dependent_diffusion_shallower),
+        "density": (density_dependent_diffusion_deeper, density_dependent_diffusion_shallower),
+        "nutrient+density": (nutrient_and_density_diffusion_deeper, nutrient_and_density_diffusion_shallower),
+    }.get(sig, (constant_diffusion, constant_diffusion))
+
+
+def set_diffusion_functions(config, sig, rec=None):
+    """Set a config's dormancy-depth diffusion functions from a signal string (with the
+    same nutrient-tracking coercion as Direct mode). BRG / StrainSet ``to_config`` don't
+    expose them, so we set the ModelConfig fields directly, post-build. When a repro
+    recorder ``rec`` is given, the assignment is mirrored into the generated script."""
+    track = st.session_state.get("int_growth_function", "monod_growth") in ("monod_growth", "monod_logistic_growth")
+    sig, _ = compat_dormancy_signal(canonical_signal(sig), track)
+    deeper, shallower = diffusion_signal_functions(sig)
+    config.dormancy_diffusion_deeper_function = deeper
+    config.dormancy_diffusion_shallower_function = shallower
+    if rec is not None:
+        rec.diffusion_functions(sig)
+    return config
+
+
+def apply_diffusion_signal(config, strains, rec=None):
+    """StrainSet/Direct: set the depth-diffusion functions from the first dormancy-enabled
+    strain's ``diffusion_signal``. No-op when no strain has dormancy on."""
+    enabled = [s for s in strains if s.get("dormancy_enabled", False)]
+    if not enabled:
+        return config
+    return set_diffusion_functions(config, enabled[0].get("diffusion_signal", "constant"), rec=rec)
+
+
 def mode_dormancy_kwargs(dsig="nutrient", rsig="nutrient", ks=0.0, kdorm=0.0):
     """``to_config`` dormancy kwargs (function objects + Ks / K_dorm) for BRG / StrainSet
     from the selected signal strings, applying the same compatibility coercion as Direct
@@ -1122,7 +1386,24 @@ class _ReproRecorder:
     def __init__(self):
         self.lines = []            # source lines that construct `cfg`
         self.imports = set()       # names to import `from pbisim import ...`
+        self.raw_imports = set()   # full `from X import Y` statements (non-top-level)
         self._render_of = {}       # id(obj) -> source string (inline) or variable name
+
+    def diffusion_functions(self, sig):
+        """Record the post-build depth-diffusion function assignments. BRG / StrainSet
+        ``to_config`` can't take them, so the app sets them on ``cfg`` directly — mirror
+        that in the script. ``constant`` is the config default → nothing to emit."""
+        names = {
+            "nutrient": ("nutrient_dependent_diffusion_deeper", "nutrient_dependent_diffusion_shallower"),
+            "density": ("density_dependent_diffusion_deeper", "density_dependent_diffusion_shallower"),
+            "nutrient+density": ("nutrient_and_density_diffusion_deeper", "nutrient_and_density_diffusion_shallower"),
+        }.get(sig)
+        if not names:
+            return
+        deeper, shallower = names
+        self.raw_imports.add("from pbisim.dormancy.transitions import " + ", ".join(sorted({deeper, shallower})))
+        self.lines.append(f"cfg.dormancy_diffusion_deeper_function = {deeper}")
+        self.lines.append(f"cfg.dormancy_diffusion_shallower_function = {shallower}")
 
     # ---- value rendering ----------------------------------------------------
     def _fval(self, x):
@@ -1338,11 +1619,13 @@ def build_nominal_config_from_gui():
             enabled_strains = [s for s in strains if s.get("dormancy_enabled", False)]
             ds = canonical_signal(enabled_strains[0]["dormancy_signal"]) if enabled_strains else "nutrient"
             rs = canonical_signal(enabled_strains[0]["resuscitation_signal"]) if enabled_strains else "nutrient"
+            dfs = canonical_signal(enabled_strains[0].get("diffusion_signal", "constant")) if enabled_strains else "constant"
             _dorm_ks = float(enabled_strains[0].get("dormancy_monod_constant", 0.0)) if enabled_strains else 0.0
             _dorm_kdorm = float(enabled_strains[0].get("dormancy_carrying_capacity", 0.0)) if enabled_strains else 0.0
-            # nutrient dormancy signals need S tracked; coerce when it isn't.
+            # nutrient dormancy/diffusion signals need S tracked; coerce when it isn't.
             ds, _cd = compat_dormancy_signal(ds, track_nutrients)
             rs, _cr = compat_dormancy_signal(rs, track_nutrients)
+            dfs, _cdf = compat_dormancy_signal(dfs, track_nutrients)
 
             _dorm_kwargs = dict(
                 dormancy_rate=np.array(dormancy_rates),
@@ -1350,13 +1633,14 @@ def build_nominal_config_from_gui():
                 dormancy_diffusion_rate=np.array(diff_rates),
                 dormancy_signal=ds,
                 resuscitation_signal=rs,
+                diffusion_signal=dfs,
             )
-            if _dorm_ks > 0 and any(sig in ("nutrient", "nutrient+density") for sig in (ds, rs)):
+            if _dorm_ks > 0 and any(sig in ("nutrient", "nutrient+density") for sig in (ds, rs, dfs)):
                 _dorm_kwargs["dormancy_monod_constant"] = _dorm_ks
-            # density-based dormancy/resuscitation needs a density threshold. Use the
-            # per-strain dormancy_carrying_capacity when set, else the growth carrying
-            # capacity (Monod growth doesn't set one, so supply it explicitly).
-            if any(sig in ("density", "nutrient+density") for sig in (ds, rs)):
+            # density-based dormancy/resuscitation/diffusion needs a density threshold.
+            # Use the per-strain dormancy_carrying_capacity when set, else the growth
+            # carrying capacity (Monod growth doesn't set one, so supply it explicitly).
+            if any(sig in ("density", "nutrient+density") for sig in (ds, rs, dfs)):
                 _dorm_kwargs["dormancy_carrying_capacity"] = (
                     _dorm_kdorm if _dorm_kdorm > 0 else st.session_state.get("int_carrying_capacity", 1e9))
             builder = rec.call("builder", builder, "with_dormancy", **_dorm_kwargs)
@@ -1503,6 +1787,7 @@ def build_nominal_config_from_gui():
                 v=extra_kwargs.get("debris_v", 0.2),
                 kdis=extra_kwargs.get("debris_kdis", 0.01),
                 od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 2e8),
+                dormant_od_fraction=st.session_state.get("int_dormant_od_fraction", 1.0),
             )
 
         config = rec.result("cfg", "builder", builder, "build")
@@ -1673,6 +1958,11 @@ def build_nominal_config_from_gui():
             phage_pk_config=phage_pk_config,
             **extra_kwargs
         )
+        # BRG.to_config doesn't expose the depth-diffusion signal — set it on the config
+        # directly from the BRG diffusion selector (post-build).
+        if dormancy_enabled:
+            config = set_diffusion_functions(
+                config, st.session_state.get("int_brg_diffusion_signal", "constant"), rec=rec)
 
         # Resolve initial densities
         if st.session_state.get("int_brg_use_eq_ic", False):
@@ -1849,6 +2139,9 @@ def build_nominal_config_from_gui():
             imm_max=st.session_state.get("int_innate_max", 1e7),
             **extra_kwargs  # includes growth_function + monod_constant/recycle/etc.
         )
+        # StrainSet.to_config doesn't expose the depth-diffusion signal — set it on the
+        # config directly from the per-strain diffusion_signal (post-build).
+        config = apply_diffusion_signal(config, strains, rec=rec)
 
         initial_B = np.array([s["initial_B"] for s in strains])
         initial_P = np.array([p["initial_P"] for p in phages])
@@ -1991,6 +2284,7 @@ def generate_reproduction_code() -> str:
         "import numpy as np",
         "import matplotlib.pyplot as plt",
         "from pbisim import " + ", ".join(sorted(imports)),
+        *sorted(rec.raw_imports),
         "",
         "# 1. Build the model configuration",
         *rec.lines,
@@ -2368,6 +2662,17 @@ __all__ = [
     'load_scenario_to_state',
     'export_scenarios_json',
     'import_scenarios_json',
+    'MODEL_SCHEMA_VERSION',
+    'WORKING_DRAFT_LABEL',
+    'DEMO_MODELS',
+    '_is_model_data_key',
+    'dump_model',
+    'apply_model_to_state',
+    'model_config_context',
+    'build_config_from_model',
+    'resolve_model_snapshot',
+    'model_options',
+    'page_model_selector',
     'PARTS_SCHEMA_VERSION',
     'PART_CATEGORIES',
     'PART_SOURCES',
@@ -2384,6 +2689,9 @@ __all__ = [
     'compat_dormancy_signal',
     'growth_nutrient_kwargs',
     'dormancy_signal_functions',
+    'diffusion_signal_functions',
+    'apply_diffusion_signal',
+    'set_diffusion_functions',
     'mode_dormancy_kwargs',
     'death_signal_function',
     'death_kwargs',

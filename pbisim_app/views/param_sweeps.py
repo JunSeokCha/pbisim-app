@@ -6,7 +6,15 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
     st.title("Model Parameter Sweeps")
     st.caption("Sweep any model parameter in 1D or 2D and visualize cellular trajectories and outcome heatmaps.")
+    # Run the whole sweep against a CHOSEN Model (frozen snapshot or live draft), so
+    # the base config, parameter picker, and solves are all consistent and immune to
+    # unrelated builder edits.
+    _sel = page_model_selector("psweep")
+    with model_config_context(resolve_model_snapshot(_sel)):
+        _render_body(theme_mode)
 
+
+def _render_body(theme_mode):
     # Keep the sweep controls alive across navigation (re-seed before they render).
     reseed_widget_config("param_sweep_config", ("p1_", "p2_", "ps_", "pc_"))
 
@@ -23,8 +31,8 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
 
     st.markdown(
-        "<div class='info-banner'>Sweeps are based on the biological model currently configured in the "
-        "<b>Interactive Simulator</b>. Toggle 1D vs 2D sweep type, select parameters, and run.</div>",
+        "<div class='info-banner'>Sweeps are based on the <b>Model selected above</b>. "
+        "Toggle 1D vs 2D sweep type, select parameters, and run.</div>",
         unsafe_allow_html=True,
     )
 

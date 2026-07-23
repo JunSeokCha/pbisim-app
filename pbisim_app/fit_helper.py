@@ -241,7 +241,7 @@ def config_param_snapshot(config):
 
 
 def build_fit_spec(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None,
-                   model_params=None, notes=None):
+                   model_params=None, notes=None, dose_unit="moi"):
     """Assemble a pbisim-fit *fit specification* from the calibration state.
 
     Returns a JSON-serializable dict whose ``dataset`` maps onto
@@ -270,9 +270,10 @@ def build_fit_spec(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None,
                 entry[ok] = col
         if not has_data:
             continue
-        moi = float(cond.get("moi", 0.0) or 0.0)
-        if moi > 0:
-            entry["doses"] = [{"time": 0.0, "amount": f"MOI:{moi:g}", "target": "phage"}]
+        _dose = float(cond.get("moi", 0.0) or 0.0)   # value in `dose_unit`
+        if _dose > 0:
+            _amt = f"{_dose:g}" if dose_unit == "pfu" else f"MOI:{_dose:g}"
+            entry["doses"] = [{"time": 0.0, "amount": _amt, "unit": dose_unit, "target": "phage"}]
         pr = float(cond.get("prerun", 0.0) or 0.0)
         if pr > 0:
             entry["pretreatment_h"] = pr           # stationary pre-grow (TreatmentRecord)

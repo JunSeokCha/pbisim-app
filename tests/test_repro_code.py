@@ -90,6 +90,45 @@ def test_repro_brg_and_strainset_signal_functions(mode):
     assert cfg.death_function.__name__ == "nutrient_dependent_death"
 
 
+@pytest.mark.parametrize("mode", [
+    "Binary Genotypes (BRG)",
+    "Custom Strains & Graph (StrainSet)",
+])
+def test_repro_brg_strainset_diffusion_signal(mode):
+    """BRG / StrainSet set the depth-diffusion functions on the config POST-build (their
+    to_config can't take them). The generated script must mirror that assignment (import
+    + `cfg.dormancy_diffusion_*_function = …`), execute, and match the build path."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    _sel(at, "Bacterial Population Builder Mode").set_value(mode)
+    at.run()
+    _sel(at, "Growth signal function").set_value("nutrient (Monod)")
+    if mode.startswith("Binary"):
+        at.session_state["int_brg_dormancy_enabled"] = True
+        at.run()
+        at.session_state["widget_brg_diffusion_signal"] = "nutrient"
+    else:
+        at.session_state["ss_str_dorm_0"] = True
+        at.run()
+        at.session_state["ss_str_difsig_0"] = "nutrient"
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+
+    built = at.session_state["simulation_config"]
+    code = at.session_state["_last_repro_code"]
+    assert "dormancy_diffusion_deeper_function" in code           # post-build assignment emitted
+    assert "from pbisim.dormancy.transitions import" in code       # non-top-level import emitted
+    ns = {}
+    exec(compile(code, "<repro>", "exec"), ns)
+    cfg = ns["cfg"]
+    assert cfg.dormancy_diffusion_deeper_function.__name__ == "nutrient_dependent_diffusion_deeper"
+    assert (cfg.dormancy_diffusion_deeper_function.__name__
+            == built.dormancy_diffusion_deeper_function.__name__)
+    assert (cfg.dormancy_diffusion_shallower_function.__name__
+            == built.dormancy_diffusion_shallower_function.__name__)
+
+
 # ── full-config parity: the script must reproduce EVERY field, not just signals ──
 
 import dataclasses as _dc

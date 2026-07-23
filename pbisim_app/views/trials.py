@@ -6,10 +6,16 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
     st.title("Clinical Trials & Cohort Simulator")
     st.caption("Generate a virtual population (VPOP), apply statistical variability (IIV), and run matching parallel arms.")
-    
+    # The trial's nominal patient = a CHOSEN Model (frozen snapshot or live draft).
+    _sel = page_model_selector("trial")
+    with model_config_context(resolve_model_snapshot(_sel)):
+        _render_body(theme_mode)
+
+
+def _render_body(theme_mode):
     st.markdown(
-        "<div class='info-banner'>Virtual Cohort simulations use the current biological model configured "
-        "in the <b>Interactive Simulator</b> tab as the baseline 'nominal patient'. Change parameters there first.</div>",
+        "<div class='info-banner'>Virtual Cohort simulations use the <b>Model selected above</b> as the "
+        "baseline 'nominal patient'; IIV then varies it per patient. Arms/dosing are set below.</div>",
         unsafe_allow_html=True,
     )
     

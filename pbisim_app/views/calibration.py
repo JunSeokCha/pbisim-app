@@ -1,5 +1,202 @@
 """Rendered by app.py when this page is selected."""
+import re
+import threading
+import time as _time
+
 from pbisim_app.common import *  # noqa: F401,F403
+
+
+def _pf(s):
+    """Parse a possibly-scientific-notation string to float. Blank/invalid → None.
+    (data_editor NumberColumn won't accept typed `1e9`; TextColumn + this does.)"""
+    if s is None:
+        return None
+    t = str(s).strip()
+    if t == "" or t.lower() in ("nan", "none"):
+        return None
+    try:
+        return float(t)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fit_worker(holder):
+    """Background NLS fit. Writes results into the plain ``holder`` dict only — it
+    never touches ``st`` / ``session_state`` (it runs off the ScriptRunContext), so
+    the Streamlit UI stays responsive and the fit can be abandoned via a Stop button."""
+    try:
+        from pbisim_app import nls_fit as _nls
+        fp = _nls.run_nls_fit_v2(
+            holder["cfg"], holder["targets"], holder["thetas"], holder["mappings"],
+            holder["ds"], holder["obs"], od_to_cfu=holder["od_link"],
+            n_restarts=holder["restarts"], max_nfev=holder["maxnfev"])
+        holder["fp"] = fp
+        holder["status"] = "done"
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        holder["error"] = f"{type(e).__name__}: {e}"
+        holder["status"] = "error"
+
+
+def _apply_map_to_state(map_dict):
+    """Write pbisim-fit MAP path→value results back into the live model dicts /
+    session keys, so a fit updates the Interactive-Simulator model in place.
+
+    Handled paths: growth_rates[i], bacteria_to_resource_ratio[i], death_rate_B[i]
+    → int_strains[i]; burst_sizes[i,j], latent_periods[i,j], phage_decay_rates[j]
+    → int_phages[j]; adsorption_rates[i,j] → ads_{i}_{j} key (+ phage adsorption_s);
+    monod_constant → int_monod_constant.
+    """
+    strains = st.session_state.get("int_strains", [])
+    phages = st.session_state.get("int_phages", [])
+    for path, val in map_dict.items():
+        val = float(val)
+        m1 = re.fullmatch(r"([a-zA-Z_]+)\[(\d+)\]", path)
+        m2 = re.fullmatch(r"([a-zA-Z_]+)\[(\d+),(\d+)\]", path)
+        if path == "monod_constant":
+            st.session_state["int_monod_constant"] = val
+        elif m1:
+            name, i = m1.group(1), int(m1.group(2))
+            if name == "growth_rates" and i < len(strains):
+                strains[i]["growth_rate"] = val
+            elif name in ("bacteria_to_resource_ratio", "death_rate_B") and i < len(strains):
+                strains[i][name] = val
+            elif name == "phage_decay_rates" and i < len(phages):
+                phages[i]["phage_decay_rates"] = val
+        elif m2:
+            name, i, j = m2.group(1), int(m2.group(2)), int(m2.group(3))
+            if name == "adsorption_rates":
+                st.session_state[f"ads_{i}_{j}"] = val
+                if j < len(phages):
+                    phages[j]["adsorption_rates"] = val
+                    phages[j]["adsorption_s"] = val
+            elif name in ("burst_sizes", "latent_periods") and j < len(phages):
+                phages[j][name] = val
+    st.session_state["int_strains"] = strains
+    st.session_state["int_phages"] = phages
+
+
+def _apply_config_to_state(cfg):
+    """Write a fitted pbisim ModelConfig's resolved biological parameters back into the
+    live builder dicts / session keys. Robust for reparameterized fits (reads final
+    values off the config rather than parsing theta names)."""
+    strains = st.session_state.get("int_strains", [])
+    phages = st.session_state.get("int_phages", [])
+
+    def _a1(x):
+        return np.atleast_1d(np.asarray(x, dtype=float)) if x is not None else np.array([])
+
+    _gr, _rr = _a1(getattr(cfg, "growth_rates", None)), _a1(getattr(cfg, "bacteria_to_resource_ratio", None))
+    _db = _a1(getattr(cfg, "death_rate_B", None))
+    for _i, _s in enumerate(strains):
+        if _i < len(_gr): _s["growth_rate"] = float(_gr[_i])
+        if _i < len(_rr): _s["bacteria_to_resource_ratio"] = float(_rr[_i])
+        if _i < len(_db): _s["death_rate_B"] = float(_db[_i])
+    _bs = np.atleast_2d(np.asarray(getattr(cfg, "burst_sizes", [[]]), dtype=float))
+    _lp = np.atleast_2d(np.asarray(getattr(cfg, "latent_periods", [[]]), dtype=float))
+    _ads = np.atleast_2d(np.asarray(getattr(cfg, "adsorption_rates", [[]]), dtype=float))
+    _pdr = _a1(getattr(cfg, "phage_decay_rates", None))
+    for _j, _p in enumerate(phages):
+        if _bs.shape[1] > _j: _p["burst_sizes"] = float(_bs[0, _j])
+        if _lp.shape[1] > _j: _p["latent_periods"] = float(_lp[0, _j])
+        if _j < len(_pdr): _p["phage_decay_rates"] = float(_pdr[_j])
+        if _ads.shape[1] > _j:
+            _p["adsorption_rates"] = float(_ads[0, _j]); _p["adsorption_s"] = float(_ads[0, _j])
+    for _i in range(_ads.shape[0]):
+        for _j in range(_ads.shape[1]):
+            st.session_state[f"ads_{_i}_{_j}"] = float(_ads[_i, _j])
+    if getattr(cfg, "monod_constant", None) is not None:
+        st.session_state["int_monod_constant"] = float(cfg.monod_constant)
+    st.session_state["int_strains"] = strains
+    st.session_state["int_phages"] = phages
+
+
+def _compute_overlay(config, iB, iP, iS, mk, ctx):
+    """Simulate `config` once per arm and project every selected observable into a
+    small-multiples overlay-vs-data result dict (also computes per-obs RMSE/R² and the
+    pooled log10 combined objective J). Shared by the manual overlay button and the
+    post-fit fitted-curve overlay, so both draw the same way. `ctx` bundles the arm/
+    observable selection, aggregated data, and plotting options."""
+    _B0 = float(np.sum(iB))
+    _panels, _metrics = {}, []
+    for _arm in ctx["sel_arms"]:
+        _cond = ctx["arm_cond"].get(_arm, {})
+        _arm_b0 = float(_cond.get("b0", _B0)) or _B0
+        _arm_prerun = float(_cond.get("prerun", 0.0) or 0.0)
+        _moi = float(_cond.get("moi", ctx["conds"].get(_arm, {}).get("moi", 0.0)))
+        _armB = iB * (_arm_b0 / _B0) if _B0 > 0 else iB
+        _armP = np.zeros(len(iP))
+        if len(iP):
+            # dose value is absolute PFU/mL (pfu) or a multiple of B₀ (moi)
+            _armP[0] = _moi if ctx.get("dose_unit") == "pfu" else _moi * _arm_b0
+        _mk_arm = dict(mk)
+        _iS_arm = iS
+        if _arm_prerun > 0:
+            _ic = stationary_phase_ic(config, t_prerun=_arm_prerun, B0=_armB)
+            _armB = _ic.B
+            _iS_arm = max(float(_ic.S), 0.0)
+            if _ic.D is not None:
+                _mk_arm["initial_D"] = _ic.D
+            if _ic.Imm is not None:
+                _mk_arm["initial_Imm"] = _ic.Imm
+            _carry_prerun_debris(_ic, _mk_arm)
+        _m = PBIModel(config, initial_B=_armB, initial_P=_armP, initial_S=_iS_arm, **_mk_arm)
+        _r = solve_ode(_m, t_end=ctx["t_end"], dt=0.25, method=ctx["method"],
+                       extinction_threshold=ctx["thr"])
+        for _ok in ctx["sel_obs"]:
+            _sp = OBSERVABLES.get(_ok, {"log": True, "link": None, "label": _ok})
+            _umo = (_ok == "od" and ctx["debris_on"])
+            _pred = predicted_observable(_r, _ok, ctx["link_vals"].get(_ok), use_model_od=_umo)
+            _d = ctx["agg"][(ctx["agg"]["arm"] == _arm) & (ctx["agg"]["observable"] == _ok)].sort_values("time")
+            if not len(_d):
+                continue
+            _has_band = ctx["band"] is not None and _d["lo"].notna().any()
+            _pan = _panels.setdefault(_ok, {"obs": _ok, "label": _sp.get("label", _ok),
+                                            "log": bool(_sp.get("log")), "series": []})
+            _pan["series"].append({
+                "label": _arm, "time": np.asarray(_r.time), "pred": np.asarray(_pred),
+                "obs_time": _d["time"].to_numpy(), "obs_value": _d["value"].to_numpy(),
+                "obs_lo": _d["lo"].to_numpy() if _has_band else None,
+                "obs_hi": _d["hi"].to_numpy() if _has_band else None,
+                "is_raw": ctx["stat_key"] == "raw",
+            })
+            _resid = residual_vector_log10(_r.time, _pred, _d["time"].values,
+                                           _d["value"].values, _sp.get("floor_log10", 1.0))
+            _metrics.append({"observable": _sp.get("label", _ok), "group": _arm,
+                             "B₀": _arm_b0, "pre-run (h)": _arm_prerun,
+                             ctx.get("dose_label", "MOI"): _moi,
+                             "n_points": len(_d),
+                             "RMSE (log₁₀)": float(np.sqrt(np.mean(_resid ** 2))) if _resid.size else float("nan")})
+
+    _panel_list, _all_resid = [], []
+    for _ok, _pan in _panels.items():
+        _floor = 10.0 ** float(OBSERVABLES.get(_ok, {}).get("floor_log10", 1.0))
+        _oa, _pa = [], []
+        for _s in _pan["series"]:
+            _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
+            _ov = np.asarray(_s["obs_value"], dtype=float)
+            _oa.append(np.log10(np.maximum(_ov, _floor)))
+            _pa.append(np.log10(np.maximum(_pt, _floor)))
+        _oa = np.concatenate(_oa) if _oa else np.array([])
+        _pa = np.concatenate(_pa) if _pa else np.array([])
+        _msk = np.isfinite(_oa) & np.isfinite(_pa)
+        _oa, _pa = _oa[_msk], _pa[_msk]
+        _pan["rmse"] = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
+        _sst = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
+        _pan["r2"] = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _sst) if _sst > 0 else float("nan")
+        _pan["n"] = int(_oa.size)
+        _panel_list.append(_pan)
+        if _oa.size:
+            _all_resid.append(_oa - _pa)
+
+    _all = np.concatenate(_all_resid) if _all_resid else np.array([])
+    _stat_label = ctx["stat"] if ctx["stat_key"] != "raw" else "raw points"
+    return {
+        "panels": _panel_list, "metrics": _metrics,
+        "combined": float(np.sqrt(np.mean(_all ** 2))) if _all.size else float("nan"),
+        "stat_label": _stat_label,
+        "title": ctx.get("title") or (f"Model vs observations ({_stat_label}"
+                 + (f" + {ctx['band_choice']} band)" if ctx["band"] else ")")),
+    }
 
 
 def render():
@@ -23,7 +220,8 @@ def render():
     # button's value pre-sets it, which makes the later st.button() raise. (Text/number
     # widgets are fine to persist.)
     _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
-                      "fit_load", "fit_save_scenario"}
+                      "fit_load", "fit_save_scenario", "fit_run_nls", "fit_apply_map",
+                      "fit_model_sel", "fit_job", "fit_stop", "fit_tbl_reset"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk in _FIT_NOPERSIST:
@@ -69,13 +267,24 @@ def render():
                                         format_func=lambda k: OBSERVABLES[k]["label"])
                 _default_arms = [c for c in _cols if c.lower() in ("phage", "moi", "arm", "experi", "experi_num")]
                 _ac = st.multiselect("Arm-defining column(s)", _cols, default=_default_arms or ([_cols[0]] if _cols else []))
-                _mc = st.selectbox("Phage-dose / MOI column (optional — drives the simulated dose per arm)",
-                                   ["(none)"] + _cols, index=(1 + _guess(["moi", "dose_phage"])) if ("moi" in _low or "dose_phage" in _low) else 0)
+                # Auto-detect a dose column by substring (dose/pfu/moi/titre) so e.g.
+                # `dose_phage_pfu` is picked up without manual selection.
+                _dose_idx = next((i for i, c in enumerate(_low)
+                                  if any(k in c for k in ("dose", "pfu", "moi", "titre", "titer"))), None)
+                _mc = st.selectbox("Phage-dose column (optional — drives the simulated dose per arm)",
+                                   ["(none)"] + _cols,
+                                   index=(1 + _dose_idx) if _dose_idx is not None else 0)
                 _mc = None if _mc == "(none)" else _mc
+                _dunit_lbl = st.radio(
+                    "Dose unit", ["MOI (× B₀)", "PFU/mL (absolute)"],
+                    index=(1 if (_mc and "pfu" in _mc.lower()) else 0), horizontal=True,
+                    help="How to read the dose column: MOI multiplies each arm's B₀; "
+                         "PFU/mL is an absolute phage titre (e.g. a column like dose_phage_pfu).")
             if st.button("Load dataset", key="fit_load", width="stretch"):
                 st.session_state.fit_dataset = {
                     "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
                     "arm_cols": _ac, "moi": _mc,
+                    "dose_unit": ("pfu" if str(_dunit_lbl).startswith("PFU") else "moi"),
                 }
                 st.success(f"Loaded {len(_raw)} rows. Configure grouping / filters / statistics below.")
                 st.rerun()
@@ -88,6 +297,8 @@ def render():
         _raw = _ds["raw"]
         _cols = list(_raw.columns)
         _tc, _vc, _obs, _mc = _ds["time"], _ds["value"], _ds["observable"], _ds["moi"]
+        _dose_unit = _ds.get("dose_unit", "moi")
+        _dose_lbl = "PFU/mL" if _dose_unit == "pfu" else "MOI"
 
         # -- Filters --------------------------------------------------------
         st.markdown("### 2 · Filter rows")
@@ -167,10 +378,13 @@ def render():
             _nom_b0 = float(sum(float(_s.get("initial_B", 0.0))
                                 for _s in st.session_state.get("int_strains", []))) or 1e7
             _arm_cond = {}
-            with st.expander("Per-arm conditions (growth phase · B₀ · MOI)", expanded=False):
+            _dose_help = ("Dose seeds the phage inoculum as an absolute PFU/mL titre for that arm."
+                          if _dose_unit == "pfu" else
+                          "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
+            with st.expander(f"Per-arm conditions (growth phase · B₀ · {_dose_lbl})", expanded=False):
                 st.caption("Log phase → pre-run 0 (fresh inoculum). Stationary phase → set a "
                            "pre-run duration to equilibrate toward carrying capacity before t=0. "
-                           "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
+                           + _dose_help)
                 for _arm in _sel_arms:
                     _cc = st.columns([2, 1, 1, 1])
                     _cc[0].markdown(f"**{_arm}**")
@@ -179,7 +393,7 @@ def render():
                                                   key=f"fit_cond_b0_{_arm}"),
                         "prerun": _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
                                                       key=f"fit_cond_prerun_{_arm}"),
-                        "moi": _cc[3].number_input("MOI", format="%g",
+                        "moi": _cc[3].number_input(_dose_lbl, format="%g",
                                                    value=float(_conds.get(_arm, {}).get("moi", 0.0)),
                                                    key=f"fit_cond_moi_{_arm}"),
                     }
@@ -378,102 +592,21 @@ def render():
             # data in session_state so the visualization stays alive across page
             # navigation (and reruns) until it is explicitly re-run or the dataset
             # is cleared.
+            # Context shared by the manual overlay and the post-fit fitted overlay.
+            _ovl_ctx = {
+                "sel_arms": _sel_arms, "sel_obs": _sel_obs, "arm_cond": _arm_cond,
+                "conds": _conds, "agg": _agg, "link_vals": _link_vals,
+                "debris_on": _debris_on, "band": _band, "band_choice": _band_choice,
+                "stat_key": _stat_key, "stat": _stat, "t_end": _t_end_fit,
+                "dose_unit": _dose_unit, "dose_label": _dose_lbl,
+                "method": st.session_state.get("int_solver_method", "BDF"),
+                "thr": st.session_state.get("int_extinction_threshold", 1.0) or None,
+            }
             if st.button("Overlay model on data", key="fit_overlay", width="stretch", type="primary"):
                 try:
                     _config, _iB, _iP, _iS, _mk = build_nominal_config_from_gui()
-                    _B0 = float(np.sum(_iB))
-                    _method = st.session_state.get("int_solver_method", "BDF")
-                    _thr = st.session_state.get("int_extinction_threshold", 1.0) or None
-                    # One simulation per arm; every selected observable is projected from
-                    # that single trajectory into its own panel (small multiples). Each arm
-                    # applies its own condition: B₀ (scales the inoculum, preserving strain
-                    # proportions), a growth-phase pre-run (stationary_phase_ic), and MOI.
-                    _panels, _metrics = {}, []
-                    for _arm in _sel_arms:
-                        _cond = _arm_cond.get(_arm, {})
-                        _arm_b0 = float(_cond.get("b0", _B0)) or _B0
-                        _arm_prerun = float(_cond.get("prerun", 0.0) or 0.0)
-                        _moi = float(_cond.get("moi", _conds.get(_arm, {}).get("moi", 0.0)))
-                        _armB = _iB * (_arm_b0 / _B0) if _B0 > 0 else _iB
-                        _armP = np.zeros(len(_iP))
-                        if len(_iP):
-                            _armP[0] = _moi * _arm_b0
-                        _mk_arm = dict(_mk)
-                        _iS_arm = _iS
-                        if _arm_prerun > 0:
-                            _ic = stationary_phase_ic(_config, t_prerun=_arm_prerun, B0=_armB)
-                            _armB = _ic.B
-                            _iS_arm = max(float(_ic.S), 0.0)
-                            if _ic.D is not None:
-                                _mk_arm["initial_D"] = _ic.D
-                            if _ic.Imm is not None:
-                                _mk_arm["initial_Imm"] = _ic.Imm
-                            _carry_prerun_debris(_ic, _mk_arm)
-                        _m = PBIModel(_config, initial_B=_armB, initial_P=_armP, initial_S=_iS_arm, **_mk_arm)
-                        _r = solve_ode(_m, t_end=_t_end_fit, dt=0.25, method=_method, extinction_threshold=_thr)
-                        for _ok in _sel_obs:
-                            _sp = OBSERVABLES.get(_ok, {"log": True, "link": None, "label": _ok})
-                            _umo = (_ok == "od" and _debris_on)
-                            _pred = predicted_observable(_r, _ok, _link_vals.get(_ok), use_model_od=_umo)
-                            _d = _agg[(_agg["arm"] == _arm) & (_agg["observable"] == _ok)].sort_values("time")
-                            if not len(_d):
-                                continue  # this arm carries no data for this observable
-                            _has_band = _band is not None and _d["lo"].notna().any()
-                            _pan = _panels.setdefault(_ok, {"obs": _ok, "label": _sp.get("label", _ok),
-                                                            "log": bool(_sp.get("log")), "series": []})
-                            _pan["series"].append({
-                                "label": _arm,
-                                "time": np.asarray(_r.time),
-                                "pred": np.asarray(_pred),
-                                "obs_time": _d["time"].to_numpy(),
-                                "obs_value": _d["value"].to_numpy(),
-                                "obs_lo": _d["lo"].to_numpy() if _has_band else None,
-                                "obs_hi": _d["hi"].to_numpy() if _has_band else None,
-                                "is_raw": _stat_key == "raw",
-                            })
-                            _resid = residual_vector_log10(_r.time, _pred, _d["time"].values,
-                                                           _d["value"].values, _sp.get("floor_log10", 1.0))
-                            _metrics.append({"observable": _sp.get("label", _ok), "group": _arm,
-                                             "B₀": _arm_b0, "pre-run (h)": _arm_prerun, "MOI": _moi,
-                                             "n_points": len(_d),
-                                             "RMSE (log₁₀)": float(np.sqrt(np.mean(_resid ** 2))) if _resid.size else float("nan")})
-
-                    # Every observable is scored in log10 space with its detection floor
-                    # (matching pbisim-fit's NLS objective — no unit-mixing, no weights).
-                    # The combined objective J is the pooled RMSE over EVERY residual (the
-                    # one big least-squares vector NLS minimises), not a mean of per-obs
-                    # RMSEs. (_pan["log"] is left as the plot-axis default: OD stays linear.)
-                    _panel_list, _all_resid = [], []
-                    for _ok, _pan in _panels.items():
-                        _floor = 10.0 ** float(OBSERVABLES.get(_ok, {}).get("floor_log10", 1.0))
-                        _oa, _pa = [], []
-                        for _s in _pan["series"]:
-                            _pt = np.interp(_s["obs_time"], _s["time"], _s["pred"])
-                            _ov = np.asarray(_s["obs_value"], dtype=float)
-                            _oa.append(np.log10(np.maximum(_ov, _floor)))
-                            _pa.append(np.log10(np.maximum(_pt, _floor)))
-                        _oa = np.concatenate(_oa) if _oa else np.array([])
-                        _pa = np.concatenate(_pa) if _pa else np.array([])
-                        _msk = np.isfinite(_oa) & np.isfinite(_pa)
-                        _oa, _pa = _oa[_msk], _pa[_msk]
-                        _pan["rmse"] = float(np.sqrt(np.mean((_oa - _pa) ** 2))) if _oa.size else float("nan")
-                        _sst = float(np.sum((_oa - _oa.mean()) ** 2)) if _oa.size else 0.0
-                        _pan["r2"] = (1.0 - float(np.sum((_oa - _pa) ** 2)) / _sst) if _sst > 0 else float("nan")
-                        _pan["n"] = int(_oa.size)
-                        _panel_list.append(_pan)
-                        if _oa.size:
-                            _all_resid.append(_oa - _pa)
-
-                    _all = np.concatenate(_all_resid) if _all_resid else np.array([])
-                    _stat_label = _stat if _stat_key != "raw" else "raw points"
-                    st.session_state["calib_overlay_result"] = {
-                        "panels": _panel_list,
-                        "metrics": _metrics,
-                        "combined": float(np.sqrt(np.mean(_all ** 2))) if _all.size else float("nan"),
-                        "stat_label": _stat_label,
-                        "title": (f"Model vs observations ({_stat_label}"
-                                  + (f" + {_band_choice} band)" if _band else ")")),
-                    }
+                    st.session_state["calib_overlay_result"] = _compute_overlay(
+                        _config, _iB, _iP, _iS, _mk, _ovl_ctx)
                 except Exception as e:
                     st.session_state["calib_overlay_result"] = None
                     st.error(f"Overlay failed: {e}")
@@ -557,7 +690,7 @@ def render():
                 if _od_link is None and _debris_on:
                     _od_link = st.session_state.get("int_od_to_cfu_conversion_factor")
                 _spec = build_fit_spec(_agg, _sel_arms, _sel_obs, _arm_cond,
-                                       od_to_cfu=_od_link,
+                                       od_to_cfu=_od_link, dose_unit=_dose_unit,
                                        model_params=config_param_snapshot(_spec_cfg))
                 st.download_button(
                     "Download fit spec (JSON)", data=json.dumps(_spec, indent=2),
@@ -565,6 +698,370 @@ def render():
                     key="fit_export_spec", width="stretch")
             except Exception as _e:
                 st.caption(f"(Select at least one group and observable first — {_e})")
+
+            # ── 5c · Run NLS fit (pbisim-fit, in-app) ─────────────────────────
+            st.markdown("### 5c · Run NLS fit (pbisim-fit)")
+            st.caption("Fit the selected parameters to the selected arms/observables with "
+                       "pbisim-fit's non-linear least squares (`refine_nls`) — the same engine "
+                       "the export spec feeds. Runs locally; needs `pbisim-fit` installed.")
+            try:
+                from pbisim_app import nls_fit as _nls
+                # Fit runs against a CHOSEN Model, not the live builder — a frozen
+                # saved/demo model can't be contaminated by unrelated builder edits.
+                _mopts = model_options()
+                _mdef = st.session_state.active_model if st.session_state.active_model in _mopts else WORKING_DRAFT_LABEL
+                _fit_model = st.selectbox(
+                    "Model to fit", _mopts, index=_mopts.index(_mdef), key="fit_model_sel",
+                    help="The base model whose free parameters are estimated. Saved/demo "
+                         "models are frozen snapshots; 'Working draft (live)' uses the "
+                         "current builder state.")
+                _fit_snap = resolve_model_snapshot(_fit_model)
+                _fit_cfg, _fB, _fP, _fS, _fmk = build_config_from_model(_fit_snap)
+                # ── Comprehensive parameter table: fix / free each model parameter ─
+                _targets_cat = _nls.available_targets(
+                    _fit_cfg, initial_cfu=float(np.sum(_fB)) if _fB is not None else None,
+                    initial_pfu=(float(_fP[0]) if _fP is not None and len(_fP) else None))
+                _path_label = {p: lab for (lab, p, *_r) in _targets_cat}
+                _label_to_path = {lab: p for (lab, p, *_r) in _targets_cat}
+                def _bound(s, log, is_lower):
+                    """Blank bound → unconstrained on that side: +inf above; -inf (or 0
+                    for a log-space parameter) below. A set value (scientific notation
+                    accepted) is used verbatim."""
+                    v = _pf(s)
+                    if v is not None:
+                        return float(v)
+                    if not is_lower:
+                        return float("inf")
+                    return 0.0 if log else float("-inf")
+
+                import hashlib as _hl
+                _sig = _hl.md5(("|".join(p for (_l, p, *_r) in _targets_cat) + "|" + _fit_model)
+                               .encode()).hexdigest()[:10]
+                _reset_tbl = st.button("Reset table to model defaults", key="fit_tbl_reset")
+                if st.session_state.get("fit_targets_sig") != _sig or _reset_tbl:
+                    # Bounds blank (= unconstrained); current value = start. Numeric cells
+                    # are TEXT so scientific notation (1e7) can be typed.
+                    _rows = [{"parameter": lab, "path": p, "free": False, "value": f"{v:g}",
+                              "lower": "", "upper": "", "log": bool(log)}
+                             for (lab, p, v, lo_f, hi_f, log) in _targets_cat]
+                    st.session_state["fit_targets_df"] = pd.DataFrame(_rows)
+                    st.session_state["fit_targets_sig"] = _sig
+
+                st.markdown("**Model parameters** — tick **free?** to estimate a parameter; "
+                            "untouched rows stay fixed at their value.")
+                st.caption("Bounds are **optional**: a **blank** *lower*/*upper* means "
+                           "**unconstrained** on that side (fill one, both, or neither). The "
+                           "current *value* is the starting point. Values accept scientific "
+                           "notation (`1e7`). **log** = search in log-space; bounds stay in the "
+                           "parameter's own units (`1e7`, **not** `7`). *Note: any unbounded "
+                           "parameter forces a single start (multi-start needs finite bounds).*")
+                _tg_ed = st.data_editor(
+                    st.session_state["fit_targets_df"], key=f"fit_targets_editor_{_sig}",
+                    hide_index=True, width="stretch",
+                    column_config={
+                        "parameter": st.column_config.TextColumn("parameter", disabled=True),
+                        "path": None,
+                        "free": st.column_config.CheckboxColumn("free?", help="Estimate this parameter"),
+                        "value": st.column_config.TextColumn("value / start",
+                                                             help="Fixed value, or start for a free fit. e.g. 1e8"),
+                        "lower": st.column_config.TextColumn("lower", help="Blank = unbounded below. e.g. 1e7"),
+                        "upper": st.column_config.TextColumn("upper", help="Blank = unbounded above. e.g. 1e10"),
+                        "log": st.column_config.CheckboxColumn(
+                            "log search", help="Optimise in log-space (good for wide positive "
+                            "ranges). Bounds stay in natural units — enter 1e7, not 7."),
+                    })
+                _targets = []
+                for r in _tg_ed.to_dict("records"):
+                    _log = bool(r["log"])
+                    _lo = _bound(r.get("lower"), _log, True)
+                    _hi = _bound(r.get("upper"), _log, False)
+                    if np.isfinite(_lo) and np.isfinite(_hi) and _lo >= _hi:
+                        if r["free"]:
+                            st.warning(f"'{_path_label.get(r['path'], r['path'])}': lower ≥ upper "
+                                       "— treating as unbounded.")
+                        _lo, _hi = (0.0 if _log else float("-inf")), float("inf")
+                    _val = _pf(r.get("value"))
+                    _targets.append({"path": r["path"], "free": bool(r["free"]),
+                                     "value": (_val if _val is not None else 0.0),
+                                     "lo": _lo, "hi": _hi, "log": _log})
+
+                # ── Shared parameters (quick) — tie several to one estimated value ─
+                _shared_groups = st.session_state.setdefault("fit_shared_groups", [])
+                with st.expander("Shared parameters — tie several to one estimated value",
+                                 expanded=bool(_shared_groups)):
+                    st.caption("Pick parameters to share a single estimated value (e.g. WT & "
+                               "resistant growth). Equivalent to one θ mapped to each — a shortcut "
+                               "for the common case. Bounds optional (blank = unconstrained); "
+                               "scientific notation OK.")
+                    for _gi, _g in enumerate(list(_shared_groups)):
+                        _lbls = ", ".join(_path_label.get(p, p) for p in _g["paths"])
+                        _rc = st.columns([8, 1])
+                        _rc[0].markdown(f"**shared #{_gi+1}:** {_lbls}  — start "
+                                        f"{_g.get('initial', '—')}, [{_g['lo']:g}, {_g['hi']:g}]"
+                                        + (" · log" if _g.get("log") else ""))
+                        if _rc[1].button("✕", key=f"fit_shrq_rm_{_gi}"):
+                            _shared_groups.pop(_gi)
+                            st.session_state.fit_shared_groups = _shared_groups
+                            st.rerun()
+                    _sq_pick = st.multiselect("Parameters to tie together",
+                                              [l for (l, *_r) in _targets_cat], key="fit_shrq_pick")
+                    _sc = st.columns(4)
+                    _sq_lo = _sc[0].text_input("lower", key="fit_shrq_lo", help="Blank = unbounded")
+                    _sq_hi = _sc[1].text_input("upper", key="fit_shrq_hi", help="Blank = unbounded")
+                    _sq_init = _sc[2].text_input("initial", key="fit_shrq_init", help="Start value")
+                    _sq_log = _sc[3].checkbox("log", key="fit_shrq_log")
+                    if st.button("Add shared group", key="fit_shrq_add"):
+                        if len(_sq_pick) >= 2:
+                            _lo = _pf(_sq_lo); _hi = _pf(_sq_hi)
+                            _shared_groups.append({
+                                "paths": [_label_to_path[l] for l in _sq_pick],
+                                "lo": (_lo if _lo is not None else (0.0 if _sq_log else float("-inf"))),
+                                "hi": (_hi if _hi is not None else float("inf")),
+                                "log": bool(_sq_log), "initial": _pf(_sq_init)})
+                            st.session_state.fit_shared_groups = _shared_groups
+                            st.rerun()
+                        else:
+                            st.warning("Pick at least two parameters to share.")
+
+                # ── Reparameterization: custom thetas + mappings ───────────────
+                _thetas, _mappings, _theta_bad = [], [], []
+                with st.expander("Reparameterization — custom thetas & mappings", expanded=False):
+                    st.caption("Define your own estimated parameters (θ) with bounds, then map "
+                               "model parameters to expressions of them — e.g. θ1, θ2 with "
+                               "`growth_rates[0] = theta1` and `growth_rates[1] = theta1*(1-theta2)`. "
+                               "Allowed: theta names, numbers, + − * / **, and exp/log/log10/sqrt. "
+                               "A mapped parameter overrides its row in the table above. Bounds & "
+                               "initial accept scientific notation (`1e7`). Bounds are **optional** "
+                               "(blank = unconstrained that side); but a theta has no natural "
+                               "value, so give an **initial** (and/or bounds) — e.g. a theta scaling "
+                               "1e9 should start near 1e9. **log** searches in log-space — bounds "
+                               "stay in natural units (`1e7`, not `7`).")
+                    if "fit_thetas_df" not in st.session_state:
+                        st.session_state["fit_thetas_df"] = pd.DataFrame(
+                            [{"name": "", "lower": "", "upper": "", "log": False, "initial": ""}])
+                    _th_ed = st.data_editor(
+                        st.session_state["fit_thetas_df"], key="fit_thetas_editor",
+                        num_rows="dynamic", hide_index=True, width="stretch",
+                        column_config={
+                            "name": st.column_config.TextColumn("theta name"),
+                            "lower": st.column_config.TextColumn("lower", help="Blank = unbounded below. e.g. 1e7"),
+                            "upper": st.column_config.TextColumn("upper", help="Blank = unbounded above. e.g. 1e10"),
+                            "log": st.column_config.CheckboxColumn(
+                                "log search", help="Log-space search; bounds stay in natural units (1e7, not 7)."),
+                            "initial": st.column_config.TextColumn("initial (start)",
+                                                                   help="Start value — important when unbounded. e.g. 1e9"),
+                        })
+                    _th_names = [str(r["name"]).strip() for r in _th_ed.to_dict("records")
+                                 if str(r.get("name", "")).strip()]
+                    if "fit_map_df" not in st.session_state:
+                        st.session_state["fit_map_df"] = pd.DataFrame({"target": pd.Series(dtype=str),
+                                                                       "expression": pd.Series(dtype=str)})
+                    _mp_ed = st.data_editor(
+                        st.session_state["fit_map_df"], key="fit_map_editor",
+                        num_rows="dynamic", hide_index=True, width="stretch",
+                        column_config={
+                            "target": st.column_config.SelectboxColumn(
+                                "target parameter", options=[l for (l, *_r) in _targets_cat]),
+                            "expression": st.column_config.TextColumn("= expression of thetas"),
+                        })
+                    for r in _mp_ed.to_dict("records"):
+                        _tl = str(r.get("target", "")).strip(); _ex = str(r.get("expression", "")).strip()
+                        if _tl and _ex and _tl in _label_to_path:
+                            _ok, _msg = _nls.validate_expr(_ex, _th_names)
+                            if _ok:
+                                _mappings.append({"path": _label_to_path[_tl], "expr": _ex})
+                            else:
+                                st.warning(f"Mapping '{_tl} = {_ex}' is invalid: {_msg}")
+                    # Only keep thetas actually referenced by a mapping (a declared-but-
+                    # unused theta would be estimated yet affect nothing).
+                    _used_theta = {n for n in _th_names
+                                   if any(re.search(rf"\b{re.escape(n)}\b", m["expr"]) for m in _mappings)}
+                    # Theta bounds are optional: blank → unconstrained on that side
+                    # (0/-inf below, +inf above; log → 0 below). An unbounded theta with
+                    # no initial starts at 1.0 (fine for a multiplier; give an initial for
+                    # a large-scale theta).
+                    _thetas, _theta_bad = [], []
+                    for r in _th_ed.to_dict("records"):
+                        _nm = str(r.get("name", "")).strip()
+                        if _nm not in _used_theta:
+                            continue
+                        _log = bool(r.get("log"))
+                        _lo = _bound(r.get("lower"), _log, True)
+                        _hi = _bound(r.get("upper"), _log, False)
+                        if np.isfinite(_lo) and np.isfinite(_hi) and _lo >= _hi:
+                            _theta_bad.append(_nm)
+                            continue
+                        _thetas.append({"name": _nm, "lo": _lo, "hi": _hi, "log": _log,
+                                        "initial": _pf(r.get("initial"))})
+                    if _theta_bad:
+                        st.warning("theta(s) with lower ≥ upper: "
+                                   + ", ".join(sorted(set(_theta_bad))) + " — fix or blank a bound.")
+
+                # Merge the quick shared-parameter groups: each becomes one theta
+                # (`shared{k}`) mapped onto every parameter in the group.
+                for _si, _g in enumerate(_shared_groups):
+                    _tn = f"shared{_si}"
+                    _thetas.append({"name": _tn, "lo": _g["lo"], "hi": _g["hi"],
+                                    "log": bool(_g.get("log")), "initial": _g.get("initial")})
+                    for _p in _g["paths"]:
+                        _mappings.append({"path": _p, "expr": _tn})
+
+                # OD link (CFU per OD unit): pbisim-fit reads it off the config, so it
+                # is REQUIRED to fit 'od'. Prefer the data's own median CFU/OD ratio
+                # (most principled when both are measured) → debris factor → overlay
+                # link → 2e8; the user can override.
+                _od_link = None
+                if "od" in _sel_obs:
+                    _od_link = _nls.estimate_od_to_cfu(_agg, _sel_arms)
+                    if _od_link is None and _debris_on:
+                        _od_link = st.session_state.get("int_od_to_cfu_conversion_factor")
+                    if _od_link is None:
+                        _od_link = _link_vals.get("od")
+                    _od_link = st.number_input(
+                        "OD link — CFU per OD unit (od_to_cfu)",
+                        min_value=0.0, value=float(_od_link or 2e8), key="fit_nls_od2cfu",
+                        help="Model OD = biomass ÷ this factor. Defaults to the data's "
+                             "median CFU/OD ratio; required to fit the OD observable.")
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    _restarts = int(st.number_input("Restarts", 1, 10, 3, key="fit_nls_restarts"))
+                with _c2:
+                    _maxnfev = int(st.number_input("Max evaluations / restart", 50, 2000, 300,
+                                                   step=50, key="fit_nls_maxnfev"))
+                if _nls.has_unbounded(_targets, _thetas):
+                    st.caption("Unbounded parameter(s) present → the fit uses a **single start** "
+                               "(multi-start needs finite bounds).")
+                _any_free = any(t["free"] for t in _targets) or bool(_thetas)
+                _job = st.session_state.get("fit_job")
+                _running = bool(_job and _job.get("status") == "running")
+                # The fit runs in a background thread so the UI never freezes and a bad
+                # fit can be stopped (pbisim-fit's refine_nls has no cancel hook, so
+                # Stop discards the result; the running restart finishes in the bg).
+                if st.button("Run NLS fit", key="fit_run_nls", type="primary",
+                             width="stretch", disabled=_running):
+                    if _theta_bad:
+                        st.error("theta(s) have lower ≥ upper: "
+                                 + ", ".join(sorted(set(_theta_bad))) + " — fix or blank a bound.")
+                    elif not _any_free:
+                        st.error("Free at least one parameter (tick 'free?') or define a theta.")
+                    elif not _sel_arms or not _sel_obs:
+                        st.error("Select at least one arm and observable above.")
+                    else:
+                        try:
+                            _ds_fit = _nls.build_dataset(_agg, _sel_arms, _sel_obs, _arm_cond,
+                                                         od_to_cfu=_od_link, dose_unit=_dose_unit)
+                            _holder = {
+                                "status": "running", "t0": _time.time(), "fp": None, "error": None,
+                                "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,
+                                "mappings": _mappings, "ds": _ds_fit, "obs": list(_sel_obs),
+                                "od_link": _od_link, "restarts": _restarts, "maxnfev": _maxnfev,
+                                # post-processing context captured now, so edits during the
+                                # fit don't change how the result is interpreted/overlaid.
+                                "fit_model": _fit_model, "path_label": dict(_path_label),
+                                "fB": _fB, "fP": _fP, "fS": _fS, "fmk": _fmk,
+                                "ovl_ctx": dict(_ovl_ctx),
+                            }
+                            st.session_state["fit_job"] = _holder
+                            threading.Thread(target=_fit_worker, args=(_holder,), daemon=True).start()
+                            st.rerun()
+                        except Exception as _fe:
+                            st.error(f"Could not start fit: {_fe}")
+
+                # Poll / render the background fit.
+                _job = st.session_state.get("fit_job")
+                if _job is not None and _job.get("status") == "running":
+                    _el = _time.time() - _job.get("t0", _time.time())
+                    st.info(f"Fitting in the background (~{_el:0.0f}s) — the app stays responsive. "
+                            f"Bounded by {_job['restarts']} restart(s) × {_job['maxnfev']} evals.")
+                    if st.button("Stop fit", key="fit_stop"):
+                        _job["status"] = "cancelled"
+                        st.session_state["fit_job"] = None
+                        st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
+                        st.rerun()
+                    _time.sleep(0.4)
+                    st.rerun()
+                elif _job is not None and _job.get("status") == "done":
+                    _fp = _job["fp"]
+                    try:
+                        _map = _fp.map()
+                        try:
+                            _ci = _fp.credible_interval(0.95)
+                        except Exception:
+                            _ci = {}
+                        _mapped = {m["path"] for m in _job["mappings"]}
+                        _pl = _job["path_label"]
+                        _pmeta = [{"label": _pl.get(t["path"], t["path"]), "key": f"free{k}"}
+                                  for k, t in enumerate(_job["targets"])
+                                  if t["free"] and t["path"] not in _mapped]
+                        _pmeta += [{"label": f"θ {th['name']}", "key": th["name"]}
+                                   for th in _job["thetas"]]
+                        st.session_state["calib_fit_result"] = {
+                            "map": {k: float(v) for k, v in _map.items()},
+                            "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
+                            "params": _pmeta, "model": _job["fit_model"],
+                        }
+                        st.session_state["calib_fitted_config"] = _fp.to_config()
+                        try:
+                            _fovl = dict(_job["ovl_ctx"])
+                            _fovl["title"] = "Fitted model vs observations (NLS MAP)"
+                            if _job["od_link"]:
+                                _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
+                            st.session_state["calib_overlay_result"] = _compute_overlay(
+                                _fp.to_config(), _job["fB"], _job["fP"], _job["fS"], _job["fmk"], _fovl)
+                        except Exception:
+                            pass
+                    finally:
+                        st.session_state["fit_job"] = None
+                    st.rerun()
+                elif _job is not None and _job.get("status") == "error":
+                    st.error(f"Fit failed: {_job.get('error')}")
+                    st.session_state["fit_job"] = None
+
+                _fr = st.session_state.get("calib_fit_result")
+                if _fr:
+                    _rows = []
+                    for _pm in _fr.get("params", []):
+                        _mv = _fr["map"].get(_pm["key"])
+                        _lo, _hi = (_fr["ci"].get(_pm["key"]) or [None, None])
+                        _rows.append({
+                            "parameter": _pm["label"],
+                            "MAP": (f"{_mv:.4g}" if _mv is not None else "—"),
+                            "95% CI low": (f"{_lo:.4g}" if _lo is not None else "—"),
+                            "95% CI high": (f"{_hi:.4g}" if _hi is not None else "—"),
+                        })
+                    st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch")
+                    st.caption("The overlay above already shows the fitted curves. **Apply** writes "
+                               "these values into the model the fit ran against, so every task can reuse it.")
+                    if st.button("Apply fitted values to model", key="fit_apply_map",
+                                 width="stretch"):
+                        _tgt = _fr.get("model", WORKING_DRAFT_LABEL)
+                        # Make the builder the fit's base model, then write the FITTED
+                        # CONFIG's resolved parameters onto it (robust for reparameterized
+                        # fits, where the MAP keys are theta names rather than paths).
+                        _tsnap = resolve_model_snapshot(_tgt)
+                        if _tsnap is not None:
+                            apply_model_to_state(_tsnap)
+                        _fcfg = st.session_state.get("calib_fitted_config")
+                        if _fcfg is not None:
+                            _apply_config_to_state(_fcfg)
+                        # Drop the manual-tuning widgets so they re-seed from the
+                        # updated dicts — otherwise their stale stored values would
+                        # overwrite the just-applied fit on the next rerun.
+                        for _k in [k for k in list(st.session_state.keys())
+                                   if k.startswith("fit_edit_")]:
+                            st.session_state.pop(_k, None)
+                        if _tgt in st.session_state.user_models:
+                            st.session_state.user_models[_tgt]["state"] = dump_model()
+                            st.session_state["_pending_active_model"] = _tgt
+                            st.success(f"Applied fitted values to saved model '{_tgt}' and updated it.")
+                        else:
+                            _reason = ("demo model is read-only" if _tgt != WORKING_DRAFT_LABEL
+                                       else "working draft")
+                            st.success(f"Applied fitted values to the builder ({_reason}) — "
+                                       "save it as a Model (sidebar) to keep.")
+                        st.rerun()
+            except Exception as _e:
+                st.caption(f"(Load data and select parameters to run a fit — {_e})")
 
         # ── 6. Save the calibrated model ─────────────────────────────────────
         if _ds:
@@ -605,7 +1102,13 @@ def render():
     # and re-seeding them would let a stale copy override edits made elsewhere.
     for _wk in list(st.session_state.keys()):
         if (_wk.startswith("fit_") and _wk not in _FIT_NOPERSIST
-                and not _wk.startswith("fit_edit_")):
+                and not _wk.startswith("fit_edit_")
+                and not _wk.startswith("fit_targets")   # parameter table (df + editor + sig)
+                and not _wk.startswith("fit_thetas")     # theta table
+                and not _wk.startswith("fit_map")        # mapping table
+                and not _wk.startswith("fit_shrq_")      # shared-param quick builder widgets
+                and not _wk.startswith("fit_shr_")       # (removed) sharing-builder widgets
+                and not _wk.startswith("fit_der_")):     # (removed) derived-link builder widgets
             st.session_state.fit_config[_wk] = st.session_state[_wk]
 
 

@@ -13,6 +13,13 @@ def render():
         unsafe_allow_html=True,
     )
 
+    # This page edits the live builder draft = the active Model. Loading a saved/demo
+    # Model (sidebar) populates these widgets; edits here diverge from it until re-saved.
+    _am = st.session_state.get("active_model", WORKING_DRAFT_LABEL)
+    if _am != WORKING_DRAFT_LABEL:
+        st.caption(f"Editing a working copy of model **{_am}** — save changes as a Model "
+                   "in the sidebar to keep them; downstream tasks can then select it.")
+
     # 1. Retrieve current lists from state
     strains = st.session_state.get("int_strains", [])
     phages = st.session_state.get("int_phages", [])
@@ -226,6 +233,15 @@ def render():
                                 SIGNAL_OPTIONS,
                                 index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("resuscitation_signal"))),
                                 key=f"str_rsig_{i}",
+                            )
+                            strains[i]["diffusion_signal"] = st.selectbox(
+                                "Depth-diffusion Signal",
+                                SIGNAL_OPTIONS,
+                                index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("diffusion_signal", "constant"))),
+                                key=f"str_difsig_{i}",
+                                help="How cells ratchet between dormancy depths: constant "
+                                     "(legacy symmetric), or nutrient/density-driven — prolonged "
+                                     "starvation drives cells to the deepest layer (delayed death phase).",
                             )
                             _dsig_i = canonical_signal(strains[i].get("dormancy_signal"))
                             _rsig_i = canonical_signal(strains[i].get("resuscitation_signal"))
@@ -481,6 +497,13 @@ def render():
                     st.session_state["int_brg_resus_signal"] = st.selectbox(
                         "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_brs),
                         key="widget_brg_resus_signal")
+                    st.session_state["int_brg_diffusion_signal"] = st.selectbox(
+                        "Depth-diffusion signal", SIGNAL_OPTIONS,
+                        index=SIGNAL_OPTIONS.index(canonical_signal(st.session_state.get("int_brg_diffusion_signal", "constant"))),
+                        key="widget_brg_diffusion_signal",
+                        help="How cells ratchet between dormancy depths: constant (legacy symmetric), "
+                             "or nutrient/density-driven — prolonged starvation drives cells to the "
+                             "deepest layer (delayed death phase).")
                     _bds2 = canonical_signal(st.session_state["int_brg_dorm_signal"])
                     _brs2 = canonical_signal(st.session_state["int_brg_resus_signal"])
                     if "nutrient" in (_bds2, _brs2) or "nutrient+density" in (_bds2, _brs2):
@@ -682,6 +705,11 @@ def render():
                                 help="Model-wide dormancy entry signal (taken from the first dormancy-enabled strain).")
                             strains[i]["resuscitation_signal"] = st.selectbox(
                                 "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_srs), key=f"ss_str_rsig_{i}")
+                            strains[i]["diffusion_signal"] = st.selectbox(
+                                "Depth-diffusion signal", SIGNAL_OPTIONS,
+                                index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("diffusion_signal", "constant"))),
+                                key=f"ss_str_difsig_{i}",
+                                help="Depth-diffusion signal (from the first dormancy-enabled strain).")
                             _sds2 = canonical_signal(strains[i]["dormancy_signal"])
                             _srs2 = canonical_signal(strains[i]["resuscitation_signal"])
                             if "nutrient" in (_sds2, _srs2) or "nutrient+density" in (_sds2, _srs2):
@@ -1134,6 +1162,14 @@ def render():
                     "Debris dissolution rate (k_dis)",
                     value=float(st.session_state.get("int_debris_kdis", 0.01)),
                     step=0.05,
+                )
+                st.session_state["int_dormant_od_fraction"] = st.number_input(
+                    "Dormant OD contribution fraction",
+                    min_value=0.0, max_value=1.0,
+                    value=float(st.session_state.get("int_dormant_od_fraction", 1.0)),
+                    step=0.1,
+                    help="Weight of dormant (D+H) cells in OD: 1.0 = counts like active cells "
+                         "(default); lower if dormant cells scatter less light.",
                 )
                 st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
                     "OD-to-CFU conversion factor",

@@ -184,6 +184,11 @@ _init_app_state()
 if "int_strains" not in st.session_state:
     load_preset_to_state(DEFAULT_SCENARIO)
 
+# Capture the pristine default Model once (organism/kinetics only) — prebuilt demo
+# models are materialised as overrides on top of this snapshot.
+if "_default_model_state" not in st.session_state:
+    st.session_state["_default_model_state"] = dump_model()
+
 
 
 
@@ -259,6 +264,65 @@ with st.sidebar:
     st.session_state.current_page = st.session_state.current_page_radio
 
     sign_out_control()
+
+    # ── Models ────────────────────────────────────────────────────────────────
+    # The active Model = the organism/kinetics config the builder reflects. Saved &
+    # demo models are frozen; downstream tasks (sweeps, trials, fitting) run against
+    # a chosen Model, so the live builder can't silently contaminate them.
+    st.markdown("---")
+    st.markdown("<div class='section-label' style='margin-bottom:4px'>MODELS</div>",
+                unsafe_allow_html=True)
+    # Apply a pending programmatic model activation (from Save) BEFORE the selectbox
+    # is instantiated, so its keyed value can be set (and won't revert the choice).
+    _pend_model = st.session_state.pop("_pending_active_model", None)
+    if _pend_model is not None:
+        st.session_state.active_model = _pend_model
+        st.session_state.sidebar_model_pick = _pend_model
+    _mopts = model_options()
+    if st.session_state.get("sidebar_model_pick") not in _mopts:
+        st.session_state.pop("sidebar_model_pick", None)
+    _active = st.session_state.active_model if st.session_state.active_model in _mopts else WORKING_DRAFT_LABEL
+    _msel = st.selectbox("Active model", _mopts, index=_mopts.index(_active),
+                         key="sidebar_model_pick", label_visibility="collapsed")
+    _mdesc = None
+    _demos = {d["name"]: d for d in DEMO_MODELS}
+    if _msel in _demos:
+        _mdesc = _demos[_msel]["description"]
+    elif _msel in st.session_state.user_models:
+        _mdesc = st.session_state.user_models[_msel].get("description")
+    if _msel == WORKING_DRAFT_LABEL:
+        st.caption("Live builder state — edits here flow to any task using this option.")
+    elif _mdesc:
+        st.caption(_mdesc)
+    if _msel != st.session_state.active_model:
+        # user switched models → load the chosen one into the builder
+        if _msel != WORKING_DRAFT_LABEL:
+            _snap = resolve_model_snapshot(_msel)
+            if _snap is not None:
+                apply_model_to_state(_snap)
+        st.session_state.active_model = _msel
+        st.session_state["_flash"] = {"kind": "success",
+                                      "msg": f"Model '{_msel}' loaded into the builder."}
+        st.session_state["_nav_to"] = "Interactive Simulator"
+        st.rerun()
+    with st.expander("Save current builder as a Model", expanded=False):
+        _mname = st.text_input("Model name", key="save_model_name",
+                               placeholder="e.g. E. coli + T4 (lit.)")
+        _mdescr = st.text_input("Description (optional)", key="save_model_desc")
+        if st.button("Save model", key="save_model_btn", width="stretch"):
+            _nm = (_mname or "").strip()
+            if not _nm:
+                st.error("Enter a model name.")
+            elif _nm in (list(_demos) + [WORKING_DRAFT_LABEL]):
+                st.error("That name is reserved — choose another.")
+            else:
+                _um = st.session_state.user_models
+                _um[_nm] = {"description": (_mdescr or "").strip(), "source": "user",
+                            "schema_version": MODEL_SCHEMA_VERSION, "state": dump_model()}
+                st.session_state.user_models = _um
+                st.session_state["_pending_active_model"] = _nm
+                st.session_state["_flash"] = {"kind": "success", "msg": f"Saved model '{_nm}'."}
+                st.rerun()
 
     st.markdown("---")
     with st.expander("AI & model settings", expanded=False):

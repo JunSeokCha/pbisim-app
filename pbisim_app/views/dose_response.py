@@ -6,7 +6,13 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
     st.title("Dose-Response Simulator")
     st.caption("Perform multi-drug dose-response sweeps with MOI scaling, vector padding, and raw time-series visualization.")
+    # Run the sweep against a CHOSEN Model (frozen snapshot or live draft).
+    _sel = page_model_selector("dresp")
+    with model_config_context(resolve_model_snapshot(_sel)):
+        _render_body(theme_mode)
 
+
+def _render_body(theme_mode):
     # Keep the sweep controls alive across navigation (re-seed before they render).
     reseed_widget_config("dr_sweep_config", ("dr_sweep_",))
 
@@ -16,8 +22,8 @@ def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
 
     st.markdown(
-        "<div class='info-banner'>Sweeps are based on the biological model currently configured in the "
-        "<b>Interactive Simulator</b>. Change biological parameters (e.g. growth rates, adsorption) there first.</div>",
+        "<div class='info-banner'>Sweeps are based on the <b>Model selected above</b>. "
+        "Change biological parameters (e.g. growth rates, adsorption) via the builder / a saved Model.</div>",
         unsafe_allow_html=True,
     )
 
