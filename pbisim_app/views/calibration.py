@@ -753,7 +753,8 @@ def render():
                     # Bounds blank (= unconstrained); current value = start. Numeric cells
                     # are TEXT so scientific notation (1e7) can be typed.
                     _rows = [{"parameter": lab, "path": p, "free": False, "value": f"{v:g}",
-                              "lower": "", "upper": "", "log": bool(log)}
+                              "lower": "", "upper": "", "log": bool(log),
+                              "prior μ": "", "prior σ": ""}
                              for (lab, p, v, lo_f, hi_f, log) in _targets_cat]
                     st.session_state["fit_targets_df"] = pd.DataFrame(_rows)
                     st.session_state["fit_targets_sig"] = _sig
@@ -761,11 +762,11 @@ def render():
                 st.markdown("**Model parameters** — tick **free?** to estimate a parameter; "
                             "untouched rows stay fixed at their value.")
                 st.caption("Bounds are **optional**: a **blank** *lower*/*upper* means "
-                           "**unconstrained** on that side (fill one, both, or neither). The "
-                           "current *value* is the starting point. Values accept scientific "
-                           "notation (`1e7`). **log** = search in log-space; bounds stay in the "
-                           "parameter's own units (`1e7`, **not** `7`). *Note: any unbounded "
-                           "parameter forces a single start (multi-start needs finite bounds).*")
+                           "**unconstrained** on that side. The current *value* is the start. "
+                           "Values accept scientific notation (`1e7`). **log** = log-space search "
+                           "(bounds still in natural units). Optional **prior μ/σ** add a Gaussian "
+                           "prior → a **MAP** estimate (tight σ pulls toward μ; blank = no prior). "
+                           "*Any unbounded parameter forces a single start.*")
                 _tg_ed = st.data_editor(
                     st.session_state["fit_targets_df"], key=f"fit_targets_editor_{_sig}",
                     hide_index=True, width="stretch",
@@ -780,6 +781,10 @@ def render():
                         "log": st.column_config.CheckboxColumn(
                             "log search", help="Optimise in log-space (good for wide positive "
                             "ranges). Bounds stay in natural units — enter 1e7, not 7."),
+                        "prior μ": st.column_config.TextColumn("prior μ",
+                                                               help="Optional Gaussian prior mean → MAP. e.g. 1.2"),
+                        "prior σ": st.column_config.TextColumn("prior σ",
+                                                               help="Prior stdev (needs both μ and σ; blank = no prior)"),
                     })
                 _targets = []
                 for r in _tg_ed.to_dict("records"):
@@ -794,10 +799,17 @@ def render():
                     _val = _pf(r.get("value"))
                     _targets.append({"path": r["path"], "free": bool(r["free"]),
                                      "value": (_val if _val is not None else 0.0),
-                                     "lo": _lo, "hi": _hi, "log": _log})
+                                     "lo": _lo, "hi": _hi, "log": _log,
+                                     "prior_mu": _pf(r.get("prior μ")), "prior_sd": _pf(r.get("prior σ"))})
 
                 # ── Shared parameters (quick) — tie several to one estimated value ─
                 _shared_groups = st.session_state.setdefault("fit_shared_groups", [])
+                # Clear the builder widgets BEFORE they render (canonical Streamlit reset:
+                # a pending flag set by Add, applied here prior to instantiation).
+                if st.session_state.pop("_shrq_clear", False):
+                    for _k in ("fit_shrq_pick", "fit_shrq_lo", "fit_shrq_hi",
+                               "fit_shrq_init", "fit_shrq_log"):
+                        st.session_state.pop(_k, None)
                 with st.expander("Shared parameters — tie several to one estimated value",
                                  expanded=bool(_shared_groups)):
                     st.caption("Pick parameters to share a single estimated value (e.g. WT & "
@@ -835,10 +847,8 @@ def render():
                                 "hi": (_hi if _hi is not None else float("inf")),
                                 "log": bool(_sq_log), "initial": _pf(_sq_init)})
                             st.session_state.fit_shared_groups = _shared_groups
-                            # Clear the builder inputs so the next group starts blank.
-                            for _k in ("fit_shrq_pick", "fit_shrq_lo", "fit_shrq_hi",
-                                       "fit_shrq_init", "fit_shrq_log"):
-                                st.session_state.pop(_k, None)
+                            # Clear the builder inputs on the next run (see top of section).
+                            st.session_state["_shrq_clear"] = True
                             st.rerun()
                         else:
                             st.warning("Pick at least two parameters to share.")
@@ -858,7 +868,8 @@ def render():
                                "stay in natural units (`1e7`, not `7`).")
                     if "fit_thetas_df" not in st.session_state:
                         st.session_state["fit_thetas_df"] = pd.DataFrame(
-                            [{"name": "", "lower": "", "upper": "", "log": False, "initial": ""}])
+                            [{"name": "", "lower": "", "upper": "", "log": False, "initial": "",
+                              "prior μ": "", "prior σ": ""}])
                     _th_ed = st.data_editor(
                         st.session_state["fit_thetas_df"], key="fit_thetas_editor",
                         num_rows="dynamic", hide_index=True, width="stretch",
@@ -870,6 +881,10 @@ def render():
                                 "log search", help="Log-space search; bounds stay in natural units (1e7, not 7)."),
                             "initial": st.column_config.TextColumn("initial (start)",
                                                                    help="Start value — important when unbounded. e.g. 1e9"),
+                            "prior μ": st.column_config.TextColumn("prior μ",
+                                                                   help="Optional Gaussian prior mean → MAP. e.g. 1.2"),
+                            "prior σ": st.column_config.TextColumn("prior σ",
+                                                                   help="Prior stdev (needs both μ and σ; blank = no prior)"),
                         })
                     _th_names = [str(r["name"]).strip() for r in _th_ed.to_dict("records")
                                  if str(r.get("name", "")).strip()]
@@ -912,7 +927,8 @@ def render():
                             _theta_bad.append(_nm)
                             continue
                         _thetas.append({"name": _nm, "lo": _lo, "hi": _hi, "log": _log,
-                                        "initial": _pf(r.get("initial"))})
+                                        "initial": _pf(r.get("initial")),
+                                        "prior_mu": _pf(r.get("prior μ")), "prior_sd": _pf(r.get("prior σ"))})
                     if _theta_bad:
                         st.warning("theta(s) with lower ≥ upper: "
                                    + ", ".join(sorted(set(_theta_bad))) + " — fix or blank a bound.")
@@ -1034,15 +1050,21 @@ def render():
                         try:
                             # If B₀ / initial phage were estimated (fit_initial_cfu/pfu),
                             # reflect them in the overlay's inoculum so the fitted curve
-                            # actually matches the data (the fit used them as the ICs).
+                            # matches the data (the fit used them as the ICs). NOTE: the
+                            # per-arm condition editor sets arm_cond["b0"], which overrides
+                            # the nominal B₀ inside _compute_overlay — so the estimate must
+                            # be written into arm_cond, not just the iB vector.
                             _fB2, _fP2 = _job["fB"], _job["fP"]
+                            _fovl = dict(_job["ovl_ctx"])
                             _ic = getattr(_fcfg, "fit_initial_cfu", None)
-                            if _ic is not None and np.isfinite(_ic) and _ic > 0 and float(np.sum(_fB2)) > 0:
-                                _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
+                            if _ic is not None and np.isfinite(_ic) and _ic > 0:
+                                if float(np.sum(_fB2)) > 0:
+                                    _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
+                                _fovl["arm_cond"] = {a: {**c, "b0": float(_ic)}
+                                                     for a, c in _job["ovl_ctx"]["arm_cond"].items()}
                             _ip = getattr(_fcfg, "fit_initial_pfu", None)
                             if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
                                 _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
-                            _fovl = dict(_job["ovl_ctx"])
                             _fovl["title"] = "Fitted model vs observations (NLS MAP)"
                             if _job["od_link"]:
                                 _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])

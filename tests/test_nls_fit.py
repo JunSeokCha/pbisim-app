@@ -234,6 +234,25 @@ def test_unbounded_and_one_sided_bounds():
     assert 5e7 < m["free1"] < 2e8
 
 
+def test_prior_regularizes_map_estimate():
+    """A Gaussian prior (prior_mu/prior_sd) turns the NLS into a MAP estimate: a tight
+    prior pulls the estimate toward its mean, away from the data-only value (~1.2)."""
+    from pbisim_fit.synthetic import reference_config
+    cfg = reference_config()
+    ds = nls.build_dataset(_agg_from_csv(), ["control"], ["cfu"], {}, od_to_cfu=None)
+
+    def _fit(prior):
+        t = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
+              "lo": 0.1, "hi": 3.0, "log": False}]
+        if prior:
+            t[0]["prior_mu"], t[0]["prior_sd"] = prior
+        return nls.run_nls_fit_v2(cfg, t, [], [], ds, ["cfu"], n_restarts=2, max_nfev=200).map()["free0"]
+
+    assert 1.0 < _fit(None) < 1.4              # data-only ≈ 1.2
+    assert abs(_fit((0.6, 0.03)) - 0.6) < 0.05  # tight prior at 0.6 dominates
+    assert abs(_fit((2.0, 0.03)) - 2.0) < 0.05  # tight prior at 2.0 dominates
+
+
 def test_nls_fit_recovers_growth_from_tutorial_csv():
     """The headline check: CSV → refine_nls recovers the control-arm growth rate
     and yield (Monod base config, CFU + OD, few restarts)."""

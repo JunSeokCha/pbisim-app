@@ -374,13 +374,23 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None):
 
     from pbisim_fit import Reparam
     rp = Reparam(base_config)
+
+    def _prior(d):
+        """Optional Gaussian prior (mu, sd) — a MAP penalty toward mu with spread sd
+        (natural scale; log params map to log-normal). Both required, sd > 0."""
+        mu, sd = d.get("prior_mu"), d.get("prior_sd")
+        if mu is not None and sd is not None and float(sd) > 0:
+            return (float(mu), float(sd))
+        return None
+
     for th in thetas:
         init = th.get("initial")
         _log = bool(th.get("log"))
         _fallback = float(init) if init not in (None, "") else 1.0
         rp = rp.param(th["name"], th["lo"], th["hi"], log_scale=_log,
                       initial=(float(init) if init not in (None, "")
-                               else _safe_initial(th["lo"], th["hi"], _log, _fallback)))
+                               else _safe_initial(th["lo"], th["hi"], _log, _fallback)),
+                      prior=_prior(th))
     for k, t in enumerate(targets):
         p = t["path"]
         if p in mapped_paths:
@@ -389,7 +399,8 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None):
             nm = f"free{k}"
             _log = bool(t.get("log"))
             rp = rp.param(nm, t["lo"], t["hi"], log_scale=_log,
-                          initial=_safe_initial(t["lo"], t["hi"], _log, t["value"]))
+                          initial=_safe_initial(t["lo"], t["hi"], _log, t["value"]),
+                          prior=_prior(t))
             rp = rp.set(p, (lambda tt, n=nm: getattr(tt, n)))
         else:
             # fixed: pin only when the value differs from the base config. Params that

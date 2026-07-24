@@ -198,6 +198,41 @@ def test_apply_writes_estimated_initial_cfu():
     assert len(at.exception) == 0
 
 
+def test_fitted_overlay_uses_estimated_initial_cfu():
+    """The auto-drawn fitted overlay must use the ESTIMATED B0 (fit_initial_cfu), not
+    the model's — the per-arm condition b0 would otherwise override it."""
+    at = AppTest.from_file(APP, default_timeout=250)
+    at.run()
+    df = pd.read_csv("pbisim_app/examples/tutorial_synthetic_brg.csv")
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "time", "value": "value", "observable": "observable",
+        "arm_cols": ["arm"], "moi": None}
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_model_sel"] = "Growth calibration (Monod)"
+    at.session_state["fit_arms"] = ["control"]
+    at.session_state["fit_obs_sel"] = ["cfu"]
+    at.session_state["int_strains"][0]["initial_B"] = 1e9   # deliberately wrong (data ~5e6)
+    at.run()
+    tdf = at.session_state["fit_targets_df"].copy()
+    for i, r in tdf.iterrows():
+        if r["path"] in ("growth_rates[0]", "fit_initial_cfu"):
+            tdf.at[i, "free"] = True
+            if r["path"] == "fit_initial_cfu":
+                tdf.at[i, "lower"] = "1e3"; tdf.at[i, "upper"] = "1e11"
+            else:
+                tdf.at[i, "lower"] = "0.1"; tdf.at[i, "upper"] = "3.0"
+    at.session_state["fit_targets_df"] = tdf
+    at.session_state["fit_nls_restarts"] = 1
+    at.session_state["fit_nls_maxnfev"] = 200
+    at.run()
+    [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    est = at.session_state["calib_fitted_config"].fit_initial_cfu
+    b0_used = [m["B₀"] for m in at.session_state["calib_overlay_result"]["metrics"]]
+    assert all(abs(b - est) / est < 1e-6 for b in b0_used)     # overlay used the estimate
+    assert at.session_state["calib_overlay_result"]["combined"] < 0.3   # so it matches data
+
+
 def test_unbounded_params_run_single_start():
     """Blank bounds mean UNCONSTRAINED (not blocked, not a silent [0,1]). An unbounded
     parameter forces a single start (multi-start needs finite bounds) but still fits
