@@ -22,12 +22,23 @@ APP = "pbisim_app/app.py"
 
 
 def _free_targets(at, paths):
-    """Tick 'free?' for the given parameter paths in the fit target table (AppTest
+    """Set role='Free' for the given parameter paths in the unified fit table (AppTest
     can't click data_editor cells, so we edit the stable source df directly)."""
     tdf = at.session_state["fit_targets_df"].copy()
     for i, r in tdf.iterrows():
         if r["path"] in paths:
-            tdf.at[i, "free"] = True
+            tdf.at[i, "role"] = "Free"
+    at.session_state["fit_targets_df"] = tdf
+
+
+def _derive_targets(at, path_expr):
+    """Set role='Derived' + an expression for each {path: expr} — mappings now live on
+    the parameter rows, not a separate map table."""
+    tdf = at.session_state["fit_targets_df"].copy()
+    for i, r in tdf.iterrows():
+        if r["path"] in path_expr:
+            tdf.at[i, "role"] = "Derived"
+            tdf.at[i, "expression"] = path_expr[r["path"]]
     at.session_state["fit_targets_df"] = tdf
 
 
@@ -141,9 +152,8 @@ def test_reparameterization_theta_mapping():
     at.session_state["fit_thetas_df"] = pd.DataFrame([
         {"name": "theta1", "lower": "0.1", "upper": "3.0", "log": False, "initial": "1.0"},
         {"name": "theta2", "lower": "0.0", "upper": "0.9", "log": False, "initial": "0.1"}])
-    at.session_state["fit_map_df"] = pd.DataFrame([
-        {"target": "Growth rate — strain 0 (h⁻¹)", "expression": "theta1"},
-        {"target": "Growth rate — strain 1 (h⁻¹)", "expression": "theta1*(1-theta2)"}])
+    _derive_targets(at, {"growth_rates[0]": "theta1",
+                         "growth_rates[1]": "theta1*(1-theta2)"})
     at.session_state["fit_nls_restarts"] = 2
     at.session_state["fit_nls_maxnfev"] = 250
     at.run()
@@ -217,7 +227,7 @@ def test_fitted_overlay_uses_estimated_initial_cfu():
     tdf = at.session_state["fit_targets_df"].copy()
     for i, r in tdf.iterrows():
         if r["path"] in ("growth_rates[0]", "fit_initial_cfu"):
-            tdf.at[i, "free"] = True
+            tdf.at[i, "role"] = "Free"
             if r["path"] == "fit_initial_cfu":
                 tdf.at[i, "lower"] = "1e3"; tdf.at[i, "upper"] = "1e11"
             else:
@@ -231,6 +241,75 @@ def test_fitted_overlay_uses_estimated_initial_cfu():
     b0_used = [m["B₀"] for m in at.session_state["calib_overlay_result"]["metrics"]]
     assert all(abs(b - est) / est < 1e-6 for b in b0_used)     # overlay used the estimate
     assert at.session_state["calib_overlay_result"]["combined"] < 0.3   # so it matches data
+
+
+def test_fit_spec_text_applies_to_tables_and_fits():
+    """The text spec applies to the fix/free tables (two-way) and the resulting fit
+    runs — a theta with a prior + a mapping, entered as text."""
+    at = AppTest.from_file(APP, default_timeout=250)
+    at.run()
+    at.session_state["sidebar_model_pick"] = "Two-strain resistance (WT + resistant)"
+    at.run()
+    df = pd.read_csv("pbisim_app/examples/tutorial_synthetic_brg.csv")
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "time", "value": "value", "observable": "observable",
+        "arm_cols": ["arm"], "moi": None}
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_model_sel"] = "Two-strain resistance (WT + resistant)"
+    at.session_state["fit_arms"] = ["control"]
+    at.session_state["fit_obs_sel"] = ["cfu"]
+    at.run()
+    at.session_state["_spec_pending"] = (
+        "theta g bounds=0.1..3.0 prior=1.2,0.3\n"
+        "map growth_rates[0] = g\nmap growth_rates[1] = g")
+    at.run()
+    [b for b in at.button if b.key == "fit_spec_to_tables"][0].click().run()
+    assert not any(m.value for m in at.error)                 # parsed cleanly
+    assert list(at.session_state["fit_thetas_df"]["name"]) == ["g"]
+    _tdf = at.session_state["fit_targets_df"]
+    assert (_tdf["role"] == "Derived").sum() == 2             # mappings on the target rows
+    at.session_state["fit_nls_restarts"] = 1
+    at.session_state["fit_nls_maxnfev"] = 150
+    at.run()
+    [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    assert len(at.exception) == 0
+    assert "g" in {p["key"] for p in at.session_state["calib_fit_result"]["params"]}
+
+
+def test_share_helper_ties_rows_to_one_theta():
+    """The one-click Share helper sets the picked parameter rows to role='Derived' with
+    a common θ and appends that θ to the θ table — the unified-table way to share."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["sidebar_model_pick"] = "Two-strain resistance (WT + resistant)"
+    at.run()
+    df = pd.read_csv("pbisim_app/examples/tutorial_synthetic_brg.csv")
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "time", "value": "value", "observable": "observable",
+        "arm_cols": ["arm"], "moi": None}
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_model_sel"] = "Two-strain resistance (WT + resistant)"
+    at.session_state["fit_arms"] = ["control"]
+    at.session_state["fit_obs_sel"] = ["cfu"]
+    at.run()  # build the target table for this model
+    gl = [l for l in at.session_state["fit_targets_df"]["parameter"] if "Growth rate" in l][:2]
+    assert len(gl) == 2
+    at.session_state["fit_share_pick"] = gl
+    [b for b in at.button if b.key == "fit_share_go"][0].click().run()
+    tdf = at.session_state["fit_targets_df"]
+    derived = tdf[tdf["role"] == "Derived"]
+    # both growth rows are now Derived, tied to one auto-named θ
+    assert set(derived["parameter"]) == set(gl)
+    _exprs = set(derived["expression"])
+    assert len(_exprs) == 1
+    theta = _exprs.pop()
+    assert theta in list(at.session_state["fit_thetas_df"]["name"])
+    # a Derived row draws everything from its θ → its value/bounds/prior cells are blanked
+    for _c in ("value", "lower", "upper", "prior μ", "prior σ"):
+        assert all(str(v).strip() == "" for v in derived[_c])
+    assert len(at.exception) == 0
 
 
 def test_unbounded_params_run_single_start():
@@ -254,9 +333,9 @@ def test_unbounded_params_run_single_start():
     tdf = at.session_state["fit_targets_df"].copy()
     for i, r in tdf.iterrows():
         if r["path"] == "growth_rates[0]":
-            tdf.at[i, "free"] = True
+            tdf.at[i, "role"] = "Free"
         if r["path"] == "bacteria_to_resource_ratio[0]":
-            tdf.at[i, "free"] = True
+            tdf.at[i, "role"] = "Free"
             tdf.at[i, "lower"] = 1e6            # upper stays blank → unbounded above
     at.session_state["fit_targets_df"] = tdf
     at.session_state["fit_nls_restarts"] = 3   # will be capped to 1 internally
@@ -287,8 +366,7 @@ def test_invalid_theta_range_blocks_fit():
     at.run()
     at.session_state["fit_thetas_df"] = pd.DataFrame(
         [{"name": "g", "lower": "5.0", "upper": "2.0", "log": False, "initial": "1.0"}])  # lower > upper
-    at.session_state["fit_map_df"] = pd.DataFrame(
-        [{"target": "Growth rate — strain 0 (h⁻¹)", "expression": "g"}])
+    _derive_targets(at, {"growth_rates[0]": "g"})
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
     assert "calib_fit_result" not in at.session_state or at.session_state["calib_fit_result"] is None

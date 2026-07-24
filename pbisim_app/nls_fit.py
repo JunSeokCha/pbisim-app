@@ -188,6 +188,180 @@ def _make_expr_fn(expr, theta_names):
     return fn
 
 
+# ── Fit-spec DSL (statement-based, two-way with the fix/free tables) ───────────
+# Grammar (one statement per line; # comments):
+#   free  <path>  [init=X] [bounds=LO..HI] [prior=MU,SD] [log]
+#   fix   <path> = <value>
+#   theta <name>  [init=X] [bounds=LO..HI] [prior=MU,SD] [log]
+#   map   <path> = <expression of thetas>
+# Unmentioned parameters stay fixed at their model value.
+
+def _g(x):
+    """Compact numeric render (scientific where sensible)."""
+    try:
+        return f"{float(x):g}"
+    except (TypeError, ValueError):
+        return str(x)
+
+
+def _bounds_prior_tokens(lo, hi, log, mu, sd):
+    toks = []
+    lo, hi = float(lo), float(hi)
+    _lo_unb = (not np.isfinite(lo)) or (log and lo <= 0)
+    _hi_unb = not np.isfinite(hi)
+    if not (_lo_unb and _hi_unb):
+        toks.append("bounds=" + ("" if _lo_unb else _g(lo)) + ".." + ("" if _hi_unb else _g(hi)))
+    if log:
+        toks.append("log")
+    if mu is not None and sd is not None:
+        toks.append(f"prior={_g(mu)},{_g(sd)}")
+    return toks
+
+
+def _parse_opts(tokens):
+    """Parse `key=value` / bare `log` option tokens into a dict."""
+    o = {}
+    for tk in tokens:
+        if tk == "log":
+            o["log"] = True
+        elif "=" in tk:
+            k, v = tk.split("=", 1)
+            o[k.strip()] = v.strip()
+        else:
+            raise ValueError(f"unrecognised option {tk!r}")
+    return o
+
+
+def _opts_to_cells(o):
+    """Map free/theta options to df string cells (value/initial handled by caller)."""
+    cells = {}
+    if "bounds" in o:
+        b = o["bounds"]
+        if ".." not in b:
+            raise ValueError("bounds must be LO..HI (either side may be blank)")
+        lo, hi = b.split("..", 1)
+        cells["lower"], cells["upper"] = lo.strip(), hi.strip()
+    if o.get("log"):
+        cells["log"] = True
+    if "prior" in o:
+        pr = o["prior"]
+        if "," not in pr:
+            raise ValueError("prior must be MU,SD")
+        mu, sd = pr.split(",", 1)
+        cells["prior μ"], cells["prior σ"] = mu.strip(), sd.strip()
+    return cells
+
+
+def parse_fit_spec(text, catalog):
+    """Parse DSL text into (targets_df, thetas_df, errors), matching the unified
+    parameter table (role Fixed/Free/Derived + expression) and the thetas table.
+    ``catalog`` = available_targets(config). Mappings live on the target rows as
+    role='Derived' + an expression, so there is no separate map dataframe."""
+    import pandas as pd
+    by_path = {p: (lab, v, lo, hi, log) for (lab, p, v, lo, hi, log) in catalog}
+    errors = []
+    rows = {p: {"parameter": lab, "path": p, "role": "Fixed", "value": f"{v:g}",
+                "lower": "", "upper": "", "log": bool(log), "prior μ": "", "prior σ": "",
+                "expression": ""}
+            for (lab, p, v, lo, hi, log) in catalog}
+    thetas, theta_names = [], set()
+
+    for ln, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        try:
+            head, _, rest = line.partition(" ")
+            head, rest = head.lower(), rest.strip()
+            if head == "free":
+                toks = rest.split()
+                path = toks[0]
+                if path not in by_path:
+                    raise ValueError(f"unknown parameter {path!r}")
+                o = _parse_opts(toks[1:])
+                r = rows[path]; r["role"] = "Free"
+                if "init" in o:
+                    r["value"] = o["init"]
+                r.update(_opts_to_cells(o))
+            elif head == "fix":
+                path, eq, val = rest.partition("=")
+                if not eq:
+                    raise ValueError("fix needs '= value'")
+                path = path.strip()
+                if path not in by_path:
+                    raise ValueError(f"unknown parameter {path!r}")
+                rows[path]["role"] = "Fixed"
+                rows[path]["value"] = val.strip()
+            elif head == "theta":
+                toks = rest.split()
+                name = toks[0]
+                if not name.isidentifier():
+                    raise ValueError(f"bad theta name {name!r}")
+                o = _parse_opts(toks[1:])
+                th = {"name": name, "lower": "", "upper": "", "log": False,
+                      "initial": (o.get("init", "")), "prior μ": "", "prior σ": ""}
+                th.update(_opts_to_cells(o))
+                thetas.append(th); theta_names.add(name)
+            elif head == "map":
+                path, eq, expr = rest.partition("=")
+                if not eq:
+                    raise ValueError("map needs '= expression'")
+                path = path.strip()
+                if path not in by_path:
+                    raise ValueError(f"unknown parameter {path!r}")
+                rows[path]["role"] = "Derived"
+                rows[path]["expression"] = expr.strip()
+            else:
+                raise ValueError(f"unknown statement {head!r} (use free / fix / theta / map)")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"line {ln}: {e}")
+
+    for r in rows.values():
+        if r["role"] == "Derived" and r["expression"]:
+            ok, msg = validate_expr(r["expression"], list(theta_names))
+            if not ok:
+                errors.append(f"{r['path']} = {r['expression']}: invalid expression ({msg})")
+
+    tdf = pd.DataFrame(list(rows.values()))
+    thdf = (pd.DataFrame(thetas) if thetas else
+            pd.DataFrame(columns=["name", "lower", "upper", "log", "initial", "prior μ", "prior σ"]))
+    return tdf, thdf, errors
+
+
+def serialize_fit_spec(targets, thetas, mappings, catalog):
+    """Serialize the current fit spec (the view's _targets/_thetas/_mappings) to DSL
+    text, prefixed with a commented list of the model's available parameters so the
+    paths are always to hand. Fixed params left at the model value are omitted."""
+    default = {p: v for (lab, p, v, lo, hi, log) in catalog}
+    all_paths = [p for (lab, p, *_r) in catalog]
+    lines = ["# available parameters (this model):", "#   " + ", ".join(all_paths), ""]
+    for th in thetas:
+        parts = [f"theta {th['name']}"]
+        if th.get("initial") is not None:
+            parts.append(f"init={_g(th['initial'])}")
+        parts += _bounds_prior_tokens(th["lo"], th["hi"], th.get("log"),
+                                      th.get("prior_mu"), th.get("prior_sd"))
+        lines.append(" ".join(parts))
+    mapped = {m["path"] for m in mappings}
+    for t in targets:
+        if t["path"] in mapped:
+            continue
+        if t["free"]:
+            parts = [f"free {t['path']}"]
+            if t.get("value") is not None:
+                parts.append(f"init={_g(t['value'])}")
+            parts += _bounds_prior_tokens(t["lo"], t["hi"], t.get("log"),
+                                          t.get("prior_mu"), t.get("prior_sd"))
+            lines.append(" ".join(parts))
+        else:
+            dv = default.get(t["path"])
+            if dv is None or abs(float(t["value"]) - float(dv)) > 1e-30:
+                lines.append(f"fix {t['path']} = {_g(t['value'])}")
+    for m in mappings:
+        lines.append(f"map {m['path']} = {m['expr']}")
+    return "\n".join(lines)
+
+
 def available_free_params(config):
     """Return [(label, path, lo, hi, log_scale)] valid for this config's dimensions."""
     n_b = int(getattr(config, "n_bacteria", 1))

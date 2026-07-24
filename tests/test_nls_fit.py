@@ -253,6 +253,49 @@ def test_prior_regularizes_map_estimate():
     assert abs(_fit((2.0, 0.03)) - 2.0) < 0.05  # tight prior at 2.0 dominates
 
 
+def test_fit_spec_dsl_parse_and_roundtrip():
+    """The statement-based DSL parses into the table schemas, validates paths, and
+    round-trips (serialize → parse gives the same thetas/maps/freed)."""
+    from pbisim_fit.synthetic import reference_config
+    cat = nls.available_targets(reference_config(), initial_cfu=5e6)
+    spec = (
+        "theta g bounds=0.1..3.0 prior=1.2,0.3\n"
+        "theta cost bounds=0..0.9 init=0.05\n"
+        "map growth_rates[0] = g\n"
+        "map growth_rates[1] = g * (1 - cost)\n"
+        "free bacteria_to_resource_ratio[0] bounds=1e6..1e10 log\n"
+        "fix death_rate_B[0] = 0.0\n"
+    )
+    tdf, thdf, errs = nls.parse_fit_spec(spec, cat)
+    assert not errs
+    assert list(thdf["name"]) == ["g", "cost"]
+    # mappings now live on the target rows as role='Derived' + an expression
+    _derived = {r["path"]: r["expression"] for _, r in tdf.iterrows() if r["role"] == "Derived"}
+    assert set(_derived) == {"growth_rates[0]", "growth_rates[1]"}
+    assert "bacteria_to_resource_ratio[0]" in [r["path"] for _, r in tdf.iterrows() if r["role"] == "Free"]
+
+    # unknown path is reported, not silently dropped
+    _t, _th, e2 = nls.parse_fit_spec("free not_a_param bounds=0..1", cat)
+    assert any("unknown parameter" in x for x in e2)
+
+    # serialize the structures back and re-parse — thetas/maps preserved
+    targets = [{"path": r["path"], "free": (r["role"] == "Free"),
+                "value": float(r["value"]) if str(r["value"]).strip() else 0.0,
+                "lo": (float(r["lower"]) if str(r["lower"]).strip() else 0.0),
+                "hi": (float(r["upper"]) if str(r["upper"]).strip() else float("inf")),
+                "log": bool(r["log"]), "prior_mu": None, "prior_sd": None}
+               for _, r in tdf.iterrows()]
+    thetas = [{"name": r["name"], "lo": float(r["lower"]), "hi": float(r["upper"]),
+               "log": bool(r["log"]), "initial": (float(r["initial"]) if str(r["initial"]).strip() else None),
+               "prior_mu": None, "prior_sd": None} for _, r in thdf.iterrows()]
+    maps = [{"path": p, "expr": e} for p, e in _derived.items()]
+    txt = nls.serialize_fit_spec(targets, thetas, maps, cat)
+    _t2, _th2, e3 = nls.parse_fit_spec(txt, cat)
+    assert not e3
+    _derived2 = {r["path"] for _, r in _t2.iterrows() if r["role"] == "Derived"}
+    assert list(_th2["name"]) == ["g", "cost"] and len(_derived2) == 2
+
+
 def test_nls_fit_recovers_growth_from_tutorial_csv():
     """The headline check: CSV → refine_nls recovers the control-arm growth rate
     and yield (Monod base config, CFU + OD, few restarts)."""

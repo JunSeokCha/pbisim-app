@@ -232,7 +232,9 @@ def render():
     # widgets are fine to persist.)
     _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
                       "fit_load", "fit_save_scenario", "fit_run_nls", "fit_apply_map",
-                      "fit_model_sel", "fit_job", "fit_stop", "fit_tbl_reset"}
+                      "fit_model_sel", "fit_job", "fit_stop", "fit_tbl_reset",
+                      "fit_spec_from_tables", "fit_spec_to_tables", "fit_spec_rev",
+                      "fit_share_go"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk in _FIT_NOPERSIST:
@@ -746,201 +748,207 @@ def render():
                     return 0.0 if log else float("-inf")
 
                 import hashlib as _hl
+                # A revision counter (bumped when a text spec is applied) is appended to
+                # the editor KEYS only — it forces the keyed data_editors to reload from
+                # the freshly-parsed dataframes WITHOUT triggering the defaults rebuild
+                # (which keys off _sig).
+                _rev = int(st.session_state.get("fit_spec_rev", 0))
                 _sig = _hl.md5(("|".join(p for (_l, p, *_r) in _targets_cat) + "|" + _fit_model)
                                .encode()).hexdigest()[:10]
                 _reset_tbl = st.button("Reset table to model defaults", key="fit_tbl_reset")
+                # Default table on model change / reset: one row per model
+                # parameter, role=Fixed, bounds blank. Cells are TEXT (sci notation).
                 if st.session_state.get("fit_targets_sig") != _sig or _reset_tbl:
-                    # Bounds blank (= unconstrained); current value = start. Numeric cells
-                    # are TEXT so scientific notation (1e7) can be typed.
-                    _rows = [{"parameter": lab, "path": p, "free": False, "value": f"{v:g}",
+                    _rows = [{"parameter": lab, "path": p, "role": "Fixed", "value": f"{v:g}",
                               "lower": "", "upper": "", "log": bool(log),
-                              "prior μ": "", "prior σ": ""}
+                              "prior \u03bc": "", "prior \u03c3": "", "expression": ""}
                              for (lab, p, v, lo_f, hi_f, log) in _targets_cat]
                     st.session_state["fit_targets_df"] = pd.DataFrame(_rows)
                     st.session_state["fit_targets_sig"] = _sig
 
-                st.markdown("**Model parameters** — tick **free?** to estimate a parameter; "
-                            "untouched rows stay fixed at their value.")
-                st.caption("Bounds are **optional**: a **blank** *lower*/*upper* means "
-                           "**unconstrained** on that side. The current *value* is the start. "
-                           "Values accept scientific notation (`1e7`). **log** = log-space search "
-                           "(bounds still in natural units). Optional **prior μ/σ** add a Gaussian "
-                           "prior → a **MAP** estimate (tight σ pulls toward μ; blank = no prior). "
-                           "*Any unbounded parameter forces a single start.*")
+                st.markdown("**Fit parameters** \u2014 set each parameter's **role**: "
+                            "**Fixed** (held at value) \u00b7 **Free** (estimated with bounds/prior) "
+                            "\u00b7 **Derived** (`= expression` of a \u03b8, defined below).")
+                st.caption("Bounds/priors optional (blank = unconstrained / no prior); values accept "
+                           "scientific notation (`1e7`); **log** = log-space search. A **Derived** row "
+                           "draws its value/bounds/prior from its \u03b8 (those cells blank out \u2014 set them "
+                           "on the \u03b8 below). **Sharing** = set several rows to *Derived* with the same "
+                           "\u03b8 (use the **Share** helper). It's all in this one table \u2014 no separate sections.")
                 _tg_ed = st.data_editor(
-                    st.session_state["fit_targets_df"], key=f"fit_targets_editor_{_sig}",
+                    st.session_state["fit_targets_df"], key=f"fit_targets_editor_{_sig}_{_rev}",
                     hide_index=True, width="stretch",
                     column_config={
                         "parameter": st.column_config.TextColumn("parameter", disabled=True),
                         "path": None,
-                        "free": st.column_config.CheckboxColumn("free?", help="Estimate this parameter"),
+                        "role": st.column_config.SelectboxColumn(
+                            "role", options=["Fixed", "Free", "Derived"], required=True,
+                            help="Fixed: held at value \u00b7 Free: estimated 1:1 \u00b7 Derived: = expression of \u03b8"),
                         "value": st.column_config.TextColumn("value / start",
-                                                             help="Fixed value, or start for a free fit. e.g. 1e8"),
-                        "lower": st.column_config.TextColumn("lower", help="Blank = unbounded below. e.g. 1e7"),
-                        "upper": st.column_config.TextColumn("upper", help="Blank = unbounded above. e.g. 1e10"),
-                        "log": st.column_config.CheckboxColumn(
-                            "log search", help="Optimise in log-space (good for wide positive "
-                            "ranges). Bounds stay in natural units — enter 1e7, not 7."),
-                        "prior μ": st.column_config.TextColumn("prior μ",
-                                                               help="Optional Gaussian prior mean → MAP. e.g. 1.2"),
-                        "prior σ": st.column_config.TextColumn("prior σ",
-                                                               help="Prior stdev (needs both μ and σ; blank = no prior)"),
+                                                             help="Fixed value, or start for a Free fit. e.g. 1e8"),
+                        "lower": st.column_config.TextColumn("lower", help="Free only. Blank = unbounded. e.g. 1e7"),
+                        "upper": st.column_config.TextColumn("upper", help="Free only. Blank = unbounded. e.g. 1e10"),
+                        "log": st.column_config.CheckboxColumn("log", help="Free/\u03b8: log-space search."),
+                        "prior \u03bc": st.column_config.TextColumn("prior \u03bc", help="Free only. Gaussian prior mean -> MAP."),
+                        "prior \u03c3": st.column_config.TextColumn("prior \u03c3", help="Free only. Prior stdev."),
+                        "expression": st.column_config.TextColumn("= expression (Derived)",
+                                                                  help="For Derived rows: an expression of \u03b8, e.g. g*(1-cost)"),
                     })
-                _targets = []
+
+                # A Derived row inherits value/bounds/priors from its \u03b8, so blank those
+                # cells (they read as inactive) and keep only role + expression live.
+                _recs = _tg_ed.to_dict("records")
+                _norm = False
+                for _r in _recs:
+                    if str(_r.get("role")) == "Derived":
+                        for _c in ("value", "lower", "upper", "prior \u03bc", "prior \u03c3"):
+                            if str(_r.get(_c, "")).strip():
+                                _r[_c] = ""; _norm = True
+                        if bool(_r.get("log")):
+                            _r["log"] = False; _norm = True
+                if _norm:
+                    st.session_state["fit_targets_df"] = pd.DataFrame(_recs)
+                    st.session_state["fit_spec_rev"] = _rev + 1
+                    st.rerun()
+
+                # -- Share helper: tie selected rows to one new theta --
+                if st.session_state.pop("_share_clear", None):
+                    for _k in ("fit_share_pick", "fit_share_name"):
+                        st.session_state.pop(_k, None)
+                with st.expander("Share \u2014 tie several parameters to one \u03b8", expanded=False):
+                    st.caption("Sets the selected parameters to **Derived = one new \u03b8**; define that "
+                               "\u03b8's bounds/prior in the \u03b8 table below.")
+                    _sh_pick = st.multiselect("Parameters to share",
+                                              [l for (l, *_r) in _targets_cat], key="fit_share_pick")
+                    _shc = st.columns([3, 1])
+                    _sh_name = _shc[0].text_input("\u03b8 name (blank = auto)", key="fit_share_name")
+                    if _shc[1].button("Share \u2192", key="fit_share_go", width="stretch"):
+                        if len(_sh_pick) < 2:
+                            st.warning("Pick at least two parameters to share.")
+                        else:
+                            _exist = (set(st.session_state["fit_thetas_df"]["name"])
+                                      if "fit_thetas_df" in st.session_state else set())
+                            _nm = (_sh_name.strip() or next(
+                                f"shared{i}" for i in range(1, 999) if f"shared{i}" not in _exist))
+                            _picked = {_label_to_path[l] for l in _sh_pick}
+                            _df = st.session_state["fit_targets_df"].copy()
+                            for _i, _r in _df.iterrows():
+                                if _r["path"] in _picked:
+                                    _df.at[_i, "role"] = "Derived"
+                                    _df.at[_i, "expression"] = _nm
+                            st.session_state["fit_targets_df"] = _df
+                            _thd = (st.session_state["fit_thetas_df"].copy()
+                                    if "fit_thetas_df" in st.session_state else
+                                    pd.DataFrame(columns=["name", "lower", "upper", "log",
+                                                          "initial", "prior \u03bc", "prior \u03c3"]))
+                            _thd = pd.concat([_thd, pd.DataFrame([{
+                                "name": _nm, "lower": "", "upper": "", "log": False,
+                                "initial": "", "prior \u03bc": "", "prior \u03c3": ""}])], ignore_index=True)
+                            st.session_state["fit_thetas_df"] = _thd
+                            st.session_state["fit_spec_rev"] = _rev + 1
+                            st.session_state["_share_clear"] = True
+                            st.rerun()
+
+                # -- Custom parameters (theta) --
+                with st.expander("Custom parameters (\u03b8) \u2014 used by Derived rows", expanded=False):
+                    st.caption("Estimated quantities referenced by Derived expressions. Name + bounds "
+                               "(blank = unconstrained); give large-scale \u03b8 an initial. Optional "
+                               "prior \u03bc/\u03c3. Unreferenced \u03b8 are ignored.")
+                    if "fit_thetas_df" not in st.session_state:
+                        st.session_state["fit_thetas_df"] = pd.DataFrame(
+                            [{"name": "", "lower": "", "upper": "", "log": False, "initial": "",
+                              "prior \u03bc": "", "prior \u03c3": ""}])
+                    _th_ed = st.data_editor(
+                        st.session_state["fit_thetas_df"], key=f"fit_thetas_editor_{_rev}",
+                        num_rows="dynamic", hide_index=True, width="stretch",
+                        column_config={
+                            "name": st.column_config.TextColumn("\u03b8 name"),
+                            "lower": st.column_config.TextColumn("lower", help="Blank = unbounded below. e.g. 1e7"),
+                            "upper": st.column_config.TextColumn("upper", help="Blank = unbounded above. e.g. 1e10"),
+                            "log": st.column_config.CheckboxColumn("log", help="Log-space search."),
+                            "initial": st.column_config.TextColumn("initial (start)",
+                                                                   help="Start value \u2014 important when unbounded. e.g. 1e9"),
+                            "prior \u03bc": st.column_config.TextColumn("prior \u03bc", help="Optional prior mean -> MAP."),
+                            "prior \u03c3": st.column_config.TextColumn("prior \u03c3", help="Prior stdev."),
+                        })
+                    _th_names = [str(r["name"]).strip() for r in _th_ed.to_dict("records")
+                                 if str(r.get("name", "")).strip()]
+
+                # -- Assembly: role -> free targets + Derived mappings; thetas --
+                _targets, _mappings, _bad = [], [], []
                 for r in _tg_ed.to_dict("records"):
+                    _role = str(r.get("role", "Fixed"))
                     _log = bool(r["log"])
                     _lo = _bound(r.get("lower"), _log, True)
                     _hi = _bound(r.get("upper"), _log, False)
                     if np.isfinite(_lo) and np.isfinite(_hi) and _lo >= _hi:
-                        if r["free"]:
-                            st.warning(f"'{_path_label.get(r['path'], r['path'])}': lower ≥ upper "
-                                       "— treating as unbounded.")
+                        if _role == "Free":
+                            st.warning(f"'{_path_label.get(r['path'], r['path'])}': lower \u2265 upper \u2014 unbounded.")
                         _lo, _hi = (0.0 if _log else float("-inf")), float("inf")
                     _val = _pf(r.get("value"))
-                    _targets.append({"path": r["path"], "free": bool(r["free"]),
+                    _targets.append({"path": r["path"], "free": (_role == "Free"),
                                      "value": (_val if _val is not None else 0.0),
                                      "lo": _lo, "hi": _hi, "log": _log,
-                                     "prior_mu": _pf(r.get("prior μ")), "prior_sd": _pf(r.get("prior σ"))})
-
-                # ── Shared parameters (quick) — tie several to one estimated value ─
-                _shared_groups = st.session_state.setdefault("fit_shared_groups", [])
-                # Clear the builder widgets BEFORE they render (canonical Streamlit reset:
-                # a pending flag set by Add, applied here prior to instantiation).
-                if st.session_state.pop("_shrq_clear", False):
-                    for _k in ("fit_shrq_pick", "fit_shrq_lo", "fit_shrq_hi",
-                               "fit_shrq_init", "fit_shrq_log"):
-                        st.session_state.pop(_k, None)
-                with st.expander("Shared parameters — tie several to one estimated value",
-                                 expanded=bool(_shared_groups)):
-                    st.caption("Pick parameters to share a single estimated value (e.g. WT & "
-                               "resistant growth). Equivalent to one θ mapped to each — a shortcut "
-                               "for the common case. Bounds optional (blank = unconstrained); "
-                               "scientific notation OK.")
-                    for _gi, _g in enumerate(list(_shared_groups)):
-                        _lbls = ", ".join(_path_label.get(p, p) for p in _g["paths"])
-                        _rc = st.columns([8, 1])
-                        _rc[0].markdown(f"**shared #{_gi+1}:** {_lbls}  — start "
-                                        f"{_g.get('initial', '—')}, [{_g['lo']:g}, {_g['hi']:g}]"
-                                        + (" · log" if _g.get("log") else ""))
-                        if _rc[1].button("✕", key=f"fit_shrq_rm_{_gi}"):
-                            _shared_groups.pop(_gi)
-                            st.session_state.fit_shared_groups = _shared_groups
-                            st.rerun()
-                    # Parameters already tied in a group are excluded from the picker.
-                    _already_shared = {p for _g in _shared_groups for p in _g["paths"]}
-                    _sq_options = [l for (l, p, *_r) in _targets_cat if p not in _already_shared]
-                    if st.session_state.get("fit_shrq_pick") and \
-                            any(l not in _sq_options for l in st.session_state["fit_shrq_pick"]):
-                        st.session_state.pop("fit_shrq_pick", None)   # drop stale selections
-                    _sq_pick = st.multiselect("Parameters to tie together", _sq_options, key="fit_shrq_pick")
-                    _sc = st.columns(4)
-                    _sq_lo = _sc[0].text_input("lower", key="fit_shrq_lo", help="Blank = unbounded")
-                    _sq_hi = _sc[1].text_input("upper", key="fit_shrq_hi", help="Blank = unbounded")
-                    _sq_init = _sc[2].text_input("initial", key="fit_shrq_init", help="Start value")
-                    _sq_log = _sc[3].checkbox("log", key="fit_shrq_log")
-                    if st.button("Add shared group", key="fit_shrq_add"):
-                        if len(_sq_pick) >= 2:
-                            _lo = _pf(_sq_lo); _hi = _pf(_sq_hi)
-                            _shared_groups.append({
-                                "paths": [_label_to_path[l] for l in _sq_pick],
-                                "lo": (_lo if _lo is not None else (0.0 if _sq_log else float("-inf"))),
-                                "hi": (_hi if _hi is not None else float("inf")),
-                                "log": bool(_sq_log), "initial": _pf(_sq_init)})
-                            st.session_state.fit_shared_groups = _shared_groups
-                            # Clear the builder inputs on the next run (see top of section).
-                            st.session_state["_shrq_clear"] = True
-                            st.rerun()
+                                     "prior_mu": _pf(r.get("prior \u03bc")), "prior_sd": _pf(r.get("prior \u03c3"))})
+                    if _role == "Derived":
+                        _ex = str(r.get("expression", "")).strip()
+                        if not _ex:
+                            _bad.append(f"{r['path']}: Derived but no expression")
                         else:
-                            st.warning("Pick at least two parameters to share.")
-
-                # ── Reparameterization: custom thetas + mappings ───────────────
-                _thetas, _mappings, _theta_bad = [], [], []
-                with st.expander("Reparameterization — custom thetas & mappings", expanded=False):
-                    st.caption("Define your own estimated parameters (θ) with bounds, then map "
-                               "model parameters to expressions of them — e.g. θ1, θ2 with "
-                               "`growth_rates[0] = theta1` and `growth_rates[1] = theta1*(1-theta2)`. "
-                               "Allowed: theta names, numbers, + − * / **, and exp/log/log10/sqrt. "
-                               "A mapped parameter overrides its row in the table above. Bounds & "
-                               "initial accept scientific notation (`1e7`). Bounds are **optional** "
-                               "(blank = unconstrained that side); but a theta has no natural "
-                               "value, so give an **initial** (and/or bounds) — e.g. a theta scaling "
-                               "1e9 should start near 1e9. **log** searches in log-space — bounds "
-                               "stay in natural units (`1e7`, not `7`).")
-                    if "fit_thetas_df" not in st.session_state:
-                        st.session_state["fit_thetas_df"] = pd.DataFrame(
-                            [{"name": "", "lower": "", "upper": "", "log": False, "initial": "",
-                              "prior μ": "", "prior σ": ""}])
-                    _th_ed = st.data_editor(
-                        st.session_state["fit_thetas_df"], key="fit_thetas_editor",
-                        num_rows="dynamic", hide_index=True, width="stretch",
-                        column_config={
-                            "name": st.column_config.TextColumn("theta name"),
-                            "lower": st.column_config.TextColumn("lower", help="Blank = unbounded below. e.g. 1e7"),
-                            "upper": st.column_config.TextColumn("upper", help="Blank = unbounded above. e.g. 1e10"),
-                            "log": st.column_config.CheckboxColumn(
-                                "log search", help="Log-space search; bounds stay in natural units (1e7, not 7)."),
-                            "initial": st.column_config.TextColumn("initial (start)",
-                                                                   help="Start value — important when unbounded. e.g. 1e9"),
-                            "prior μ": st.column_config.TextColumn("prior μ",
-                                                                   help="Optional Gaussian prior mean → MAP. e.g. 1.2"),
-                            "prior σ": st.column_config.TextColumn("prior σ",
-                                                                   help="Prior stdev (needs both μ and σ; blank = no prior)"),
-                        })
-                    _th_names = [str(r["name"]).strip() for r in _th_ed.to_dict("records")
-                                 if str(r.get("name", "")).strip()]
-                    if "fit_map_df" not in st.session_state:
-                        st.session_state["fit_map_df"] = pd.DataFrame({"target": pd.Series(dtype=str),
-                                                                       "expression": pd.Series(dtype=str)})
-                    _mp_ed = st.data_editor(
-                        st.session_state["fit_map_df"], key="fit_map_editor",
-                        num_rows="dynamic", hide_index=True, width="stretch",
-                        column_config={
-                            "target": st.column_config.SelectboxColumn(
-                                "target parameter", options=[l for (l, *_r) in _targets_cat]),
-                            "expression": st.column_config.TextColumn("= expression of thetas"),
-                        })
-                    for r in _mp_ed.to_dict("records"):
-                        _tl = str(r.get("target", "")).strip(); _ex = str(r.get("expression", "")).strip()
-                        if _tl and _ex and _tl in _label_to_path:
                             _ok, _msg = _nls.validate_expr(_ex, _th_names)
                             if _ok:
-                                _mappings.append({"path": _label_to_path[_tl], "expr": _ex})
+                                _mappings.append({"path": r["path"], "expr": _ex})
                             else:
-                                st.warning(f"Mapping '{_tl} = {_ex}' is invalid: {_msg}")
-                    # Only keep thetas actually referenced by a mapping (a declared-but-
-                    # unused theta would be estimated yet affect nothing).
-                    _used_theta = {n for n in _th_names
-                                   if any(re.search(rf"\b{re.escape(n)}\b", m["expr"]) for m in _mappings)}
-                    # Theta bounds are optional: blank → unconstrained on that side
-                    # (0/-inf below, +inf above; log → 0 below). An unbounded theta with
-                    # no initial starts at 1.0 (fine for a multiplier; give an initial for
-                    # a large-scale theta).
-                    _thetas, _theta_bad = [], []
-                    for r in _th_ed.to_dict("records"):
-                        _nm = str(r.get("name", "")).strip()
-                        if _nm not in _used_theta:
-                            continue
-                        _log = bool(r.get("log"))
-                        _lo = _bound(r.get("lower"), _log, True)
-                        _hi = _bound(r.get("upper"), _log, False)
-                        if np.isfinite(_lo) and np.isfinite(_hi) and _lo >= _hi:
-                            _theta_bad.append(_nm)
-                            continue
-                        _thetas.append({"name": _nm, "lo": _lo, "hi": _hi, "log": _log,
-                                        "initial": _pf(r.get("initial")),
-                                        "prior_mu": _pf(r.get("prior μ")), "prior_sd": _pf(r.get("prior σ"))})
-                    if _theta_bad:
-                        st.warning("theta(s) with lower ≥ upper: "
-                                   + ", ".join(sorted(set(_theta_bad))) + " — fix or blank a bound.")
+                                _bad.append(f"{r['path']} = {_ex}: {_msg}")
+                for _b in _bad:
+                    st.warning(_b)
+                _used = {n for n in _th_names
+                         if any(re.search(rf"\b{re.escape(n)}\b", m["expr"]) for m in _mappings)}
+                _thetas, _theta_bad = [], []
+                for r in _th_ed.to_dict("records"):
+                    _nm = str(r.get("name", "")).strip()
+                    if _nm not in _used:
+                        continue
+                    _log = bool(r.get("log"))
+                    _lo = _bound(r.get("lower"), _log, True)
+                    _hi = _bound(r.get("upper"), _log, False)
+                    if np.isfinite(_lo) and np.isfinite(_hi) and _lo >= _hi:
+                        _theta_bad.append(_nm)
+                        continue
+                    _thetas.append({"name": _nm, "lo": _lo, "hi": _hi, "log": _log,
+                                    "initial": _pf(r.get("initial")),
+                                    "prior_mu": _pf(r.get("prior \u03bc")), "prior_sd": _pf(r.get("prior \u03c3"))})
+                if _theta_bad:
+                    st.warning("\u03b8 with lower \u2265 upper: " + ", ".join(sorted(set(_theta_bad))))
 
-                # Merge the quick shared-parameter groups: each becomes one theta
-                # (`shared{k}`) mapped onto every parameter in the group.
-                for _si, _g in enumerate(_shared_groups):
-                    _tn = f"shared{_si}"
-                    _thetas.append({"name": _tn, "lo": _g["lo"], "hi": _g["hi"],
-                                    "log": bool(_g.get("log")), "initial": _g.get("initial")})
-                    for _p in _g["paths"]:
-                        _mappings.append({"path": _p, "expr": _tn})
+                # -- Fit spec (text) -- two-way with the table above --
+                _sp_pending = st.session_state.pop("_spec_pending", None)
+                if _sp_pending is not None:
+                    st.session_state["fit_spec_text"] = _sp_pending
+                with st.expander("Fit spec (text) \u2014 two-way with the table above", expanded=False):
+                    st.caption("Compact text form; round-trips with the table. Grammar (one per line): "
+                               "`free <path> [init= bounds=LO..HI prior=MU,SD log]`, `fix <path> = <v>`, "
+                               "`theta <name> [...]`, `map <path> = <expr>`. Generate-from-table lists the "
+                               "model's parameters as a comment header.")
+                    _spec_txt = st.text_area("Spec", key="fit_spec_text", height=220,
+                                             placeholder="theta g bounds=0.1..3.0 prior=1.2,0.3\n"
+                                                         "map growth_rates[0] = g\nmap growth_rates[1] = g*(1-cost)")
+                    _spc = st.columns(2)
+                    if _spc[0].button("\u2191 Generate from table", key="fit_spec_from_tables", width="stretch"):
+                        st.session_state["_spec_pending"] = _nls.serialize_fit_spec(
+                            _targets, _thetas, _mappings, _targets_cat)
+                        st.rerun()
+                    if _spc[1].button("\u2193 Apply to table", key="fit_spec_to_tables",
+                                      type="primary", width="stretch"):
+                        _tdf, _thdf, _errs = _nls.parse_fit_spec(_spec_txt or "", _targets_cat)
+                        if _errs:
+                            for _e in _errs:
+                                st.error(_e)
+                        else:
+                            st.session_state["fit_targets_df"] = _tdf
+                            st.session_state["fit_thetas_df"] = _thdf
+                            st.session_state["fit_spec_rev"] = _rev + 1
+                            st.success("Applied to the table above.")
+                            st.rerun()
 
                 # OD link (CFU per OD unit): pbisim-fit reads it off the config, so it
                 # is REQUIRED to fit 'od'. Prefer the data's own median CFU/OD ratio
@@ -979,7 +987,8 @@ def render():
                         st.error("theta(s) have lower ≥ upper: "
                                  + ", ".join(sorted(set(_theta_bad))) + " — fix or blank a bound.")
                     elif not _any_free:
-                        st.error("Free at least one parameter (tick 'free?') or define a theta.")
+                        st.error("Set at least one parameter's role to **Free** "
+                                 "(or add a referenced θ) — nothing is being estimated.")
                     elif not _sel_arms or not _sel_obs:
                         st.error("Select at least one arm and observable above.")
                     else:
@@ -1167,8 +1176,9 @@ def render():
                 and not _wk.startswith("fit_edit_")
                 and not _wk.startswith("fit_targets")   # parameter table (df + editor + sig)
                 and not _wk.startswith("fit_thetas")     # theta table
-                and not _wk.startswith("fit_map")        # mapping table
-                and not _wk.startswith("fit_shrq_")      # shared-param quick builder widgets
+                and not _wk.startswith("fit_share")      # Share helper (transient; self-clears)
+                and not _wk.startswith("fit_map")        # (removed) mapping table
+                and not _wk.startswith("fit_shrq_")      # (removed) shared-param quick builder
                 and not _wk.startswith("fit_shr_")       # (removed) sharing-builder widgets
                 and not _wk.startswith("fit_der_")):     # (removed) derived-link builder widgets
             st.session_state.fit_config[_wk] = st.session_state[_wk]

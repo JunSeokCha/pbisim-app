@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **86 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **194 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -197,6 +197,34 @@ research-grade, so only share the password with trusted people.
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
+
+## Done this session (2026-07-24) — unified role-based fit-parameter table
+
+Owner-approved redesign of the Calibration §5c fit UI (the layered free?-checkbox +
+separate **Shared parameters** + **Reparameterization** panels confused users: hidden
+precedence — "if a param is set free in the mapping but not free in the first table,
+what wins?"). **Now ONE table, one Role per row.**
+
+- **Unified parameter table** (`fit_targets_df`): each model parameter has a **role**
+  SelectboxColumn — **Fixed** (held at value) · **Free** (estimated 1:1, uses
+  bounds/prior) · **Derived** (`= expression` of a θ). Plus an `expression` column for
+  Derived rows. Deleted the separate "Shared parameters (quick)" expander and the
+  Reparameterization **mappings** table (`fit_map_df`) entirely — mappings now live on
+  the target rows. Kept the **Custom parameters (θ)** table (`fit_thetas_df`).
+- **Share helper** (one-click): multiselect rows → **Share →** sets them to Derived
+  with a common auto-named θ (`shared1`…) and appends that θ. = the way to tie
+  parameters together. Self-clears (`_share_clear`).
+- **Assembly** (`views/calibration.py`): role → `free=(role=='Free')` target; Derived +
+  expression → a `{path, expr}` mapping (validated vs θ names). Backend
+  `build_param_spec_v2`/`run_nls_fit_v2` UNCHANGED (targets still carry `free` internally).
+- **DSL** (`nls_fit.parse_fit_spec`): now returns **(targets_df, thetas_df, errors)** —
+  the separate map_df is gone; `map <path> = <expr>` sets that row's role=Derived +
+  expression. `serialize_fit_spec` prefixes a `# available parameters` comment header so
+  paths are always to hand (addresses "user doesn't know the <path> names").
+- Tests updated to the role model (`_free_targets`/`_derive_targets` helpers) + new
+  `test_share_helper_ties_rows_to_one_theta`. **194 tests passing.**
+- **NOT committed** — held for owner local testing (per the standing "test locally
+  first" on the fit-spec/redesign work). See memory [[nls-od-link-on-config]] (v3 section).
 
 ## Done this session (2026-07-20) — visual redesign (branch `feature/redesign`)
 
