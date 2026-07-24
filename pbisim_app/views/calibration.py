@@ -106,6 +106,17 @@ def _apply_config_to_state(cfg):
             st.session_state[f"ads_{_i}_{_j}"] = float(_ads[_i, _j])
     if getattr(cfg, "monod_constant", None) is not None:
         st.session_state["int_monod_constant"] = float(cfg.monod_constant)
+    # Estimated initial conditions (fit_initial_cfu / fit_initial_pfu) → the model's
+    # inoculum, so a re-run / the Interactive Simulator matches the fit.
+    _ic = getattr(cfg, "fit_initial_cfu", None)
+    if _ic is not None and np.isfinite(_ic) and _ic > 0 and strains:
+        _tot = sum(float(s.get("initial_B", 0.0)) for s in strains)
+        for _s in strains:
+            _s["initial_B"] = (float(_s.get("initial_B", 0.0)) * float(_ic) / _tot
+                               if _tot > 0 else float(_ic) / len(strains))
+    _ip = getattr(cfg, "fit_initial_pfu", None)
+    if _ip is not None and np.isfinite(_ip) and _ip > 0 and phages:
+        phages[0]["initial_P"] = float(_ip)
     st.session_state["int_strains"] = strains
     st.session_state["int_phages"] = phages
 
@@ -803,8 +814,13 @@ def render():
                             _shared_groups.pop(_gi)
                             st.session_state.fit_shared_groups = _shared_groups
                             st.rerun()
-                    _sq_pick = st.multiselect("Parameters to tie together",
-                                              [l for (l, *_r) in _targets_cat], key="fit_shrq_pick")
+                    # Parameters already tied in a group are excluded from the picker.
+                    _already_shared = {p for _g in _shared_groups for p in _g["paths"]}
+                    _sq_options = [l for (l, p, *_r) in _targets_cat if p not in _already_shared]
+                    if st.session_state.get("fit_shrq_pick") and \
+                            any(l not in _sq_options for l in st.session_state["fit_shrq_pick"]):
+                        st.session_state.pop("fit_shrq_pick", None)   # drop stale selections
+                    _sq_pick = st.multiselect("Parameters to tie together", _sq_options, key="fit_shrq_pick")
                     _sc = st.columns(4)
                     _sq_lo = _sc[0].text_input("lower", key="fit_shrq_lo", help="Blank = unbounded")
                     _sq_hi = _sc[1].text_input("upper", key="fit_shrq_hi", help="Blank = unbounded")
@@ -819,6 +835,10 @@ def render():
                                 "hi": (_hi if _hi is not None else float("inf")),
                                 "log": bool(_sq_log), "initial": _pf(_sq_init)})
                             st.session_state.fit_shared_groups = _shared_groups
+                            # Clear the builder inputs so the next group starts blank.
+                            for _k in ("fit_shrq_pick", "fit_shrq_lo", "fit_shrq_hi",
+                                       "fit_shrq_init", "fit_shrq_log"):
+                                st.session_state.pop(_k, None)
                             st.rerun()
                         else:
                             st.warning("Pick at least two parameters to share.")
@@ -960,6 +980,11 @@ def render():
                                 "fit_model": _fit_model, "path_label": dict(_path_label),
                                 "fB": _fB, "fP": _fP, "fS": _fS, "fmk": _fmk,
                                 "ovl_ctx": dict(_ovl_ctx),
+                                # short labels of what's being estimated (for the status line)
+                                "param_preview": (
+                                    [_path_label.get(t["path"], t["path"]) for t in _targets
+                                     if t["free"] and t["path"] not in {m["path"] for m in _mappings}]
+                                    + [f"θ {th['name']}" for th in _thetas]),
                             }
                             st.session_state["fit_job"] = _holder
                             threading.Thread(target=_fit_worker, args=(_holder,), daemon=True).start()
@@ -971,14 +996,18 @@ def render():
                 _job = st.session_state.get("fit_job")
                 if _job is not None and _job.get("status") == "running":
                     _el = _time.time() - _job.get("t0", _time.time())
-                    st.info(f"Fitting in the background (~{_el:0.0f}s) — the app stays responsive. "
-                            f"Bounded by {_job['restarts']} restart(s) × {_job['maxnfev']} evals.")
+                    _pnames = ", ".join(_job.get("param_preview", []))
+                    st.info(f"⏳ Fitting **{len(_job.get('param_preview', []))} parameter(s)** — "
+                            f"~{_el:0.0f}s elapsed. The app stays responsive; press **Stop** to abandon."
+                            + (f"  \nEstimating: {_pnames}" if _pnames else ""))
                     if st.button("Stop fit", key="fit_stop"):
                         _job["status"] = "cancelled"
                         st.session_state["fit_job"] = None
                         st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
                         st.rerun()
-                    _time.sleep(0.4)
+                    # Poll every ~1 s (the solver has no per-iteration callback, so we
+                    # can't stream MSE) — a slower cadence keeps the page from flickering.
+                    _time.sleep(1.0)
                     st.rerun()
                 elif _job is not None and _job.get("status") == "done":
                     _fp = _job["fp"]
@@ -1000,14 +1029,25 @@ def render():
                             "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
                             "params": _pmeta, "model": _job["fit_model"],
                         }
-                        st.session_state["calib_fitted_config"] = _fp.to_config()
+                        _fcfg = _fp.to_config()
+                        st.session_state["calib_fitted_config"] = _fcfg
                         try:
+                            # If B₀ / initial phage were estimated (fit_initial_cfu/pfu),
+                            # reflect them in the overlay's inoculum so the fitted curve
+                            # actually matches the data (the fit used them as the ICs).
+                            _fB2, _fP2 = _job["fB"], _job["fP"]
+                            _ic = getattr(_fcfg, "fit_initial_cfu", None)
+                            if _ic is not None and np.isfinite(_ic) and _ic > 0 and float(np.sum(_fB2)) > 0:
+                                _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
+                            _ip = getattr(_fcfg, "fit_initial_pfu", None)
+                            if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
+                                _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
                             _fovl = dict(_job["ovl_ctx"])
                             _fovl["title"] = "Fitted model vs observations (NLS MAP)"
                             if _job["od_link"]:
                                 _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
                             st.session_state["calib_overlay_result"] = _compute_overlay(
-                                _fp.to_config(), _job["fB"], _job["fP"], _job["fS"], _job["fmk"], _fovl)
+                                _fcfg, _fB2, _fP2, _job["fS"], _job["fmk"], _fovl)
                         except Exception:
                             pass
                     finally:

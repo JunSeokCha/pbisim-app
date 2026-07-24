@@ -156,6 +156,48 @@ def test_reparameterization_theta_mapping():
     assert abs(g[1] - g[0] * (1.0 - cost)) < 1e-6      # mapping honoured
 
 
+def test_model_switch_stays_on_current_page():
+    """Switching models from another page (e.g. Calibration) must NOT yank the user to
+    the Interactive Simulator — it just loads the model into the builder."""
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.run()
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["sidebar_model_pick"] = "Growth calibration (Monod)"
+    at.run()
+    assert at.session_state["active_model"] == "Growth calibration (Monod)"
+    assert at.session_state["current_page"] == "Calibration"      # stayed put
+    assert len(at.exception) == 0
+
+
+def test_apply_writes_estimated_initial_cfu():
+    """Estimating fit_initial_cfu must update the model's initial_B on Apply, so a
+    re-run / the simulator matches the fit (previously it stayed at the old B0)."""
+    at = AppTest.from_file(APP, default_timeout=250)
+    at.run()
+    df = pd.read_csv("pbisim_app/examples/tutorial_synthetic_brg.csv")
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "time", "value": "value", "observable": "observable",
+        "arm_cols": ["arm"], "moi": None}
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_model_sel"] = "Growth calibration (Monod)"
+    at.session_state["fit_arms"] = ["control"]
+    at.session_state["fit_obs_sel"] = ["cfu"]
+    at.run()
+    _free_targets(at, {"growth_rates[0]", "fit_initial_cfu"})
+    at.session_state["fit_nls_restarts"] = 1
+    at.session_state["fit_nls_maxnfev"] = 150
+    at.run()
+    [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    est_b0 = at.session_state["calib_fitted_config"].fit_initial_cfu
+    assert est_b0 and est_b0 > 0
+    [b for b in at.button if b.key == "fit_apply_map"][0].click().run()
+    applied = sum(float(s["initial_B"]) for s in at.session_state["int_strains"])
+    assert abs(applied - float(est_b0)) / float(est_b0) < 1e-6     # B0 updated to the estimate
+    assert len(at.exception) == 0
+
+
 def test_unbounded_params_run_single_start():
     """Blank bounds mean UNCONSTRAINED (not blocked, not a silent [0,1]). An unbounded
     parameter forces a single start (multi-start needs finite bounds) but still fits

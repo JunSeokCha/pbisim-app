@@ -303,7 +303,8 @@ with st.sidebar:
         st.session_state.active_model = _msel
         st.session_state["_flash"] = {"kind": "success",
                                       "msg": f"Model '{_msel}' loaded into the builder."}
-        st.session_state["_nav_to"] = "Interactive Simulator"
+        # Stay on the current page — switching models from Calibration/Sweeps/etc.
+        # shouldn't yank the user to the Interactive Simulator.
         st.rerun()
     with st.expander("Save current builder as a Model", expanded=False):
         _mname = st.text_input("Model name", key="save_model_name",
