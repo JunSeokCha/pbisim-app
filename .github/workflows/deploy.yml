@@ -54,13 +54,21 @@ jobs:
         id: ref
         run: echo "ref=${{ github.event.client_payload.ref || 'main' }}" >> "$GITHUB_OUTPUT"
 
-      - name: Install pbisim (private) + app + pytest
+      - name: Install pbisim + pbisim-fit (private) + app + pytest
         if: steps.cfg.outputs.configured == 'true'
         env:
           PBISIM_TOKEN: ${{ secrets.PBISIM_TOKEN }}
           PBISIM_REF: ${{ steps.ref.outputs.ref }}
+          # pbisim-fit powers the Calibration NLS fit; the tests exercise it. Reuse
+          # PBISIM_TOKEN when PBISIM_FIT_TOKEN is unset (mirrors the Dockerfile) — the
+          # fine-grained PAT must be able to read BOTH private repos. torch is NOT
+          # installed: `import pbisim_fit` is lazy (torch loads only for NPE, unused here).
+          PBISIM_FIT_TOKEN: ${{ secrets.PBISIM_FIT_TOKEN }}
+          PBISIM_FIT_REF: ${{ github.event.client_payload.ref || 'main' }}
         run: |
           pip install "git+https://${PBISIM_TOKEN}@github.com/phage-therapy-sim/pbisim.git@${PBISIM_REF}"
+          FIT_TOKEN="${PBISIM_FIT_TOKEN:-$PBISIM_TOKEN}"
+          pip install "git+https://${FIT_TOKEN}@github.com/phage-therapy-sim/pbisim-fit.git@${PBISIM_FIT_REF}"
           pip install -e .
           pip install pytest
 
