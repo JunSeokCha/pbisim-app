@@ -364,7 +364,7 @@ def test_unbounded_params_run_single_start():
             tdf.at[i, "role"] = "Free"
         if r["path"] == "bacteria_to_resource_ratio[0]":
             tdf.at[i, "role"] = "Free"
-            tdf.at[i, "lower"] = 1e6            # upper stays blank → unbounded above
+            tdf.at[i, "lower"] = "1e6"          # string cell (TextColumn); upper blank → unbounded above
     at.session_state["fit_targets_df"] = tdf
     at.session_state["fit_nls_restarts"] = 3   # will be capped to 1 internally
     at.session_state["fit_nls_maxnfev"] = 200
