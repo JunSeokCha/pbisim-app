@@ -6,15 +6,18 @@
 # environment variables to the Docker build as build ARGs, so PBISIM_TOKEN /
 # PBISIM_REF reach the Dockerfile's `ARG` lines.
 #
-# autoDeploy is off: we let CI run the test suite first and trigger the deploy
-# hook only when tests pass (see .github/workflows/deploy.yml). Flip to true if
-# you prefer deploy-on-every-push without the test gate.
+# autoDeploy is ON: Render redeploys on every push to main, independently of the
+# GitHub Actions test-and-deploy workflow (which is a test gate + a redundant deploy
+# hook, not the primary trigger). Set autoDeploy: false if you'd rather deploy only
+# when CI passes.
 
 services:
   - type: web
     name: pbisim-app
     runtime: docker
-    plan: free               # free sleeps after ~15 min idle; upgrade to starter ($7/mo) to stay warm
+    plan: standard           # 2GB RAM / 1 dedicated CPU, no spin-down (upgraded 2026-07-24;
+                             # free 512MB was OOM-unusable). Declared here so a Blueprint sync
+                             # can't silently revert the dashboard upgrade back to free.
     dockerfilePath: ./Dockerfile
     autoDeploy: true         # redeploy on every push to main (no CI/deploy-hook needed)
     healthCheckPath: /_stcore/health
