@@ -12,11 +12,6 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
-    STRAIN_TUNABLES,
-    STRAIN_DORMANCY_TUNABLES,
-    PHAGE_TUNABLES,
-    ADSORPTION_PHAGE_KEYS,
-    entity_param_key,
 )
 
 
@@ -113,25 +108,6 @@ def test_predicted_od_uses_model_debris_when_requested():
     # non-OD observables ignore the flag
     r2 = _FakeResult({"P": np.array([1e9])}, od=np.array([9.9]))
     assert predicted_observable(r2, "pfu", use_model_od=True) == 1e9
-
-
-def test_entity_param_key_is_builder_mode_aware():
-    # adsorption is stored under different phage-dict keys per builder mode
-    brg_phage = {"adsorption_s": 5e-8, "burst_sizes": 50.0}
-    legacy_phage = {"adsorption_rates": 1e-8, "burst_sizes": 50.0}
-    assert entity_param_key(brg_phage, ADSORPTION_PHAGE_KEYS) == "adsorption_s"
-    assert entity_param_key(legacy_phage, ADSORPTION_PHAGE_KEYS) == "adsorption_rates"
-    # falls back to the first candidate when the entity has neither yet
-    assert entity_param_key({}, ADSORPTION_PHAGE_KEYS) == ADSORPTION_PHAGE_KEYS[0]
-
-
-def test_tunable_registries_cover_the_fit_parameters():
-    strain_keys = {k["key"] for k in STRAIN_TUNABLES}
-    assert {"growth_rate", "bacteria_to_resource_ratio", "death_rate_B", "initial_B"} <= strain_keys
-    phage_keys = {k["key"] for k in PHAGE_TUNABLES}
-    assert {"burst_sizes", "latent_periods", "phage_decay_rates", "phage_decay_Km", "attenuation_rate"} <= phage_keys
-    # adsorption is handled separately (builder-mode specific storage)
-    assert "adsorption_s" in ADSORPTION_PHAGE_KEYS
 
 
 def test_fit_residual_zero_and_positive():

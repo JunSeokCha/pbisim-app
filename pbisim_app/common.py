@@ -51,12 +51,6 @@ from pbisim_app.fit_helper import (
     residual_vector_log10,
     build_fit_spec,
     config_param_snapshot,
-    STRAIN_TUNABLES,
-    STRAIN_DORMANCY_TUNABLES,
-    PHAGE_TUNABLES,
-    PHAGE_OPTIONAL_TUNABLES,
-    ADSORPTION_PHAGE_KEYS,
-    entity_param_key,
 )
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,
@@ -1554,6 +1548,11 @@ def build_nominal_config_from_gui():
         extra_kwargs["debris_v"] = st.session_state.get("int_debris_v", 0.2)
         extra_kwargs["debris_kdis"] = st.session_state.get("int_debris_kdis", 0.01)
         extra_kwargs["od_to_cfu_conversion_factor"] = st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)
+        # Optical weight of a dormant/hibernating cell in OD (D, H). BRG/StrainSet forward
+        # this to ModelConfig via to_config(**extra_config_kwargs); Direct passes it
+        # explicitly to with_od_debris() below. (Previously omitted here → BRG/StrainSet
+        # silently ignored int_dormant_od_fraction and used the engine default 1.0.)
+        extra_kwargs["dormant_od_fraction"] = st.session_state.get("int_dormant_od_fraction", 1.0)
         
     # ── Resolve Dose Schedule ─────────────────────────────────────────────────
     dose_events = []
@@ -2169,9 +2168,10 @@ def run_sim_from_gui_params():
         # ic.D silently dropped the (usually dominant) dormant population, so longer
         # preruns lost more of the culture until the residual active cells fell below
         # the extinction floor and the treatment plotted as a flat 0 CFU curve.
-        # (S0= was also passed here but stationary_phase_ic has no such argument — it
-        # was silently forwarded to the solver and ignored.)
-        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=initial_B)
+        # initial_S sets the pre-run's nutrient level (Monod growth caps the stationary
+        # density by S0). Before the engine gained this arg, the pre-run always grew
+        # from S=1.0 regardless of the configured S0.
+        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=initial_B, initial_S=initial_S)
         initial_B = ic.B
         initial_S = max(float(ic.S), 0.0)  # prerun can leave S slightly negative (numerical)
         if ic.D is not None:
@@ -2199,19 +2199,20 @@ def run_sim_from_gui_params():
     return result, config
 
 
-def prerun_collapse_fraction(config, B0, t_prerun):
+def prerun_collapse_fraction(config, B0, t_prerun, initial_S=None):
     """Fraction of the inoculum surviving a stationary-phase pre-run (B + D total).
 
     Returns ``None`` when there is no pre-run or the pre-run can't be evaluated.
     A small value flags the trap where a natural death rate with no dormancy
     decimates the culture during the pre-run (death keeps acting once nutrients
     exhaust and growth stops), so the treatment — and its CFU/OD curve — starts
-    far below the inoculum.
+    far below the inoculum. ``initial_S`` sets the pre-run nutrient level so the
+    estimate matches the configured S0 (a low S0 caps stationary density).
     """
     if not t_prerun or t_prerun <= 0:
         return None
     try:
-        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=B0)
+        ic = stationary_phase_ic(config, t_prerun=t_prerun, B0=B0, initial_S=initial_S)
     except Exception:
         return None
     total = float(np.sum(ic.B)) + (float(np.sum(ic.D)) if ic.D is not None else 0.0)
@@ -2219,10 +2220,10 @@ def prerun_collapse_fraction(config, B0, t_prerun):
     return (total / b0) if b0 > 0 else None
 
 
-def warn_if_prerun_collapses(config, B0):
+def warn_if_prerun_collapses(config, B0, initial_S=None):
     """Emit a Streamlit warning if the configured pre-run decimates the culture."""
     t_prerun = st.session_state.get("int_t_prerun", 0.0)
-    frac = prerun_collapse_fraction(config, B0, t_prerun)
+    frac = prerun_collapse_fraction(config, B0, t_prerun, initial_S=initial_S)
     if frac is not None and frac < 0.1:
         st.warning(
             f"The {t_prerun:g} h pre-run leaves only ~{frac*100:.2g}% of the inoculum "
@@ -2304,7 +2305,7 @@ def generate_reproduction_code() -> str:
         code.append(f"# Stationary-phase pre-run ({t_prerun} h) starting from the configured inoculum;")
         code.append("# carry the full final state — active B, dormant D, nutrient S, immune Imm"
                      + (", debris." if _inherit_debris else " (dead-cell debris washed out)."))
-        code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun}, B0=initial_B)")
+        code.append(f"ic = stationary_phase_ic(cfg, t_prerun={t_prerun}, B0=initial_B, initial_S=initial_S)")
         code.append(
             "model = PBIModel(cfg, initial_B=ic.B, initial_P=initial_P, "
             f"initial_S=max(float(ic.S), 0.0), initial_D=ic.D, initial_Imm=(ic.Imm or 0.0){_debris_arg})"
@@ -2380,7 +2381,7 @@ def _repro_prerun_lines(indent, t_prerun):
         f"{p}_tp = mk_k.pop('_t_prerun_override', None)",
         f"{p}_tp = {base} if _tp is None else _tp",
         f"{p}if _tp and _tp > 0:",
-        f"{p}    ic = stationary_phase_ic(c_k, t_prerun=_tp, B0=ib_k)",
+        f"{p}    ic = stationary_phase_ic(c_k, t_prerun=_tp, B0=ib_k, initial_S=is_k)",
         f"{p}    ib_k, is_k = ic.B, max(float(ic.S), 0.0)",
         f"{p}    if ic.D is not None: mk_k['initial_D'] = ic.D",
         f"{p}    if ic.Imm is not None: mk_k['initial_Imm'] = ic.Imm",
@@ -2615,12 +2616,6 @@ __all__ = [
     'residual_vector_log10',
     'build_fit_spec',
     'config_param_snapshot',
-    'STRAIN_TUNABLES',
-    'STRAIN_DORMANCY_TUNABLES',
-    'PHAGE_TUNABLES',
-    'PHAGE_OPTIONAL_TUNABLES',
-    'ADSORPTION_PHAGE_KEYS',
-    'entity_param_key',
     'IIV_PARAMETERS',
     'run_trial_simulation',
     'plot_kaplan_meier_plotly',

@@ -191,7 +191,7 @@ def _render_body(theme_mode):
         st.markdown("### Sweep Results")
         if run_sweep:
             # Warn once if the pre-run decimates the culture (death w/o dormancy).
-            warn_if_prerun_collapses(nominal_config, initial_B)
+            warn_if_prerun_collapses(nominal_config, initial_B, initial_S=initial_S)
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -231,7 +231,7 @@ def _render_body(theme_mode):
                     if t_prerun is None:
                         t_prerun = st.session_state.get("int_t_prerun", 0.0)
                     if t_prerun > 0:
-                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
+                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, initial_S=is_k)
                         ib_k = ic.B
                         is_k = max(float(ic.S), 0.0)
                         if ic.D is not None:
@@ -315,7 +315,7 @@ def _render_body(theme_mode):
                     if t_prerun is None:
                         t_prerun = st.session_state.get("int_t_prerun", 0.0)
                     if t_prerun > 0:
-                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
+                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, initial_S=is_k)
                         ib_k = ic.B
                         is_k = max(float(ic.S), 0.0)
                         if ic.D is not None:
@@ -397,7 +397,7 @@ def _render_body(theme_mode):
                         if t_prerun is None:
                             t_prerun = st.session_state.get("int_t_prerun", 0.0)
                         if t_prerun > 0:
-                            ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k)
+                            ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, initial_S=is_k)
                             ib_k = ic.B
                             is_k = max(float(ic.S), 0.0)
                             if ic.D is not None:

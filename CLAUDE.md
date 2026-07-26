@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **194 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **193 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -197,6 +197,33 @@ research-grade, so only share the password with trusted people.
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
+
+## Done this session (2026-07-25) — Calibration manual-tuning = the real model builder
+
+Owner audit: the Calibration **Manual parameter tuning** panel (a hand-curated
+`STRAIN_TUNABLES`/`PHAGE_TUNABLES`/per-mode list in `fit_helper.py`) had drifted —
+**BRG mode showed no dormancy kinetics at all** (strain block skipped in BRG; dormant
+attenuation still showed because it's a *phage* tunable), and `dormant_od_fraction`
+(+ signals, pseudolysogeny, …) were missing. Root cause = the curated list is
+structurally drift-prone. **Fix (owner-approved): reuse the real builder.**
+
+- **Extracted** `simulator.py`'s Tab-1 body (mode selector + growth/death signals +
+  Direct/BRG/StrainSet) verbatim (pure move, 0 content diff) into module-level
+  **`render_model_builder()`** (seeds strains/phages/antibiotics from `int_*`, returns
+  `builder_mode`). The Simulator's Tab 1 now calls it.
+- **Calibration** manual-tuning renders the SAME `render_model_builder()` under a
+  `fit_show_builder` toggle (outside any expander — the builder has its own), so every
+  parameter and all 3 builder modes are present and can never drift. A compact "Global &
+  structural" block keeps the non-Tab-1 params (n_latent, nutrient env, OD/debris) and
+  now includes the **`dormant_od_fraction`** input (`fit_edit_dorm_od`).
+- **Deleted** the curated `*_TUNABLES` + `entity_param_key` (fit_helper + common
+  `__all__`/imports + app.py + their 2 tests). fit-apply now also pops the builder
+  widget keys (`_BUILDER_WIDGET_PREFIXES`) so applied fits re-seed the builder inputs.
+- Tests: `test_calibration.py::test_calibration_embeds_full_builder_all_modes` (all 3
+  modes render; Direct dormancy exposes str_sleep/str_wake); updated
+  `test_manual_tuning_edits_model_directly` + `test_globals_and_debris_*`. **193 passing.**
+- **NOT committed** — held for owner local testing (standing "test locally first" on
+  calibration UI). Note: `render.yaml plan: standard` from the prior turn is also staged.
 
 ## Done this session (2026-07-24) — unified role-based fit-parameter table
 

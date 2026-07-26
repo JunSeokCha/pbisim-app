@@ -137,52 +137,11 @@ def aggregate_observations(long_df, stat="raw", band=None):
 
 
 # ── Manual parameter tuning (Phase B) ───────────────────────────────────────────
-# The tuning panel edits the model's *actual* parameter values (like the Interactive
-# Simulator), so each knob names the GUI-dict key it edits per entity. Adsorption is
-# handled separately in the UI because its storage is builder-mode specific (Direct
-# and Custom-Strains keep it in the pairwise ``ads_{strain}_{phage}`` session keys;
-# Binary-Genotypes keeps it on the phage dict as ``adsorption_s``).
-STRAIN_TUNABLES = [
-    {"key": "growth_rate",                "label": "Growth rate (1/h)",   "fmt": "%g",   "default": 1.2},
-    {"key": "bacteria_to_resource_ratio", "label": "Bacteria/resource",   "fmt": "%.2e", "default": 1e9},
-    {"key": "death_rate_B",               "label": "Natural death (1/h)", "fmt": "%g",   "default": 0.0},
-    {"key": "initial_B",                  "label": "Initial density B₀",  "fmt": "%.3e", "default": 1e7},
-]
-# Shown only for a strain with dormancy enabled.
-STRAIN_DORMANCY_TUNABLES = [
-    {"key": "dormancy_rate",           "label": "Dormancy rate (1/h)",     "fmt": "%g", "default": 0.2},
-    {"key": "resuscitation_rate",      "label": "Resuscitation (1/h)",     "fmt": "%g", "default": 0.1},
-    {"key": "dormancy_diffusion_rate", "label": "Depth diffusion (1/h)",   "fmt": "%g", "default": 0.05},
-    {"key": "death_rate_D",            "label": "Dormant death (1/h)",     "fmt": "%g", "default": 0.0},
-]
-PHAGE_TUNABLES = [
-    {"key": "burst_sizes",       "label": "Burst size",         "fmt": "%g",   "default": 50.0},
-    {"key": "latent_periods",    "label": "Latent period (h)",  "fmt": "%g",   "default": 0.5},
-    {"key": "phage_decay_rates", "label": "Phage decay (1/h)",  "fmt": "%g",   "default": 0.1},
-    {"key": "phage_decay_Km",    "label": "Decay Km",           "fmt": "%.1e", "default": 0.0},
-    {"key": "attenuation_rate",  "label": "Dormant attenuation","fmt": "%g",   "default": 0.0},
-]
-# Shown per phage only when the entity actually carries the key — mutation rate and
-# resistance fitness cost live on the phage dict in Binary-Genotypes mode (in Direct
-# mode mutation is the strain→strain graph / per-locus rates, edited on the Simulator).
-PHAGE_OPTIONAL_TUNABLES = [
-    {"key": "mu",           "label": "Mutation rate (μ)", "fmt": "%.1e", "default": 1e-7},
-    {"key": "fitness_cost", "label": "Fitness cost",      "fmt": "%g",   "default": 0.05},
-]
-# adsorption_s is the phage-dict key used in Binary-Genotypes mode.
-ADSORPTION_PHAGE_KEYS = ("adsorption_s", "adsorption_rates")
-
-
-def entity_param_key(entity, candidate_keys):
-    """Return the key an entity actually stores a parameter under (first match).
-
-    Falls back to the first candidate so a fresh number-input seeds/writes a valid
-    key even on an entity that doesn't have it yet.
-    """
-    for k in candidate_keys:
-        if k in entity:
-            return k
-    return candidate_keys[0]
+# NOTE: the hand-curated *_TUNABLES lists + entity_param_key that used to drive the
+# Calibration manual-tuning panel were removed (2026-07-25). That panel now renders the
+# SAME builder as the Interactive Simulator via pbisim_app.views.simulator.
+# render_model_builder(), so every parameter and builder mode is covered automatically
+# and the two can never drift.
 
 
 def fit_residual(model_time, model_signal, data_time, data_value, log_scale):

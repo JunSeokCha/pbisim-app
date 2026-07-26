@@ -137,8 +137,8 @@ def _render_body(theme_mode):
                 sum_initial_B = sum(s["initial_B"] for s in strains)
 
                 # Warn once if the pre-run decimates the culture (death w/o dormancy).
-                _pc_cfg, _pc_B0, *_ = build_nominal_config_from_gui()
-                warn_if_prerun_collapses(_pc_cfg, _pc_B0)
+                _pc_cfg, _pc_B0, _pc_iP, _pc_iS, *_ = build_nominal_config_from_gui()
+                warn_if_prerun_collapses(_pc_cfg, _pc_B0, initial_S=_pc_iS)
 
                 # Save original doses
                 original_doses = list(st.session_state.get("int_doses", []))

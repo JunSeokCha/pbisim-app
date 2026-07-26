@@ -5,6 +5,16 @@ import time as _time
 
 from pbisim_app.common import *  # noqa: F401,F403
 
+# Widget-key prefixes owned by the shared model builder (render_model_builder). These
+# are WIDGET keys only — NOT model-data keys like ``ads_<i>_<j>`` (pairwise adsorption)
+# or ``direct_phg_res_rates`` (mutation list), which must survive. Popping these on
+# fit-apply forces the builder inputs to re-seed from the updated int_* dicts.
+_BUILDER_WIDGET_PREFIXES = (
+    "str_", "ss_", "phg_", "brg_", "trans_", "direct_mu_",
+    "ads_input_", "ads_dorm_input_",
+    "widget_builder_mode", "widget_density_total_cells", "widget_brg_",
+)
+
 
 def _pf(s):
     """Parse a possibly-scientific-notation string to float. Blank/invalid → None.
@@ -142,7 +152,7 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
         _mk_arm = dict(mk)
         _iS_arm = iS
         if _arm_prerun > 0:
-            _ic = stationary_phase_ic(config, t_prerun=_arm_prerun, B0=_armB)
+            _ic = stationary_phase_ic(config, t_prerun=_arm_prerun, B0=_armB, initial_S=_iS_arm)
             _armB = _ic.B
             _iS_arm = max(float(_ic.S), 0.0)
             if _ic.D is not None:
@@ -385,16 +395,49 @@ def render():
             _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
             # Per-arm conditions — each group can carry its own growth phase (pre-run),
-            # initial density B₀, and MOI, so e.g. log-phase and stationary-phase CFU
-            # (same observable, different condition) can be fit together. MOI auto-fills
-            # from the data; B₀ defaults to the nominal inoculum.
-            _nom_b0 = float(sum(float(_s.get("initial_B", 0.0))
-                                for _s in st.session_state.get("int_strains", []))) or 1e7
+            # initial density B₀, and dose. Like pbisim-fit, each arm's B₀ defaults to
+            # THAT ARM'S FIRST DATA POINT (CFU directly, or OD × od_to_cfu → CFU): the
+            # inoculum is anchored to the data, not to the builder. The model's B₀ vector
+            # supplies only the strain/genotype *ratio* — its magnitude is renormalised to
+            # this B₀ (which is why changing the builder's B₀ magnitude doesn't move the
+            # overlay). Falls back to the model total when the first point isn't a bacteria
+            # proxy (e.g. PFU-only arm).
+            def _model_total_b0():
+                if st.session_state.get("int_builder_mode", "").startswith("Binary"):
+                    if st.session_state.get("int_brg_use_eq_ic", False):
+                        return float(st.session_state.get("int_brg_eq_total_B", 1e7)) or 1e7
+                    _sv = st.session_state.get("int_brg_initial_B", {})
+                    return float(sum(float(v) for v in _sv.values())) or 1e7
+                return float(sum(float(_s.get("initial_B", 0.0))
+                                 for _s in st.session_state.get("int_strains", []))) or 1e7
+            _fallback_b0 = _model_total_b0()
+            _od2cfu_b0 = (float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
+                          if _debris_on else float(_link_vals.get("od", 2e8) or 2e8))
+
+            def _arm_first_b0(arm):
+                """Arm's earliest bacteria observation as CFU/mL — CFU verbatim, OD×od_to_cfu,
+                else the model total (pbisim-fit's data-anchored initial condition)."""
+                _dd = _agg[_agg["arm"] == arm]
+                if not len(_dd):
+                    return _fallback_b0
+                _d0 = _dd[_dd["time"] == _dd["time"].min()]
+                _c = _d0[_d0["observable"] == "cfu"]
+                if len(_c) and float(_c["value"].iloc[0]) > 0:
+                    return float(_c["value"].iloc[0])
+                _o = _d0[_d0["observable"] == "od"]
+                if len(_o) and float(_o["value"].iloc[0]) > 0:
+                    return float(_o["value"].iloc[0]) * _od2cfu_b0
+                return _fallback_b0
             _arm_cond = {}
             _dose_help = ("Dose seeds the phage inoculum as an absolute PFU/mL titre for that arm."
                           if _dose_unit == "pfu" else
                           "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
             with st.expander(f"Per-arm conditions (growth phase · B₀ · {_dose_lbl})", expanded=False):
+                st.info("**Each arm starts at its own first data point — like pbisim-fit — not the "
+                        "builder's B₀.** B₀ below defaults to that arm's earliest CFU (or OD × "
+                        "od_to_cfu). The builder's B₀ only sets the strain/genotype *ratio*; its "
+                        "magnitude is renormalised to the value here, so editing the builder B₀ "
+                        "doesn't move the overlay — edit it here. Override if the first point is noisy.")
                 st.caption("Log phase → pre-run 0 (fresh inoculum). Stationary phase → set a "
                            "pre-run duration to equilibrate toward carrying capacity before t=0. "
                            + _dose_help)
@@ -402,7 +445,7 @@ def render():
                     _cc = st.columns([2, 1, 1, 1])
                     _cc[0].markdown(f"**{_arm}**")
                     _arm_cond[_arm] = {
-                        "b0": _cc[1].number_input("B₀ (CFU/mL)", value=_nom_b0, format="%.2e",
+                        "b0": _cc[1].number_input("B₀ (CFU/mL)", value=_arm_first_b0(_arm), format="%.2e",
                                                   key=f"fit_cond_b0_{_arm}"),
                         "prerun": _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
                                                       key=f"fit_cond_prerun_{_arm}"),
@@ -412,194 +455,112 @@ def render():
                     }
 
             # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
-            # Edit the model's ACTUAL parameter values (absolute, per entity — like
-            # the Interactive Simulator), not multipliers. These widgets read from
-            # and write to the shared int_strains / int_phages dicts, so edits ARE
-            # the live model: no separate "apply" step, and they're savable as Parts.
-            # The widgets are seeded from the dict each render (value=), so they stay
-            # in sync with edits made on the Simulator page.
-            _tstrains = st.session_state.get("int_strains", [])
-            _tphages = st.session_state.get("int_phages", [])
-            with st.expander("Manual parameter tuning", expanded=False):
-                st.caption("Edit the model's real parameter values, then re-overlay. Changes update the live "
-                           "Interactive-Simulator model directly (no separate apply step) and can be saved as "
-                           "a Scenario or as Parts in the Library.")
-
-                # ── Global & structural parameters ───────────────────────────
-                st.markdown("**Global & structural**")
-                _track_nut = st.session_state.get("int_track_nutrients", True)
-                gk1, gk2, gk3 = st.columns(3)
-                with gk1:
-                    st.session_state["int_n_latent"] = int(st.number_input(
-                        "Latent compartments (L)", min_value=1, max_value=50,
-                        value=int(st.session_state.get("int_n_latent", 5)), step=1, key="fit_edit_n_latent",
-                        help="Number of phage latent (eclipse) stages — Erlang shape of the latent period."))
-                with gk2:
-                    st.session_state["int_carrying_capacity"] = st.number_input(
-                        "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
-                        format="%.3e", key="fit_edit_K")
-                with gk3:
-                    st.session_state["int_monod_constant"] = st.number_input(
-                        "Monod constant (Ks)", value=float(st.session_state.get("int_monod_constant", 0.3)),
-                        format="%g", key="fit_edit_Ks")
-                if _track_nut:
-                    nk1, nk2, nk3, nk4 = st.columns(4)
-                    with nk1:
-                        st.session_state["int_initial_S"] = st.number_input(
-                            "Initial nutrient (S₀)", value=float(st.session_state.get("int_initial_S", 1.0)),
-                            format="%g", key="fit_edit_S0")
-                    with nk2:
-                        st.session_state["int_recycle_fraction"] = st.number_input(
-                            "Recycle fraction", value=float(st.session_state.get("int_recycle_fraction", 0.0)),
-                            format="%g", key="fit_edit_recycle")
-                    with nk3:
-                        st.session_state["int_s_in"] = st.number_input(
-                            "Nutrient inflow (s_in)", value=float(st.session_state.get("int_s_in", 0.0)),
-                            format="%g", key="fit_edit_s_in")
-                    with nk4:
-                        st.session_state["int_s_out"] = st.number_input(
-                            "Nutrient washout (s_out)", value=float(st.session_state.get("int_s_out", 0.0)),
-                            format="%g", key="fit_edit_s_out")
-                else:
-                    st.caption("Nutrient tracking is off (constant/logistic growth) — S₀/recycle/inflow/washout "
-                               "are inactive. Enable it in the Interactive Simulator to fit them.")
-                if st.session_state.get("int_debris_enabled", False):
-                    st.markdown("*OD / debris module*")
-                    dk1, dk2, dk3, dk4 = st.columns(4)
-                    with dk1:
-                        st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
-                            "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
-                            format="%.3e", key="fit_edit_od2cfu",
-                            help="CFU per OD unit: OD = (biomass + debris) / od_to_cfu.")
-                    with dk2:
-                        st.session_state["int_debris_u"] = st.number_input(
-                            "Debris yield · deaths (u)", value=float(st.session_state.get("int_debris_u", 0.4)),
-                            format="%g", key="fit_edit_debris_u")
-                    with dk3:
-                        st.session_state["int_debris_v"] = st.number_input(
-                            "Debris yield · lysis (v)", value=float(st.session_state.get("int_debris_v", 0.2)),
-                            format="%g", key="fit_edit_debris_v")
-                    with dk4:
-                        st.session_state["int_debris_kdis"] = st.number_input(
-                            "Debris dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.01)),
-                            format="%g", key="fit_edit_debris_kdis")
-
-                # Bacterial parameters. IMPORTANT: in Binary-Genotypes (BRG) mode the
-                # strain kinetics live on `int_brg_base_*` session keys (a single WT base
-                # from which the genotypes are derived), NOT the per-strain dicts — and
-                # initial_B comes from the equilibrium IC / per-genotype table. So the
-                # per-strain-dict editors below (correct for Direct / Custom-Strains)
-                # would be silently ignored in BRG. Edit the right storage per mode.
-                _is_brg = st.session_state.get("int_builder_mode", "").startswith("Binary")
-                if _is_brg:
-                    st.markdown("**Base strain (WT) — genotypes derived**")
-                    _bc = st.columns(3)
-                    with _bc[0]:
-                        st.session_state["int_brg_base_growth"] = st.number_input(
-                            "Growth rate (h⁻¹)", value=float(st.session_state.get("int_brg_base_growth", 1.2)),
-                            format="%g", key="fit_edit_brg_growth")
-                    with _bc[1]:
-                        st.session_state["int_brg_base_ratio"] = st.number_input(
-                            "Bacteria/resource", value=float(st.session_state.get("int_brg_base_ratio", 1e9)),
-                            format="%.2e", key="fit_edit_brg_ratio")
-                    with _bc[2]:
-                        st.session_state["int_brg_death_rate_B"] = st.number_input(
-                            "Natural death rate (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_B", 0.0)),
-                            format="%g", key="fit_edit_brg_death")
-                    if st.session_state.get("int_brg_use_eq_ic", False):
-                        st.session_state["int_brg_eq_total_B"] = st.number_input(
-                            "Total bacteria (equilibrium IC)",
-                            value=float(st.session_state.get("int_brg_eq_total_B", 1e7)),
-                            format="%.3e", key="fit_edit_brg_eqtotal",
-                            help="With the equilibrium initial condition on, per-genotype B₀ is derived "
-                                 "from this total (and fitness cost) — individual strain B₀ is not used.")
+            # Edit the model's ACTUAL parameter values via the SAME builder panels as
+            # the Interactive Simulator (render_model_builder) — every parameter and
+            # every builder mode (Direct / BRG / StrainSet) is available, and the two
+            # can never drift. Params that live OUTSIDE the Tab-1 builder (latent
+            # stages, nutrient environment, OD/debris) get a compact block here. All
+            # edits write the shared int_* state, so they ARE the live model (no
+            # separate apply step) and the overlay below reflects them immediately.
+            st.markdown("### 5 · Manual parameter tuning")
+            st.caption("Edit the model's real parameter values, then re-overlay. These are the "
+                       "**same controls as the Interactive Simulator** — all builder modes and "
+                       "every parameter — so nothing is missing. Edits update the live model "
+                       "directly (no separate apply step) and are savable as a Scenario / Parts.")
+            _show_builder = st.toggle(
+                "Show model builder & structural parameters",
+                value=bool(st.session_state.get("fit_show_builder", False)), key="fit_show_builder")
+            if _show_builder:
+                # Structural parameters that are NOT part of the Tab-1 model builder
+                # (they live in the Simulator's Environment / Solver tabs): latent-stage
+                # count, the nutrient environment, and the OD/debris module — including
+                # the dormant-cell optical weight `dormant_od_fraction` (default 1.0).
+                with st.container(border=True):
+                    st.markdown("**Global & structural**")
+                    _track_nut = st.session_state.get("int_track_nutrients", True)
+                    gk1, gk2 = st.columns([1, 2])
+                    with gk1:
+                        st.session_state["int_n_latent"] = int(st.number_input(
+                            "Latent compartments (L)", min_value=1, max_value=50,
+                            value=int(st.session_state.get("int_n_latent", 5)), step=1,
+                            key="fit_edit_n_latent",
+                            help="Number of phage latent (eclipse) stages — Erlang shape of the latent period."))
+                    with gk2:
+                        st.caption("Carrying capacity **K** and Monod constant **Ks** are in the "
+                                   "builder's *Growth signal* section below (they depend on the growth model).")
+                    if _track_nut:
+                        nk1, nk2, nk3, nk4 = st.columns(4)
+                        with nk1:
+                            st.session_state["int_initial_S"] = st.number_input(
+                                "Initial nutrient (S₀)", value=float(st.session_state.get("int_initial_S", 1.0)),
+                                format="%g", key="fit_edit_S0")
+                        with nk2:
+                            st.session_state["int_recycle_fraction"] = st.number_input(
+                                "Recycle fraction", value=float(st.session_state.get("int_recycle_fraction", 0.0)),
+                                format="%g", key="fit_edit_recycle")
+                        with nk3:
+                            st.session_state["int_s_in"] = st.number_input(
+                                "Nutrient inflow (s_in)", value=float(st.session_state.get("int_s_in", 0.0)),
+                                format="%g", key="fit_edit_s_in")
+                        with nk4:
+                            st.session_state["int_s_out"] = st.number_input(
+                                "Nutrient washout (s_out)", value=float(st.session_state.get("int_s_out", 0.0)),
+                                format="%g", key="fit_edit_s_out")
                     else:
-                        st.caption("Per-genotype initial counts are set in the BRG phage-loci table on the "
-                                   "Interactive Simulator.")
-                _tune_strains = [] if _is_brg else _tstrains
-                if _tune_strains:
-                    st.markdown("**Bacterial strains**")
-                for _si, _s in enumerate(_tune_strains):
-                    st.markdown(f"*{_s.get('name', f'Strain {_si}')}*")
-                    _scols = st.columns(len(STRAIN_TUNABLES))
-                    for _sc, _knob in zip(_scols, STRAIN_TUNABLES):
-                        with _sc:
-                            _s[_knob["key"]] = st.number_input(
-                                _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
-                                format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
-                    # dormancy kinetics + depth compartments — only when enabled
-                    if _s.get("dormancy_enabled"):
-                        _dcols = st.columns(len(STRAIN_DORMANCY_TUNABLES) + 1)
-                        with _dcols[0]:
-                            _s["dormancy_depth"] = int(st.number_input(
-                                "Depth layers (Q)", min_value=1, max_value=10,
-                                value=int(_s.get("dormancy_depth", 1)), step=1,
-                                key=f"fit_edit_s_dormancy_depth_{_si}",
-                                help="Number of dormancy-depth compartments (max across strains sets n_depth)."))
-                        for _dc, _knob in zip(_dcols[1:], STRAIN_DORMANCY_TUNABLES):
-                            with _dc:
-                                _s[_knob["key"]] = st.number_input(
-                                    _knob["label"], value=float(_s.get(_knob["key"], _knob["default"]) or 0.0),
-                                    format=_knob["fmt"], key=f"fit_edit_s_{_knob['key']}_{_si}")
+                        st.caption("Nutrient tracking is off (constant/logistic growth) — S₀/recycle/inflow/"
+                                   "washout are inactive. Choose a nutrient growth signal in the builder to fit them.")
+                    # OD / debris module — enableable HERE (its checkbox lives in the
+                    # Simulator's Environment tab, which the embedded builder doesn't
+                    # include, so calibration would otherwise be unable to turn on OD
+                    # fitting). Required to fit the OD observable via lysed-cell debris.
+                    st.session_state["int_debris_enabled"] = st.checkbox(
+                        "Track cell debris → model OD (needed to fit the OD observable)",
+                        value=bool(st.session_state.get("int_debris_enabled", False)),
+                        key="fit_edit_debris_enabled",
+                        help="OD = (active B + I + dormant_OD_weight·(D+H) + debris) / od_to_cfu. "
+                             "Off → OD is a plain biomass×link scaling.")
+                    if st.session_state.get("int_debris_enabled", False):
+                        st.markdown("*OD / debris module*")
+                        dk1, dk2, dk3, dk4, dk5 = st.columns(5)
+                        with dk1:
+                            st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
+                                "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
+                                format="%.3e", key="fit_edit_od2cfu",
+                                help="CFU per OD unit: OD = (biomass + dormant·frac + debris) / od_to_cfu.")
+                        with dk2:
+                            st.session_state["int_debris_u"] = st.number_input(
+                                "Debris · deaths (u)", value=float(st.session_state.get("int_debris_u", 0.4)),
+                                format="%g", key="fit_edit_debris_u")
+                        with dk3:
+                            st.session_state["int_debris_v"] = st.number_input(
+                                "Debris · lysis (v)", value=float(st.session_state.get("int_debris_v", 0.2)),
+                                format="%g", key="fit_edit_debris_v")
+                        with dk4:
+                            st.session_state["int_debris_kdis"] = st.number_input(
+                                "Dissolution (k_dis)", value=float(st.session_state.get("int_debris_kdis", 0.01)),
+                                format="%g", key="fit_edit_debris_kdis")
+                        with dk5:
+                            st.session_state["int_dormant_od_fraction"] = st.number_input(
+                                "Dormant OD weight", min_value=0.0, max_value=1.0,
+                                value=float(st.session_state.get("int_dormant_od_fraction", 1.0)),
+                                format="%g", key="fit_edit_dorm_od",
+                                help="Optical weight of a dormant/hibernating cell (D, H) relative to an "
+                                     "active cell in OD. 1.0 = counts fully; 0.0 = invisible to OD.")
+                    else:
+                        st.caption("OD/debris off → the OD observable is a plain biomass × link "
+                                   "scaling. Tick the box above to model OD from debris (and expose "
+                                   "od_to_cfu, debris rates, and the dormant-cell OD weight).")
 
-                # Adsorption is a strain×phage property; its storage is builder-mode
-                # specific. Direct / Custom-Strains keep it in the pairwise
-                # ads_{strain}_{phage} session keys (edited per pair here); Binary-
-                # Genotypes keeps it on the phage dict as adsorption_s.
-                _ads_pairwise = not st.session_state.get("int_builder_mode", "").startswith("Binary")
-
-                if _tphages:
-                    st.markdown("**Phages**")
-                for _pj, _p in enumerate(_tphages):
-                    st.markdown(f"*{_p.get('name', f'Phage {_pj}')}*")
-                    _pcols = st.columns(len(PHAGE_TUNABLES))
-                    for _pc, _knob in zip(_pcols, PHAGE_TUNABLES):
-                        with _pc:
-                            _p[_knob["key"]] = st.number_input(
-                                _knob["label"], value=float(_p.get(_knob["key"], _knob["default"]) or 0.0),
-                                format=_knob["fmt"], key=f"fit_edit_p_{_knob['key']}_{_pj}")
-                    # Mutation rate / fitness cost — only in Binary-Genotypes, the only
-                    # mode that reads them from the phage dict. (Direct-mode phage dicts
-                    # may carry a stale `mu`, but Direct/Custom-Strains take mutation from
-                    # the strain→strain graph edited on the Simulator, so editing it here
-                    # would be a silent no-op.)
-                    _opt = PHAGE_OPTIONAL_TUNABLES if _is_brg else []
-                    if _opt:
-                        _ocols = st.columns(len(_opt))
-                        for _oc, _knob in zip(_ocols, _opt):
-                            with _oc:
-                                _p[_knob["key"]] = st.number_input(
-                                    _knob["label"], value=float(_p.get(_knob["key"], _knob["default"]) or 0.0),
-                                    format=_knob["fmt"], key=f"fit_edit_p_{_knob['key']}_{_pj}")
-                    # adsorption inputs (per strain in pairwise modes: active + dormant)
-                    if _ads_pairwise and _tstrains:
-                        _acols = st.columns(len(_tstrains))
-                        for _si, _s in enumerate(_tstrains):
-                            _adk = f"ads_{_si}_{_pj}"
-                            with _acols[_si]:
-                                st.session_state[_adk] = st.number_input(
-                                    f"Adsorption → {_s.get('name', f'Strain {_si}')}",
-                                    value=float(st.session_state.get(_adk, 1e-8 if _si == 0 else 0.0)),
-                                    format="%.3e", key=f"fit_edit_ads_{_si}_{_pj}")
-                            # dormant-cell adsorption for strains with dormancy on
-                            if _s.get("dormancy_enabled"):
-                                _addk = f"ads_dorm_{_si}_{_pj}"
-                                with _acols[_si]:
-                                    st.session_state[_addk] = st.number_input(
-                                        f"Dormant ads → {_s.get('name', f'Strain {_si}')}",
-                                        value=float(st.session_state.get(_addk, 0.0)),
-                                        format="%.3e", key=f"fit_edit_adsdorm_{_si}_{_pj}")
-                    elif not _ads_pairwise:
-                        _adk = entity_param_key(_p, ADSORPTION_PHAGE_KEYS)
-                        _p[_adk] = st.number_input(
-                            "Adsorption (adsorption_s)", value=float(_p.get(_adk, 5e-8) or 0.0),
-                            format="%.3e", key=f"fit_edit_adss_{_pj}")
-                        if "adsorption_r" in _p:
-                            _p["adsorption_r"] = st.number_input(
-                                "Adsorption resistant (adsorption_r)", value=float(_p.get("adsorption_r", 0.0) or 0.0),
-                                format="%.3e", key=f"fit_edit_adsr_{_pj}")
-                st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some builder "
-                           "modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
+                # The full model builder — mode selector + growth/death signals + the
+                # selected Direct / BRG / StrainSet body. SAME function the Simulator uses,
+                # so every parameter (dormancy kinetics in every mode, pseudolysogeny,
+                # signals, PK, …) is present and always in sync. Rendered OUTSIDE any
+                # st.expander (the builder has its own expanders; nesting is illegal).
+                from pbisim_app.views.simulator import render_model_builder
+                st.markdown("**Model builder**")
+                render_model_builder()
+                st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some "
+                           "builder modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
 
             # Compute the overlay only when the button is clicked; store the plot
             # data in session_state so the visualization stays alive across page
@@ -1115,11 +1076,13 @@ def render():
                         _fcfg = st.session_state.get("calib_fitted_config")
                         if _fcfg is not None:
                             _apply_config_to_state(_fcfg)
-                        # Drop the manual-tuning widgets so they re-seed from the
-                        # updated dicts — otherwise their stale stored values would
-                        # overwrite the just-applied fit on the next rerun.
+                        # Drop the manual-tuning + model-builder widgets so they
+                        # re-seed from the updated int_* dicts — otherwise their stale
+                        # keyed values would overwrite the just-applied fit on the next
+                        # rerun (the builder writes each widget back into the dict).
                         for _k in [k for k in list(st.session_state.keys())
-                                   if k.startswith("fit_edit_")]:
+                                   if k.startswith("fit_edit_")
+                                   or k.startswith(_BUILDER_WIDGET_PREFIXES)]:
                             st.session_state.pop(_k, None)
                         if _tgt in st.session_state.user_models:
                             st.session_state.user_models[_tgt]["state"] = dump_model()

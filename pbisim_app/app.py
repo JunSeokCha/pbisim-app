@@ -59,12 +59,6 @@ from pbisim_app.fit_helper import (
     apply_row_filters,
     aggregate_observations,
     fit_residual,
-    STRAIN_TUNABLES,
-    STRAIN_DORMANCY_TUNABLES,
-    PHAGE_TUNABLES,
-    PHAGE_OPTIONAL_TUNABLES,
-    ADSORPTION_PHAGE_KEYS,
-    entity_param_key,
 )
 from pbisim_app.trial_helper import (
     IIV_PARAMETERS,

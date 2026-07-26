@@ -59,7 +59,9 @@ def test_calibration_config_survives_navigation():
 
 
 def test_manual_tuning_edits_model_directly():
-    """Phase B: editing an absolute parameter value updates the live model dict."""
+    """Phase B: the manual-tuning panel now renders the SAME model builder as the
+    Interactive Simulator (render_model_builder), so editing an absolute value there
+    updates the live model dict directly — no separate apply step."""
     at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     at.session_state["fit_dataset"] = {
@@ -68,17 +70,98 @@ def test_manual_tuning_edits_model_directly():
     }
     at.session_state["current_page_radio"] = "Calibration"
     at.run()
-
-    # set an absolute burst size on the phage tuning input, exactly like ModelBuilder
-    at.session_state["fit_edit_p_burst_sizes_0"] = 137.0
+    # reveal the embedded builder (Direct mode by default)
+    at.session_state["fit_show_builder"] = True
     at.run()
-    # the live model dict reflects the edit directly — no separate apply step
+
+    # set an absolute burst size on the builder's phage input (phg_burst_0), exactly
+    # like editing it on the Interactive Simulator page
+    at.session_state["phg_burst_0"] = 137.0
+    at.run()
+    # the live model dict reflects the edit directly
     assert at.session_state["int_phages"][0]["burst_sizes"] == 137.0
-    # and it is NOT shadowed into fit_config (dict stays authoritative)
-    assert "fit_edit_p_burst_sizes_0" not in at.session_state["fit_config"]
 
     # the overlay runs against the edited model
     [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    assert len(at.exception) == 0
+
+
+def test_calibration_embeds_full_builder_all_modes():
+    """The manual-tuning panel renders the SAME builder as the Interactive Simulator,
+    so every builder mode and its complete parameter set is present on the Calibration
+    page — closing the reported gap where dormancy entry/resuscitation rates were
+    missing. Direct-mode dormancy exposes the per-strain entry + resuscitation inputs;
+    BRG and StrainSet render without error."""
+    at = AppTest.from_file(APP, default_timeout=240)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _synthetic_dataset(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["PHAGE", "MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.session_state["fit_show_builder"] = True
+    at.session_state["int_builder_mode"] = "Direct (ModelBuilder)"
+    at.run()
+    # tick the builder's dormancy checkbox on strain 0 (like a user) → the builder shows
+    # entry (str_sleep) + resuscitation (str_wake) rates, which the old curated panel
+    # omitted in some modes
+    at.session_state["str_dorm_en_0"] = True
+    at.run()
+    keys = {n.key for n in at.number_input if n.key}
+    assert "str_sleep_0" in keys and "str_wake_0" in keys, sorted(k for k in keys if "str_" in k)
+    assert len(at.exception) == 0
+    # switching builder mode on the Calibration page renders each mode cleanly
+    for _mode in ("Binary Genotypes (BRG)", "Custom Strains & Graph (StrainSet)"):
+        at.session_state["widget_builder_mode"] = _mode
+        at.run()
+        assert len(at.exception) == 0, (_mode, at.exception)
+        assert at.session_state["int_builder_mode"] == _mode
+
+
+def test_per_arm_b0_defaults_to_first_data_point():
+    """pbisim-fit parity: each arm's B₀ defaults to its OWN first data observation (CFU
+    verbatim), anchored to the data — NOT to the builder's B₀ (which only supplies the
+    strain/genotype ratio and is renormalised away)."""
+    df = pd.DataFrame([
+        {"PHAGE": ph, "MOI": 1.0, "TIME": t, "DV": v}
+        for ph in ("MXP1", "MXP2")
+        for (t, v) in ((0.0, 4.2e6), (2.0, 1.0e6), (4.0, 5.0e5))
+    ])
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    # deliberately-different builder B₀ — must NOT be what the overlay uses
+    at.session_state["int_strains"][0]["initial_B"] = 9e9
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "TIME", "value": "DV",
+        "observable": "cfu", "arm_cols": ["PHAGE"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    b0s = [n.value for n in at.number_input if n.key and n.key.startswith("fit_cond_b0_")]
+    assert b0s, "no per-arm B₀ inputs rendered"
+    assert all(abs(float(v) - 4.2e6) < 1.0 for v in b0s), b0s   # first CFU, not the builder's 9e9
+    assert len(at.exception) == 0
+
+
+def test_calibration_can_enable_debris_for_od_fitting():
+    """The OD/debris module can be toggled ON from the Calibration page itself (its
+    checkbox lives in the Simulator's Environment tab, which the embedded builder does
+    not include) — otherwise OD fitting via debris would be unreachable here."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _synthetic_dataset(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["PHAGE", "MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.session_state["fit_show_builder"] = True
+    at.run()
+    at.session_state["fit_edit_debris_enabled"] = True
+    at.run()
+    assert at.session_state["int_debris_enabled"] is True
+    # the dormant-OD-weight input becomes available once debris is on
+    keys = {n.key for n in at.number_input if n.key}
+    assert "fit_edit_dorm_od" in keys
     assert len(at.exception) == 0
 
 
@@ -121,10 +204,13 @@ def test_globals_and_debris_and_save_scenario():
     }
     at.session_state["current_page_radio"] = "Calibration"
     at.run()
+    # the global/structural + debris inputs live under the model-builder toggle
+    at.session_state["fit_show_builder"] = True
+    at.run()
 
     keys = {n.key for n in at.number_input if n.key}
     for k in ("fit_edit_n_latent", "fit_edit_S0", "fit_edit_recycle",
-              "fit_edit_od2cfu", "fit_edit_debris_u"):
+              "fit_edit_od2cfu", "fit_edit_debris_u", "fit_edit_dorm_od"):
         assert k in keys
     # with debris on, the simple biomass/link input is replaced by a note
     assert any("debris module" in m.value for m in at.markdown)

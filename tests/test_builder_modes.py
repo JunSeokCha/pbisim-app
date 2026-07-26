@@ -602,3 +602,24 @@ def test_brg_dormant_adsorption_wired():
     assert len(at.exception) == 0, at.exception
     cfg = at.session_state["simulation_config"]
     assert np.any(np.asarray(cfg.adsorption_rates_dormant) > 0), "dormant adsorption not applied"
+
+
+def test_dormant_od_fraction_reaches_config_all_modes():
+    """dormant_od_fraction (optical weight of dormant cells in OD) must reach the built
+    config in EVERY builder mode. Previously only Direct passed it via with_od_debris;
+    BRG/StrainSet omitted it from to_config's extra kwargs → engine default 1.0 silently
+    ignored the user's setting."""
+    from streamlit.testing.v1 import AppTest
+    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
+                 "Custom Strains & Graph (StrainSet)"):
+        at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+        at.run()
+        at.session_state["widget_builder_mode"] = mode
+        at.run(); at.run()
+        at.session_state["int_debris_enabled"] = True
+        at.session_state["int_dormant_od_fraction"] = 0.3
+        at.run()
+        [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = at.session_state["simulation_config"]
+        assert abs(float(cfg.dormant_od_fraction) - 0.3) < 1e-9, (mode, cfg.dormant_od_fraction)
+        assert len(at.error) == 0, (mode, at.error)

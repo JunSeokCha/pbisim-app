@@ -228,7 +228,7 @@ def test_repro_brg_equilibrium_ic_and_prerun():
     code = at.session_state["_last_repro_code"]
     assert "brg.equilibrium_initial_condition(total_bacteria=" in code, code
     # the pre-run must start from the equilibrium inoculum, not a default
-    assert "stationary_phase_ic(cfg, t_prerun=24.0, B0=initial_B)" in code, code
+    assert "stationary_phase_ic(cfg, t_prerun=24.0, B0=initial_B, initial_S=initial_S)" in code, code
     # and it still runs
     ns = {}
     exec(compile(code, "<repro>", "exec"), ns)
