@@ -92,6 +92,43 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
     return out, conditions
 
 
+# Dose compartments a NONMEM/Monolix dose row's `observable` column may name, and the
+# default unit per target (mirrors pbisim_fit.DOSE_TARGETS / DoseRecord.unit).
+DOSE_TARGETS = ("phage", "bacteria", "antibiotic", "nutrient")
+_DEFAULT_DOSE_UNIT = {"phage": "pfu", "bacteria": "cfu", "antibiotic": "mg", "nutrient": "mg"}
+
+
+def parse_dose_rows(df, arm_cols, evid_col, observable_col, amount_col, time_col, unit_col=None):
+    """Per-arm dose records from NONMEM/Monolix dose rows (``dose_event``/EVID == 1).
+
+    Returns ``{arm: [{"time", "target", "amount", "unit"}, ...]}``. The dose's target
+    compartment is the value of the *observable* column on that row (bacteria / phage /
+    antibiotic / nutrient — the column double-duties as CMT for dose rows). Rows whose
+    target isn't a dose compartment, or with a non-finite amount, are skipped. Unit comes
+    from ``unit_col`` when given, else a per-target default. Returns ``{}`` when no EVID
+    or amount column is mapped (observation-only dataset)."""
+    if (not evid_col or evid_col not in df.columns
+            or not amount_col or amount_col not in df.columns):
+        return {}
+    evid = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
+    arm = _join_columns(df, list(arm_cols))
+    amt = pd.to_numeric(df[amount_col], errors="coerce")
+    tt = pd.to_numeric(df[time_col], errors="coerce")
+    _has_unit = bool(unit_col) and unit_col in df.columns
+    out = {}
+    for i in df.index[evid == 1]:
+        tgt = str(df.at[i, observable_col]).strip().lower()
+        if tgt not in DOSE_TARGETS or not np.isfinite(amt.at[i]):
+            continue
+        unit = (str(df.at[i, unit_col]).strip().lower()
+                if _has_unit and str(df.at[i, unit_col]).strip()
+                else _DEFAULT_DOSE_UNIT.get(tgt, ""))
+        out.setdefault(arm.at[i], []).append({
+            "time": float(tt.at[i]) if np.isfinite(tt.at[i]) else 0.0,
+            "target": tgt, "amount": float(amt.at[i]), "unit": unit})
+    return out
+
+
 def apply_row_filters(df, filters):
     """Keep rows whose column values are in the allowed set for every filtered column.
 

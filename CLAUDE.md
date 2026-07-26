@@ -18,7 +18,7 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **193 tests passing.** Depends on `pbisim>=1.0` (and,
+the initial scaffold; API wiring requires engine-author oversight). **201 tests passing.** Depends on `pbisim>=1.0` (and,
 optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
 
 ---
@@ -197,6 +197,30 @@ research-grade, so only share the password with trusted people.
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
+
+## Done this session (2026-07-26) — B0/dose calibration overhaul (pbisim-fit additive-B0)
+
+pbisim-fit finished the additive-B0 / EventTable (NONMEM/Monolix) work (its
+`APP_INTEGRATION_NOTES.md` is the hand-off); app side implemented in 3 pieces:
+
+- **B — ratio-mode builder.** `render_model_builder(inoculum_mode="magnitude"|"ratio")`.
+  Calibration renders `"ratio"`: per-strain B0 → "Initial ratio (relative)", absolute
+  inoculum totals hidden (phage P0, BRG `brg_eq_total_B`), BRG equilibrium checkbox KEPT
+  (sets the resistant fraction). Simulator unchanged (`"magnitude"`).
+- **C — B0 source + additive dose.** Per-arm conditions gained a B0 radio (First
+  observation [+ noise warning] / Shared / Per-arm). Fixed modes → `build_dataset` emits
+  `DoseRecord(target="bacteria", unit="cfu")` (or `pretreatment_inoculum` for pre-run
+  arms); first-obs emits neither (pbisim-fit's `cfu[0]` fallback + warning).
+- **A — NONMEM dose-row import.** Column-map gained EVID/AMT/unit selectors;
+  `fit_helper.parse_dose_rows()` parses dose rows (EVID=1; observable = target
+  compartment) into per-arm records that gate the manual per-arm fields and are emitted
+  verbatim by `build_dataset(arm_doses=)` (overriding the manual fields for covered
+  targets). Overlay respects per-arm `moi_unit`.
+
+Tests: parse_dose_rows, additive-dose + imported-dose override (test_nls_fit), ratio
+labels + B0-mode + NONMEM gating (test_calibration). **201 tests passing.** See memory
+[[calibration-additive-b0-dose]]. Committed + pushed this session (engine initial_S fix
+`abf3b5f` too).
 
 ## Done this session (2026-07-25) — Calibration manual-tuning = the real model builder
 

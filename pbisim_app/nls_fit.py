@@ -399,13 +399,15 @@ def estimate_od_to_cfu(agg, sel_arms):
     return float(np.median(ratios)) if ratios else None
 
 
-def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit="moi"):
+def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit="moi",
+                  arm_doses=None):
     """Construct a pbisim-fit ExperimentalDataset from the app's aggregated calibration
     data + per-arm conditions (growth-phase pre-run, B₀, phage dose).
 
-    ``dose_unit`` is how each arm's dose value is interpreted: ``"moi"`` (× the arm's
-    B₀) or ``"pfu"`` (absolute PFU/mL). pbisim-fit's ``DoseRecord`` supports both and
-    ``_solve_arm`` scales MOI by the initial CFU while using PFU verbatim."""
+    ``dose_unit`` is how each arm's manual dose value is interpreted: ``"moi"`` (× the
+    arm's B₀) or ``"pfu"`` (absolute PFU/mL). ``arm_doses`` = ``{arm: [{time, target,
+    amount, unit}]}`` imported from NONMEM/Monolix dose rows; these are emitted verbatim
+    and, for whichever targets they specify, override the manual per-arm dose/inoculum."""
     from pbisim_fit.data.ingestion import (
         ExperimentalDataset, TreatmentRecord, DoseRecord, DatasetMetadata)
 
@@ -427,15 +429,33 @@ def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit
         if not kw:
             continue
         doses = []
+        # Imported NONMEM/Monolix dose rows — emitted verbatim; the targets they cover
+        # are then NOT re-emitted from the manual per-arm fields.
+        _dsdoses = (arm_doses or {}).get(a, [])
+        _ds_targets = set()
+        for d in _dsdoses:
+            doses.append(DoseRecord(time=float(d.get("time", 0.0)), amount=float(d["amount"]),
+                                    unit=(d.get("unit") or "cfu"), target=d["target"]))
+            _ds_targets.add(d["target"])
+        # Manual phage dose (only when the dataset didn't specify one for this arm).
         _dose = float(cond.get("moi", 0.0) or 0.0)   # dose value in `dose_unit`
-        if _dose > 0:
-            doses = [DoseRecord(time=0.0, amount=_dose,
-                                unit=("pfu" if dose_unit == "pfu" else "moi"), target="phage")]
+        if _dose > 0 and "phage" not in _ds_targets:
+            doses.append(DoseRecord(time=0.0, amount=_dose,
+                                    unit=("pfu" if dose_unit == "pfu" else "moi"), target="phage"))
+        # Additive-B0 model: a KNOWN inoculum (Shared / Per-arm mode → b0_is_dose) is a
+        # t=0 bacteria dose (like the phage dose), consumed literally by pbisim-fit's
+        # _solve_arm. A pre-run arm instead carries it as the pre-run's fresh inoculum
+        # (pretreatment_inoculum). First-observation mode records NEITHER, so pbisim-fit
+        # falls back to cfu[0] (its baseline warning; we already warn in the UI).
         pr = float(cond.get("prerun", 0.0) or 0.0)
+        b0 = float(cond.get("b0", 0.0) or 0.0)
+        _b0_is_dose = bool(cond.get("b0_is_dose", False)) and b0 > 0 and "bacteria" not in _ds_targets
+        if _b0_is_dose and pr <= 0:
+            doses.append(DoseRecord(time=0.0, amount=b0, unit="cfu", target="bacteria"))
         arms.append(TreatmentRecord(
             label=str(a), dose_events=doses,
             pretreatment_h=(pr if pr > 0 else None),
-            pretreatment_inoculum=(float(cond["b0"]) if cond.get("b0") else None),
+            pretreatment_inoculum=(b0 if (_b0_is_dose and pr > 0) else None),
             **kw,
         ))
     meta = DatasetMetadata(od_to_cfu=(float(od_to_cfu) if od_to_cfu else None))

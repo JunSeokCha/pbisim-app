@@ -110,6 +110,25 @@ def test_predicted_od_uses_model_debris_when_requested():
     assert predicted_observable(r2, "pfu", use_model_od=True) == 1e9
 
 
+def test_parse_dose_rows_nonmem_format():
+    """NONMEM/Monolix dose rows (EVID=1) are parsed into per-arm dose records; the
+    observable column names the target compartment, AMT the amount, default units apply."""
+    from pbisim_app.fit_helper import parse_dose_rows
+    df = pd.DataFrame([
+        {"ARM": "A", "TIME": 0.0, "OBS": "cfu",      "DV": 1e6, "AMT": "",  "EVID": 0},
+        {"ARM": "A", "TIME": 0.0, "OBS": "bacteria", "DV": "",  "AMT": 5e6, "EVID": 1},
+        {"ARM": "A", "TIME": 0.0, "OBS": "phage",    "DV": "",  "AMT": 1e8, "EVID": 1},
+        {"ARM": "B", "TIME": 0.0, "OBS": "cfu",      "DV": 2e6, "AMT": "",  "EVID": 0},
+    ])
+    doses = parse_dose_rows(df, ["ARM"], "EVID", "OBS", "AMT", "TIME")
+    assert set(doses) == {"A"}                                   # only arm A has dose rows
+    by_t = {d["target"]: d for d in doses["A"]}
+    assert by_t["bacteria"]["amount"] == 5e6 and by_t["bacteria"]["unit"] == "cfu"
+    assert by_t["phage"]["amount"] == 1e8 and by_t["phage"]["unit"] == "pfu"
+    # no EVID mapping → observation-only dataset
+    assert parse_dose_rows(df, ["ARM"], None, "OBS", "AMT", "TIME") == {}
+
+
 def test_fit_residual_zero_and_positive():
     t = np.array([0.0, 1.0, 2.0])
     model = np.array([1.0, 10.0, 100.0])

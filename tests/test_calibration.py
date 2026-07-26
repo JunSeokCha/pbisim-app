@@ -165,6 +165,66 @@ def test_calibration_can_enable_debris_for_od_fitting():
     assert len(at.exception) == 0
 
 
+def test_calibration_builder_uses_ratio_inoculum_labels():
+    """Calibration renders the builder in ratio mode — per-strain B0 becomes a relative
+    'ratio' and the absolute phage P0 input is hidden — while the Simulator keeps
+    absolute magnitudes (inoculum_mode default)."""
+    sim = AppTest.from_file(APP, default_timeout=120)
+    sim.run()
+    sim_labels = {n.label for n in sim.number_input}
+    assert "Initial Density (B0)" in sim_labels          # Simulator = magnitude
+    assert "Initial Density (P0)" in sim_labels
+
+    cal = AppTest.from_file(APP, default_timeout=150)
+    cal.run()
+    cal.session_state["fit_dataset"] = {
+        "raw": _synthetic_dataset(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["PHAGE", "MOI"], "moi": "MOI",
+    }
+    cal.session_state["current_page_radio"] = "Calibration"
+    cal.session_state["fit_show_builder"] = True
+    cal.run()
+    cal_labels = {n.label for n in cal.number_input}
+    assert "Initial ratio (relative)" in cal_labels      # Calibration = ratio
+    assert "Initial Density (B0)" not in cal_labels
+    assert "Initial Density (P0)" not in cal_labels       # phage P0 hidden (dose-driven)
+    assert len(cal.exception) == 0
+
+
+def _nonmem_dataset():
+    """A NONMEM/Monolix-style long dataset: dose rows (EVID=1) interleaved with CFU
+    observations; the observable column names the dose target for dose rows."""
+    rows = []
+    for arm in ("A", "B"):
+        rows.append({"ARM": arm, "TIME": 0.0, "OBS": "bacteria", "DV": np.nan, "AMT": 5e6, "EVID": 1})
+        rows.append({"ARM": arm, "TIME": 0.0, "OBS": "phage", "DV": np.nan, "AMT": 1e8, "EVID": 1})
+        for t in (0.0, 2.0, 4.0):
+            rows.append({"ARM": arm, "TIME": t, "OBS": "cfu", "DV": 1e6 / (t + 1),
+                         "AMT": np.nan, "EVID": 0})
+    return pd.DataFrame(rows)
+
+
+def test_nonmem_dose_rows_imported_and_gate_manual_fields():
+    """NONMEM dose rows are imported and, for the arms/targets they cover, replace the
+    manual per-arm B₀ / MOI inputs (which are hidden in favour of a 'data dose' caption)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _nonmem_dataset(), "time": "TIME", "value": "DV", "observable": "OBS",
+        "arm_cols": ["ARM"], "moi": None, "dose_unit": "pfu",
+        "evid": "EVID", "amount": "AMT", "unit_col": None,
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    _caps = [c.value for c in at.caption]
+    assert any("Imported dose records" in c for c in _caps)
+    keys = {n.key for n in at.number_input if n.key}
+    # both arms carry data doses → the manual per-arm B₀ and MOI widgets are gated away
+    assert not any(k.startswith("fit_cond_moi_") for k in keys)
+    assert not any(k.startswith("fit_cond_b0_") for k in keys)
+    assert len(at.exception) == 0
+
+
 def test_overlay_persists_across_navigation():
     """The overlay visualization stays alive after navigating away and back,
     until it is explicitly re-run (item 1)."""

@@ -147,8 +147,10 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
         _armB = iB * (_arm_b0 / _B0) if _B0 > 0 else iB
         _armP = np.zeros(len(iP))
         if len(iP):
-            # dose value is absolute PFU/mL (pfu) or a multiple of B₀ (moi)
-            _armP[0] = _moi if ctx.get("dose_unit") == "pfu" else _moi * _arm_b0
+            # dose value is absolute PFU/mL (pfu) or a multiple of B₀ (moi); a per-arm
+            # unit (from an imported dose record) overrides the global default.
+            _du = _cond.get("moi_unit", ctx.get("dose_unit"))
+            _armP[0] = _moi if _du == "pfu" else _moi * _arm_b0
         _mk_arm = dict(mk)
         _iS_arm = iS
         if _arm_prerun > 0:
@@ -303,11 +305,36 @@ def render():
                     index=(1 if (_mc and "pfu" in _mc.lower()) else 0), horizontal=True,
                     help="How to read the dose column: MOI multiplies each arm's B₀; "
                          "PFU/mL is an absolute phage titre (e.g. a column like dose_phage_pfu).")
+                # NONMEM/Monolix dose rows (optional): a dose-event/EVID column marks
+                # dose rows (=1), routed to the compartment named in the observable
+                # column. When present these become the per-arm doses (inoculum + phage),
+                # overriding the manual per-arm fields for the targets they specify.
+                st.markdown("**Dose records (NONMEM/Monolix, optional)**")
+                st.caption("Map an EVID column to import interleaved dose rows. Each dose row's "
+                           "*observable* names its target compartment (bacteria / phage / "
+                           "antibiotic / nutrient); its amount is read from the AMT column.")
+                _evid_i = next((i for i, c in enumerate(_low) if c in ("evid", "dose_event", "mdv")), None)
+                _evid = st.selectbox("Dose-event column (EVID: 0 = observation, 1 = dose)",
+                                     ["(none)"] + _cols,
+                                     index=(1 + _evid_i) if _evid_i is not None else 0)
+                _evid = None if _evid == "(none)" else _evid
+                _amt = _unit_col = None
+                if _evid:
+                    _amt_i = next((i for i, c in enumerate(_low) if c in ("amt", "amount", "dose")), None)
+                    _amt = st.selectbox("Dose amount column (AMT)", ["(none)"] + _cols,
+                                        index=(1 + _amt_i) if _amt_i is not None else 0)
+                    _amt = None if _amt == "(none)" else _amt
+                    _unit_i = next((i for i, c in enumerate(_low) if "unit" in c), None)
+                    _unit_col = st.selectbox("Dose unit column (optional; else a per-target default)",
+                                             ["(none)"] + _cols,
+                                             index=(1 + _unit_i) if _unit_i is not None else 0)
+                    _unit_col = None if _unit_col == "(none)" else _unit_col
             if st.button("Load dataset", key="fit_load", width="stretch"):
                 st.session_state.fit_dataset = {
                     "raw": _raw, "time": _tc, "value": _vc, "observable": _obs,
                     "arm_cols": _ac, "moi": _mc,
                     "dose_unit": ("pfu" if str(_dunit_lbl).startswith("PFU") else "moi"),
+                    "evid": _evid, "amount": _amt, "unit_col": _unit_col,
                 }
                 st.success(f"Loaded {len(_raw)} rows. Configure grouping / filters / statistics below.")
                 st.rerun()
@@ -357,6 +384,20 @@ def render():
             st.error(f"Could not build the grouped dataset: {e}")
             _filtered, _long, _agg = _raw, None, None
         st.caption(f"{len(_filtered)} / {len(_raw)} rows after filtering.")
+
+        # NONMEM/Monolix dose rows (EVID=1) → per-arm dose records, keyed by the same
+        # grouping as the observations. Used to gate the manual per-arm gap-fillers and
+        # to emit the doses into the fit dataset.
+        try:
+            _arm_doses = parse_dose_rows(_filtered, tuple(_group_cols), _ds.get("evid"),
+                                         _obs, _ds.get("amount"), _tc, _ds.get("unit_col"))
+        except Exception:
+            _arm_doses = {}
+        if _arm_doses:
+            _n_bd = sum(1 for ds in _arm_doses.values() for d in ds if d["target"] == "bacteria")
+            _n_pd = sum(1 for ds in _arm_doses.values() for d in ds if d["target"] == "phage")
+            st.caption(f"Imported dose records: {_n_bd} bacteria + {_n_pd} phage across "
+                       f"{len(_arm_doses)} arm(s) — these override the matching manual fields.")
 
         if _long is not None and len(_long):
             _arms = sorted(_long["arm"].unique())
@@ -432,27 +473,76 @@ def render():
             _dose_help = ("Dose seeds the phage inoculum as an absolute PFU/mL titre for that arm."
                           if _dose_unit == "pfu" else
                           "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
-            with st.expander(f"Per-arm conditions (growth phase · B₀ · {_dose_lbl})", expanded=False):
-                st.info("**Each arm starts at its own first data point — like pbisim-fit — not the "
-                        "builder's B₀.** B₀ below defaults to that arm's earliest CFU (or OD × "
-                        "od_to_cfu). The builder's B₀ only sets the strain/genotype *ratio*; its "
-                        "magnitude is renormalised to the value here, so editing the builder B₀ "
-                        "doesn't move the overlay — edit it here. Override if the first point is noisy.")
-                st.caption("Log phase → pre-run 0 (fresh inoculum). Stationary phase → set a "
-                           "pre-run duration to equilibrate toward carrying capacity before t=0. "
-                           + _dose_help)
+            with st.expander(f"Per-arm conditions (B₀ · growth phase · {_dose_lbl})", expanded=False):
+                # B₀ source. Under pbisim-fit's additive model the inoculum is a
+                # DoseRecord(target="bacteria") — a *known* dose, exactly like the phage
+                # dose — not the (noisy) first observation. Estimation is separate: free
+                # `fit_initial_cfu` in the parameter table (it adds an estimated offset).
+                _b0_mode = st.radio(
+                    "Initial bacterial density B₀",
+                    ["First observation", "Shared value", "Per-arm values"],
+                    horizontal=True, key="fit_b0_mode",
+                    help="First observation → each arm starts at its earliest CFU/OD point "
+                         "(carries measurement noise). Shared / Per-arm → a known inoculum, "
+                         "recorded as a bacteria dose (the NONMEM/Monolix way).")
+                if _b0_mode == "First observation":
+                    st.warning("B₀ is taken from each arm's **first observation, which includes "
+                               "measurement noise**. For a known inoculum choose *Shared*/*Per-arm*; "
+                               "to estimate it, free `fit_initial_cfu` in the parameter table below "
+                               "(it adds an estimated offset on top of any bacteria dose).")
+                _shared_b0 = None
+                if _b0_mode == "Shared value":
+                    _shared_b0 = st.number_input("Shared B₀ (CFU/mL) — applied to every arm",
+                                                 value=_fallback_b0, format="%.2e", key="fit_b0_shared")
+                st.caption("Pre-run 0 → log phase (fresh inoculum). Pre-run > 0 → equilibrate "
+                           "toward stationary phase before t=0. " + _dose_help)
+
+                def _arm_bac_dose(a):
+                    """Total bacteria dose (CFU) imported for this arm, else None."""
+                    tot, found = 0.0, False
+                    for d in _arm_doses.get(a, []):
+                        if d["target"] == "bacteria":
+                            tot += d["amount"] * (_od2cfu_b0 if d.get("unit") == "od_units" else 1.0)
+                            found = True
+                    return tot if found else None
+
+                def _arm_phage_dose(a):
+                    for d in _arm_doses.get(a, []):
+                        if d["target"] == "phage":
+                            return d
+                    return None
+
                 for _arm in _sel_arms:
                     _cc = st.columns([2, 1, 1, 1])
                     _cc[0].markdown(f"**{_arm}**")
-                    _arm_cond[_arm] = {
-                        "b0": _cc[1].number_input("B₀ (CFU/mL)", value=_arm_first_b0(_arm), format="%.2e",
-                                                  key=f"fit_cond_b0_{_arm}"),
-                        "prerun": _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
-                                                      key=f"fit_cond_prerun_{_arm}"),
-                        "moi": _cc[3].number_input(_dose_lbl, format="%g",
-                                                   value=float(_conds.get(_arm, {}).get("moi", 0.0)),
-                                                   key=f"fit_cond_moi_{_arm}"),
-                    }
+                    _bac, _ph = _arm_bac_dose(_arm), _arm_phage_dose(_arm)
+                    # ── B₀ ── data bacteria dose (if any) wins over the manual gap-filler
+                    if _bac is not None:
+                        _b0v, _is_dose = _bac, False   # emitted from the dataset by build_dataset
+                        _cc[1].caption(f"B₀ = {_b0v:.2e}\n(data dose)")
+                    elif _b0_mode == "Shared value":
+                        _b0v, _is_dose = float(_shared_b0), True
+                        _cc[1].caption(f"B₀ = {_b0v:.2e}")
+                    elif _b0_mode == "Per-arm values":
+                        _b0v = _cc[1].number_input("B₀ (CFU/mL)", value=_arm_first_b0(_arm),
+                                                   format="%.2e", key=f"fit_cond_b0_{_arm}")
+                        _is_dose = True
+                    else:  # First observation — data-anchored, shown read-only
+                        _b0v, _is_dose = _arm_first_b0(_arm), False
+                        _cc[1].number_input("B₀ (first obs)", value=_b0v, format="%.2e",
+                                            key=f"fit_cond_b0_{_arm}", disabled=True)
+                    _prv = _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
+                                               key=f"fit_cond_prerun_{_arm}")
+                    # ── phage dose ── data phage dose (if any) wins over the manual MOI/PFU
+                    if _ph is not None:
+                        _moiv, _moi_unit = float(_ph["amount"]), _ph.get("unit", "pfu")
+                        _cc[3].caption(f"{_moiv:.3g} {_moi_unit}\n(data dose)")
+                    else:
+                        _moiv, _moi_unit = _cc[3].number_input(
+                            _dose_lbl, format="%g", value=float(_conds.get(_arm, {}).get("moi", 0.0)),
+                            key=f"fit_cond_moi_{_arm}"), _dose_unit
+                    _arm_cond[_arm] = {"b0": _b0v, "b0_is_dose": _is_dose, "prerun": _prv,
+                                       "moi": _moiv, "moi_unit": _moi_unit}
 
             # ── 5. Manual parameter tuning (Phase B) ─────────────────────────
             # Edit the model's ACTUAL parameter values via the SAME builder panels as
@@ -558,7 +648,7 @@ def render():
                 # st.expander (the builder has its own expanders; nesting is illegal).
                 from pbisim_app.views.simulator import render_model_builder
                 st.markdown("**Model builder**")
-                render_model_builder()
+                render_model_builder(inoculum_mode="ratio")
                 st.caption("Tip: B₀ may be overridden by an equilibrium/pre-run initial condition in some "
                            "builder modes; the phage inoculum in the overlay comes from each group's MOI × B₀.")
 
@@ -955,7 +1045,8 @@ def render():
                     else:
                         try:
                             _ds_fit = _nls.build_dataset(_agg, _sel_arms, _sel_obs, _arm_cond,
-                                                         od_to_cfu=_od_link, dose_unit=_dose_unit)
+                                                         od_to_cfu=_od_link, dose_unit=_dose_unit,
+                                                         arm_doses=_arm_doses)
                             _holder = {
                                 "status": "running", "t0": _time.time(), "fp": None, "error": None,
                                 "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,

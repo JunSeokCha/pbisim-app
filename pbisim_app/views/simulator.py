@@ -2,13 +2,22 @@
 from pbisim_app.common import *  # noqa: F401,F403
 
 
-def render_model_builder():
+def render_model_builder(inoculum_mode="magnitude"):
     """Full model builder — builder-mode selector, growth/death signal
     functions, and the selected Direct / Binary-Genotypes / Custom-Strains body.
     Extracted from the Interactive Simulator's Tab 1 so the Calibration
     manual-tuning panel renders the exact same controls (no drift). Reads/writes
     the shared int_* session state and returns the active builder_mode string.
+
+    ``inoculum_mode``:
+      * ``"magnitude"`` (Simulator) — per-strain B₀/P₀ are absolute densities.
+      * ``"ratio"`` (Calibration) — per-strain B₀ inputs express a *relative*
+        ratio (the absolute total comes from the per-arm B₀ in the Calibration
+        conditions), the absolute inoculum totals (BRG equilibrium total, phage
+        P₀) are hidden, but the BRG equilibrium-IC checkbox is KEPT (it sets the
+        resistant fraction from fitness cost + mutation).
     """
+    _ratio_inoc = (inoculum_mode == "ratio")
     strains = st.session_state.get("int_strains", [])
     phages = st.session_state.get("int_phages", [])
     antibiotics = st.session_state.get("int_antibiotics", [])
@@ -124,10 +133,13 @@ def render_model_builder():
                     cc1, cc2 = st.columns(2)
                     with cc1:
                         strains[i]["initial_B"] = st.number_input(
-                            "Initial Density (B0)",
+                            "Initial ratio (relative)" if _ratio_inoc else "Initial Density (B0)",
                             value=float(strains[i]["initial_B"]),
-                            format="%.1e",
+                            format="%g" if _ratio_inoc else "%.1e",
                             key=f"str_init_{i}",
+                            help=("Relative starting amount across strains; the absolute total "
+                                  "comes from the per-arm B₀ in the Calibration conditions."
+                                  if _ratio_inoc else None),
                         )
                     with cc2:
                         strains[i]["growth_rate"] = st.number_input(
@@ -294,12 +306,16 @@ def render_model_builder():
                     )
                     cc3, cc4 = st.columns(2)
                     with cc3:
-                        phages[i]["initial_P"] = st.number_input(
-                            "Initial Density (P0)",
-                            value=float(phages[i]["initial_P"]),
-                            format="%.1e",
-                            key=f"phg_init_{i}",
-                        )
+                        if _ratio_inoc:
+                            st.caption("Phage inoculum (P₀) comes from the per-arm dose "
+                                       "(MOI / PFU) in Calibration.")
+                        else:
+                            phages[i]["initial_P"] = st.number_input(
+                                "Initial Density (P0)",
+                                value=float(phages[i]["initial_P"]),
+                                format="%.1e",
+                                key=f"phg_init_{i}",
+                            )
                     with cc4:
                         phages[i]["burst_sizes"] = st.number_input(
                             "Burst size (PFU/cell)",
@@ -519,7 +535,10 @@ def render_model_builder():
             for idx in range(n_phg_loci):
                 with st.expander(f"Phage Locus {idx}: {phages[idx]['name']}", expanded=True):
                     phages[idx]["name"] = st.text_input("Locus name", value=phages[idx]["name"], key=f"brg_phg_name_{idx}")
-                    phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
+                    if _ratio_inoc:
+                        st.caption("Phage inoculum (P₀) comes from the per-arm dose in Calibration.")
+                    else:
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"brg_phg_init_{idx}")
                     phages[idx]["adsorption_s"] = st.number_input("Adsorption WT (mL·h⁻¹)", value=float(phages[idx].get("adsorption_s", 5e-8)), format="%.2e", key=f"brg_phg_ads_s_{idx}")
                     phages[idx]["adsorption_r"] = st.number_input("Adsorption Res (mL·h⁻¹)", value=float(phages[idx].get("adsorption_r", 0.0)), format="%.2e", key=f"brg_phg_ads_r_{idx}")
                     phages[idx]["adsorption_dormant_s"] = st.number_input(
@@ -603,13 +622,18 @@ def render_model_builder():
                 help="Compute B0 per genotype from replicator-dynamics equilibrium (BRG growth rates + mutation matrix). Overrides per-genotype inputs.",
             )
             if st.session_state["int_brg_use_eq_ic"]:
-                st.session_state["int_brg_eq_total_B"] = st.number_input(
-                    "Total bacteria at t=0 (cells/mL)",
-                    value=float(st.session_state.get("int_brg_eq_total_B", 1e7)),
-                    format="%.1e",
-                    key="brg_eq_total_B",
-                )
-                st.caption("Per-genotype B0 computed from `brg.equilibrium_initial_condition()` at run time.")
+                if _ratio_inoc:
+                    st.caption("Genotype **ratios** come from the equilibrium (fitness cost + "
+                               "mutation); the absolute total B₀ is set per-arm in the "
+                               "Calibration conditions.")
+                else:
+                    st.session_state["int_brg_eq_total_B"] = st.number_input(
+                        "Total bacteria at t=0 (cells/mL)",
+                        value=float(st.session_state.get("int_brg_eq_total_B", 1e7)),
+                        format="%.1e",
+                        key="brg_eq_total_B",
+                    )
+                    st.caption("Per-genotype B0 computed from `brg.equilibrium_initial_condition()` at run time.")
             else:
                 brg_initial_B = st.session_state.get("int_brg_initial_B", {})
                 for idx, comb in enumerate(combs):
@@ -623,9 +647,10 @@ def render_model_builder():
                         else:
                             lbl = f"abx{a_lbl}"
                     brg_initial_B[lbl] = st.number_input(
-                        f"Initial count for genotype {lbl}",
+                        (f"Initial ratio for genotype {lbl}" if _ratio_inoc
+                         else f"Initial count for genotype {lbl}"),
                         value=float(brg_initial_B.get(lbl, 1e7 if idx == 0 else 0.0)),
-                        format="%.1e",
+                        format="%g" if _ratio_inoc else "%.1e",
                         key=f"brg_init_B_{lbl}"
                     )
                 st.session_state.int_brg_initial_B = brg_initial_B
@@ -655,7 +680,12 @@ def render_model_builder():
             for i in range(n_strains):
                 with st.expander(f"Strain {i}: {strains[i]['name']}", expanded=True):
                     strains[i]["name"] = st.text_input("Strain name", value=strains[i]["name"], key=f"ss_str_name_{i}")
-                    strains[i]["initial_B"] = st.number_input("Initial count B₀ (CFU·mL⁻¹)", value=float(strains[i]["initial_B"]), format="%.1e", key=f"ss_str_init_{i}")
+                    strains[i]["initial_B"] = st.number_input(
+                        "Initial ratio (relative)" if _ratio_inoc else "Initial count B₀ (CFU·mL⁻¹)",
+                        value=float(strains[i]["initial_B"]),
+                        format="%g" if _ratio_inoc else "%.1e", key=f"ss_str_init_{i}",
+                        help=("Relative amount across strains; absolute total from the per-arm B₀ "
+                              "in Calibration." if _ratio_inoc else None))
                     strains[i]["growth_rate"] = st.number_input("Growth rate (h⁻¹)", value=float(strains[i]["growth_rate"]), step=0.1, key=f"ss_str_growth_{i}")
                     strains[i]["bacteria_to_resource_ratio"] = st.number_input(
                         "Bacteria-to-resource ratio", value=float(strains[i].get("bacteria_to_resource_ratio", 1e9)),
@@ -762,7 +792,10 @@ def render_model_builder():
             for idx in range(n_phages):
                 with st.expander(f"Phage {idx}: {phages[idx]['name']}", expanded=True):
                     phages[idx]["name"] = st.text_input("Phage name", value=phages[idx]["name"], key=f"ss_phg_name_{idx}")
-                    phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
+                    if _ratio_inoc:
+                        st.caption("Phage inoculum (P₀) comes from the per-arm dose in Calibration.")
+                    else:
+                        phages[idx]["initial_P"] = st.number_input("Initial count P₀ (PFU·mL⁻¹)", value=float(phages[idx]["initial_P"]), format="%.1e", key=f"ss_phg_init_{idx}")
                     phages[idx]["burst_sizes"] = st.number_input("Burst size (PFU/cell)", value=float(phages[idx].get("burst_sizes", 50.0)), step=10.0, key=f"ss_phg_burst_{idx}")
                     phages[idx]["latent_periods"] = st.number_input("Latent period (h)", value=float(phages[idx].get("latent_periods", 0.5)), step=0.1, key=f"ss_phg_latent_{idx}")
                     phages[idx]["phage_decay_rates"] = st.number_input("Phage decay rate (h⁻¹)", value=float(phages[idx]["phage_decay_rates"]), step=0.05, key=f"ss_phg_decay_{idx}")

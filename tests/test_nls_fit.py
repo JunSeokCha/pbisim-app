@@ -72,6 +72,44 @@ def test_build_dataset_shapes_and_moi_dose():
                for d in arm.dose_events)
 
 
+def test_build_dataset_emits_bacteria_dose_additive_b0():
+    """Additive-B0 model: a KNOWN inoculum (b0_is_dose) becomes a t=0 bacteria dose;
+    a pre-run arm carries it as pretreatment_inoculum instead; first-observation mode
+    (b0_is_dose=False) records neither, so pbisim-fit falls back to cfu[0]."""
+    agg = _agg_from_csv()
+    ds = nls.build_dataset(agg, ["control"], ["cfu"],
+                           {"control": {"b0": 5e6, "b0_is_dose": True, "prerun": 0.0}})
+    bd = [d for d in ds.arms[0].dose_events if d.target == "bacteria"]
+    assert len(bd) == 1 and bd[0].amount == 5e6 and bd[0].unit == "cfu"
+    assert ds.arms[0].pretreatment_inoculum is None
+
+    ds_pr = nls.build_dataset(agg, ["control"], ["cfu"],
+                              {"control": {"b0": 5e6, "b0_is_dose": True, "prerun": 24.0}})
+    assert not [d for d in ds_pr.arms[0].dose_events if d.target == "bacteria"]
+    assert ds_pr.arms[0].pretreatment_inoculum == 5e6
+
+    ds_fo = nls.build_dataset(agg, ["control"], ["cfu"],
+                              {"control": {"b0": 1e6, "b0_is_dose": False, "prerun": 0.0}})
+    assert not [d for d in ds_fo.arms[0].dose_events if d.target == "bacteria"]
+    assert ds_fo.arms[0].pretreatment_inoculum is None
+
+
+def test_build_dataset_uses_imported_dose_records():
+    """Imported NONMEM/Monolix dose rows (arm_doses) are emitted verbatim and override
+    the manual per-arm fields for the targets they specify (inoculum + phage)."""
+    agg = _agg_from_csv()
+    arm_doses = {"control": [
+        {"time": 0.0, "target": "bacteria", "amount": 3e6, "unit": "cfu"},
+        {"time": 0.0, "target": "phage", "amount": 1e8, "unit": "pfu"}]}
+    cond = {"control": {"moi": 5.0, "b0": 9e9, "b0_is_dose": True, "prerun": 0.0}}
+    ds = nls.build_dataset(agg, ["control"], ["cfu"], cond, arm_doses=arm_doses)
+    doses = ds.arms[0].dose_events
+    bac = [d for d in doses if d.target == "bacteria"]
+    ph = [d for d in doses if d.target == "phage"]
+    assert len(bac) == 1 and bac[0].amount == 3e6           # data dose, not the manual 9e9
+    assert len(ph) == 1 and ph[0].amount == 1e8 and ph[0].unit == "pfu"  # not the manual moi=5
+
+
 def test_estimate_od_to_cfu_recovers_data_ratio():
     agg = _agg_from_csv()
     r = nls.estimate_od_to_cfu(agg, ["control"])
