@@ -420,20 +420,34 @@ def render():
             # one; OD instead uses the debris module's get_od() when it is enabled.
             _debris_on = st.session_state.get("int_debris_enabled", False)
             _link_vals = {}
-            _link_obs = [k for k in _sel_obs
-                         if OBSERVABLES.get(k, {}).get("link") and not (k == "od" and _debris_on)]
+            _link_obs = [k for k in _sel_obs if OBSERVABLES.get(k, {}).get("link")]
             if _link_obs:
                 _lcols = st.columns(min(3, len(_link_obs)))
                 for _li, _ok in enumerate(_link_obs):
                     _sp = OBSERVABLES[_ok]
-                    _pn, _op, _dflt = _sp["link"]
-                    _link_vals[_ok] = _lcols[_li % len(_lcols)].number_input(
-                        f"Link · {_sp['label']} ({_pn})", value=float(_dflt), format="%.3e",
-                        key=f"fit_link_{_ok}",
-                        help="Scales model state → signal. Tunable below / future fit parameter.")
+                    if _ok == "od":
+                        # OD↔CFU is ONE physical factor. Bind this input to the model's
+                        # int_od_to_cfu_conversion_factor so the SAME value drives B₀
+                        # (OD×factor), the overlay OD (biomass÷factor) and the debris
+                        # get_od() — no separate/competing od_to_cfu fields.
+                        st.session_state["int_od_to_cfu_conversion_factor"] = \
+                            _lcols[_li % len(_lcols)].number_input(
+                                "od_to_cfu (CFU per OD unit)",
+                                value=float(st.session_state.get(
+                                    "int_od_to_cfu_conversion_factor", 2e8) or 2e8),
+                                format="%.3e", key="fit_link_od",
+                                help="The single OD↔CFU factor: B₀ = first OD × this; overlay "
+                                     "OD = biomass ÷ this; the debris module uses it too.")
+                        _link_vals["od"] = float(st.session_state["int_od_to_cfu_conversion_factor"])
+                    else:
+                        _pn, _op, _dflt = _sp["link"]
+                        _link_vals[_ok] = _lcols[_li % len(_lcols)].number_input(
+                            f"Link · {_sp['label']} ({_pn})", value=float(_dflt), format="%.3e",
+                            key=f"fit_link_{_ok}",
+                            help="Scales model state → signal. Tunable below / future fit parameter.")
             if "od" in _sel_obs and _debris_on:
-                st.caption("OD uses the **debris module** (`get_od`, includes lysed-cell debris). "
-                           "Tune `od_to_cfu` and the debris rates in *Global & structural* below.")
+                st.caption("OD includes lysed-cell **debris** (`get_od`) — it uses the same "
+                           "od_to_cfu set above; the debris rates are in the OD/debris block below.")
             _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
             # Per-arm conditions — each group can carry its own growth phase (pre-run),
@@ -453,8 +467,8 @@ def render():
                 return float(sum(float(_s.get("initial_B", 0.0))
                                  for _s in st.session_state.get("int_strains", []))) or 1e7
             _fallback_b0 = _model_total_b0()
-            _od2cfu_b0 = (float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8))
-                          if _debris_on else float(_link_vals.get("od", 2e8) or 2e8))
+            # The single OD↔CFU factor (bound to the §4 input above) — B₀ = first OD × this.
+            _od2cfu_b0 = float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8) or 2e8)
 
             def _arm_first_b0(arm):
                 """Arm's earliest bacteria observation as CFU/mL — CFU verbatim, OD×od_to_cfu,
@@ -507,6 +521,10 @@ def render():
                                                  value=_fallback_b0, format="%.2e", key="fit_b0_shared")
                 st.caption("Pre-run 0 → log phase (fresh inoculum). Pre-run > 0 → equilibrate "
                            "toward stationary phase before t=0. " + _dose_help)
+                if "od" in _sel_obs and "cfu" not in _sel_obs:
+                    st.caption(f"↳ Your data is OD, so first-observation B₀ = (first OD) × od_to_cfu "
+                               f"= (first OD) × **{_od2cfu_b0:.2e}**. Set od_to_cfu in the **§4 "
+                               "Overlay** OD field above — B₀ recomputes live.")
 
                 def _arm_bac_dose(a):
                     """Total bacteria dose (CFU) imported for this arm, else None."""
@@ -538,11 +556,12 @@ def render():
                         _b0v = _cc[1].number_input("B₀ (CFU/mL)", value=_arm_first_b0(_arm),
                                                    format="%.2e", key=f"fit_cond_b0_{_arm}")
                         _is_dose = True
-                    else:  # First observation / Estimate — placeholder, shown read-only
+                    else:  # First observation / Estimate — COMPUTED live (a caption, not a
+                        # keyed widget: a disabled number_input would cache its first value
+                        # and never reflect a changed od_to_cfu / mode switch).
                         _b0v, _is_dose = _arm_first_b0(_arm), False
-                        _cc[1].number_input(
-                            "B₀ (est. start)" if _estimate_b0 != "none" else "B₀ (first obs)",
-                            value=_b0v, format="%.2e", key=f"fit_cond_b0_{_arm}", disabled=True)
+                        _cc[1].caption(f"B₀ = {_b0v:.2e}\n"
+                                       + ("(est. start)" if _estimate_b0 != "none" else "(first obs)"))
                     _prv = _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
                                                key=f"fit_cond_prerun_{_arm}")
                     # ── phage dose ── data phage dose (if any) wins over the manual MOI/PFU
@@ -623,12 +642,9 @@ def render():
                              "Off → OD is a plain biomass×link scaling.")
                     if st.session_state.get("int_debris_enabled", False):
                         st.markdown("*OD / debris module*")
-                        dk1, dk2, dk3, dk4, dk5 = st.columns(5)
-                        with dk1:
-                            st.session_state["int_od_to_cfu_conversion_factor"] = st.number_input(
-                                "od_to_cfu", value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
-                                format="%.3e", key="fit_edit_od2cfu",
-                                help="CFU per OD unit: OD = (biomass + dormant·frac + debris) / od_to_cfu.")
+                        st.caption("od_to_cfu is set once in the **§4 Overlay** OD field above "
+                                   "(the same value the debris OD uses) — edit it there.")
+                        dk2, dk3, dk4, dk5 = st.columns(4)
                         with dk2:
                             st.session_state["int_debris_u"] = st.number_input(
                                 "Debris · deaths (u)", value=float(st.session_state.get("int_debris_u", 0.4)),
@@ -1013,22 +1029,17 @@ def render():
                             st.success("Applied to the table above.")
                             st.rerun()
 
-                # OD link (CFU per OD unit): pbisim-fit reads it off the config, so it
-                # is REQUIRED to fit 'od'. Prefer the data's own median CFU/OD ratio
-                # (most principled when both are measured) → debris factor → overlay
-                # link → 2e8; the user can override.
+                # OD link (CFU per OD unit): pbisim-fit reads it off the config, so it is
+                # REQUIRED to fit 'od'. Use the ONE od_to_cfu (§4 Overlay) that also drives
+                # B₀ and the overlay — no separate fit-only factor. Surface the data's own
+                # median CFU/OD ratio as a suggestion the user can adopt in §4.
                 _od_link = None
                 if "od" in _sel_obs:
-                    _od_link = _nls.estimate_od_to_cfu(_agg, _sel_arms)
-                    if _od_link is None and _debris_on:
-                        _od_link = st.session_state.get("int_od_to_cfu_conversion_factor")
-                    if _od_link is None:
-                        _od_link = _link_vals.get("od")
-                    _od_link = st.number_input(
-                        "OD link — CFU per OD unit (od_to_cfu)",
-                        min_value=0.0, value=float(_od_link or 2e8), key="fit_nls_od2cfu",
-                        help="Model OD = biomass ÷ this factor. Defaults to the data's "
-                             "median CFU/OD ratio; required to fit the OD observable.")
+                    _od_link = float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8) or 2e8)
+                    _od_suggest = _nls.estimate_od_to_cfu(_agg, _sel_arms)
+                    _hint = (f" — data suggests ≈ **{_od_suggest:.2e}** (set it in §4 to adopt)"
+                             if _od_suggest else "")
+                    st.caption(f"OD fit uses od_to_cfu = **{_od_link:.2e}** (from §4 Overlay){_hint}.")
                 _c1, _c2 = st.columns(2)
                 with _c1:
                     _restarts = int(st.number_input("Restarts", 1, 10, 3, key="fit_nls_restarts"))

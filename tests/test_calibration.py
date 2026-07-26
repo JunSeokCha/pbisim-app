@@ -137,6 +137,10 @@ def test_per_arm_b0_defaults_to_first_data_point():
     }
     at.session_state["current_page_radio"] = "Calibration"
     at.run()
+    # Per-arm mode uses editable widgets seeded from the first data point (first-obs
+    # mode shows the same value as a live caption, not a widget).
+    at.session_state["fit_b0_mode"] = "Per-arm values"
+    at.run()
     b0s = [n.value for n in at.number_input if n.key and n.key.startswith("fit_cond_b0_")]
     assert b0s, "no per-arm B₀ inputs rendered"
     assert all(abs(float(v) - 4.2e6) < 1.0 for v in b0s), b0s   # first CFU, not the builder's 9e9
@@ -270,9 +274,11 @@ def test_globals_and_debris_and_save_scenario():
 
     keys = {n.key for n in at.number_input if n.key}
     for k in ("fit_edit_n_latent", "fit_edit_S0", "fit_edit_recycle",
-              "fit_edit_od2cfu", "fit_edit_debris_u", "fit_edit_dorm_od"):
+              "fit_edit_debris_u", "fit_edit_dorm_od"):
         assert k in keys
-    # with debris on, the simple biomass/link input is replaced by a note
+    # the single od_to_cfu now lives in §4 Overlay (drives B₀, overlay, and debris)
+    assert "fit_link_od" in keys
+    # the OD/debris block is still shown
     assert any("debris module" in m.value for m in at.markdown)
 
     [b for b in at.button if b.key == "fit_overlay"][0].click().run()
