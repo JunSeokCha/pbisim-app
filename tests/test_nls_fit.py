@@ -172,6 +172,40 @@ def test_build_param_spec_scale_link():
     assert spec.n_params == 2                        # WT adsorption + one scale factor
 
 
+def test_estimate_b0_wires_free_initial_conditions():
+    """The B0-source 'Estimate' modes add an estimated additive-B0 parameter via
+    free_initial_conditions; a role-table fit_initial_cfu target is skipped so the two
+    don't double-wire."""
+    from pbisim_fit.synthetic import reference_config
+    cfg = reference_config()
+    ds = nls.build_dataset(_agg_from_csv(), ["control"], ["cfu"], {}, od_to_cfu=None)
+    tg = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
+           "lo": 0.1, "hi": 3.0, "log": False, "prior_mu": None, "prior_sd": None}]
+    _c0, spec0 = nls.build_param_spec_v2(cfg, tg)
+    _c1, spec1 = nls.build_param_spec_v2(cfg, tg, dataset=ds, estimate_b0="shared")
+    assert spec1.n_params == spec0.n_params + 1          # one shared B0 θ added
+    # a fit_initial_cfu free target is dropped when estimating (no double-wire)
+    tg2 = tg + [{"path": "fit_initial_cfu", "free": True, "value": 1e6,
+                 "lo": 1e3, "hi": 1e11, "log": True, "prior_mu": None, "prior_sd": None}]
+    _c2, spec2 = nls.build_param_spec_v2(cfg, tg2, dataset=ds, estimate_b0="shared")
+    assert spec2.n_params == spec1.n_params
+
+
+def test_estimate_b0_fit_runs_and_sets_initial_cfu():
+    """A fit with estimate_b0='shared' completes and the fitted config carries an
+    estimated fit_initial_cfu (the additive B0 offset)."""
+    from pbisim_fit.synthetic import reference_config
+    cfg = reference_config()
+    ds = nls.build_dataset(_agg_from_csv(), ["control"], ["cfu"], {}, od_to_cfu=None)
+    tg = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
+           "lo": 0.1, "hi": 3.0, "log": False, "prior_mu": None, "prior_sd": None}]
+    fp = nls.run_nls_fit_v2(cfg, tg, [], [], ds, ["cfu"],
+                            n_restarts=1, max_nfev=100, estimate_b0="shared")
+    fc = fp.to_config()
+    _ic = getattr(fc, "fit_initial_cfu", None)
+    assert _ic is not None and float(np.atleast_1d(_ic).ravel()[0]) > 0
+
+
 def test_available_targets_is_comprehensive():
     """The target catalog includes mutation, debris, and the fit-side virtuals
     (fitness cost, initial CFU/PFU, resistant fraction) the user flagged."""

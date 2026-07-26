@@ -39,7 +39,8 @@ def _fit_worker(holder):
         fp = _nls.run_nls_fit_v2(
             holder["cfg"], holder["targets"], holder["thetas"], holder["mappings"],
             holder["ds"], holder["obs"], od_to_cfu=holder["od_link"],
-            n_restarts=holder["restarts"], max_nfev=holder["maxnfev"])
+            n_restarts=holder["restarts"], max_nfev=holder["maxnfev"],
+            estimate_b0=holder.get("estimate_b0", "none"))
         holder["fp"] = fp
         holder["status"] = "done"
     except Exception as e:  # noqa: BLE001 — surface any failure to the UI
@@ -480,16 +481,26 @@ def render():
                 # `fit_initial_cfu` in the parameter table (it adds an estimated offset).
                 _b0_mode = st.radio(
                     "Initial bacterial density B₀",
-                    ["First observation", "Shared value", "Per-arm values"],
+                    ["First observation", "Shared value", "Per-arm values",
+                     "Estimate (shared)", "Estimate (per-arm)"],
                     horizontal=True, key="fit_b0_mode",
-                    help="First observation → each arm starts at its earliest CFU/OD point "
-                         "(carries measurement noise). Shared / Per-arm → a known inoculum, "
-                         "recorded as a bacteria dose (the NONMEM/Monolix way).")
+                    help="First observation → earliest CFU/OD point (noisy). Shared / Per-arm → "
+                         "a known inoculum, recorded as a bacteria dose. Estimate → fit B₀ as an "
+                         "additive offset (free_initial_conditions), one value shared across arms "
+                         "or one per arm.")
+                _estimate_b0 = {"Estimate (shared)": "shared",
+                                "Estimate (per-arm)": "per_arm"}.get(_b0_mode, "none")
                 if _b0_mode == "First observation":
                     st.warning("B₀ is taken from each arm's **first observation, which includes "
-                               "measurement noise**. For a known inoculum choose *Shared*/*Per-arm*; "
-                               "to estimate it, free `fit_initial_cfu` in the parameter table below "
-                               "(it adds an estimated offset on top of any bacteria dose).")
+                               "measurement noise**. For a known inoculum choose *Shared*/*Per-arm*, "
+                               "or *Estimate* to fit it as an additive offset.")
+                elif _estimate_b0 != "none":
+                    st.info("B₀ is **estimated** ("
+                            + ("one value shared across all arms" if _estimate_b0 == "shared"
+                               else "one value per arm")
+                            + ") as an additive offset over any bacteria dose, via pbisim-fit's "
+                            "`free_initial_conditions`. The per-arm B₀ below is a starting "
+                            "placeholder for the overlay; the fitted value replaces it after the fit.")
                 _shared_b0 = None
                 if _b0_mode == "Shared value":
                     _shared_b0 = st.number_input("Shared B₀ (CFU/mL) — applied to every arm",
@@ -527,10 +538,11 @@ def render():
                         _b0v = _cc[1].number_input("B₀ (CFU/mL)", value=_arm_first_b0(_arm),
                                                    format="%.2e", key=f"fit_cond_b0_{_arm}")
                         _is_dose = True
-                    else:  # First observation — data-anchored, shown read-only
+                    else:  # First observation / Estimate — placeholder, shown read-only
                         _b0v, _is_dose = _arm_first_b0(_arm), False
-                        _cc[1].number_input("B₀ (first obs)", value=_b0v, format="%.2e",
-                                            key=f"fit_cond_b0_{_arm}", disabled=True)
+                        _cc[1].number_input(
+                            "B₀ (est. start)" if _estimate_b0 != "none" else "B₀ (first obs)",
+                            value=_b0v, format="%.2e", key=f"fit_cond_b0_{_arm}", disabled=True)
                     _prv = _cc[2].number_input("Pre-run (h)", value=0.0, step=4.0,
                                                key=f"fit_cond_prerun_{_arm}")
                     # ── phage dose ── data phage dose (if any) wins over the manual MOI/PFU
@@ -1052,6 +1064,7 @@ def render():
                                 "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,
                                 "mappings": _mappings, "ds": _ds_fit, "obs": list(_sel_obs),
                                 "od_link": _od_link, "restarts": _restarts, "maxnfev": _maxnfev,
+                                "estimate_b0": _estimate_b0,
                                 # post-processing context captured now, so edits during the
                                 # fit don't change how the result is interpreted/overlaid.
                                 "fit_model": _fit_model, "path_label": dict(_path_label),

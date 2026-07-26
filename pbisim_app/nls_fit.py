@@ -549,8 +549,13 @@ def build_param_spec(base_config, free_params, shared_groups=None, fitness_links
     return rp.build()
 
 
-def build_param_spec_v2(base_config, targets, thetas=None, mappings=None):
+def build_param_spec_v2(base_config, targets, thetas=None, mappings=None,
+                        *, dataset=None, estimate_b0="none"):
     """Build a parameter spec from the table-driven UI.
+
+    ``estimate_b0`` ("shared" | "per_arm") wires an estimated additive B0 offset via
+    ``free_initial_conditions`` (needs ``dataset``); the role-table ``fit_initial_cfu``
+    target, if any, is then skipped so the two don't double-wire.
 
     - ``targets`` = [{"path","free"(bool),"value","lo","hi","log"}] — every model
       parameter. ``free`` → estimated 1:1 with [lo,hi]; else fixed at ``value``.
@@ -589,6 +594,8 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None):
         p = t["path"]
         if p in mapped_paths:
             continue
+        if estimate_b0 in ("shared", "per_arm") and p == "fit_initial_cfu":
+            continue  # handled by free_initial_conditions below (the B0-source radio)
         if t.get("free"):
             nm = f"free{k}"
             _log = bool(t.get("log"))
@@ -608,12 +615,16 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None):
                 pass
     for m in mappings:
         rp = rp.set(m["path"], _make_expr_fn(m["expr"], theta_names))
+    if estimate_b0 in ("shared", "per_arm") and dataset is not None:
+        from pbisim_fit import free_initial_conditions
+        rp = free_initial_conditions(rp, dataset, cfu=estimate_b0)
     return rp.build()
 
 
 def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
-                   od_to_cfu=None, n_restarts=3, max_nfev=300):
-    """Run NLS from the table-driven spec (see build_param_spec_v2)."""
+                   od_to_cfu=None, n_restarts=3, max_nfev=300, estimate_b0="none"):
+    """Run NLS from the table-driven spec (see build_param_spec_v2). ``estimate_b0``
+    ("shared"|"per_arm") estimates an additive B0 offset via free_initial_conditions."""
     from pbisim_fit.refinement.nls import refine_nls, NLSConfig
     if od_to_cfu and "od" in obs_keys:
         try:
@@ -624,7 +635,8 @@ def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
     # (from the initial) whenever any freed/theta parameter is unbounded.
     if has_unbounded(targets, thetas):
         n_restarts = 1
-    cfg, pspec = build_param_spec_v2(base_config, targets, thetas, mappings)
+    cfg, pspec = build_param_spec_v2(base_config, targets, thetas, mappings,
+                                     dataset=dataset, estimate_b0=estimate_b0)
     return refine_nls(dataset, pspec, cfg,
                       cfg=NLSConfig(obs_keys=list(obs_keys), n_restarts=int(n_restarts),
                                     max_nfev=int(max_nfev), n_arm_jobs=1))

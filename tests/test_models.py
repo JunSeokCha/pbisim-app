@@ -97,6 +97,34 @@ def test_save_model_keeps_it_active_and_excludes_doses():
     assert len(at.exception) == 0
 
 
+def test_estimate_b0_mode_runs_end_to_end():
+    """Selecting the 'Estimate (shared)' B0 source runs a fit that estimates B0 via
+    free_initial_conditions — the fitted config carries a fit_initial_cfu."""
+    import numpy as np
+    at = AppTest.from_file(APP, default_timeout=300)
+    at.run()
+    df = pd.read_csv("pbisim_app/examples/tutorial_synthetic_brg.csv")
+    at.session_state["fit_dataset"] = {
+        "raw": df, "time": "time", "value": "value", "observable": "observable",
+        "arm_cols": ["arm"], "moi": None}
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    at.session_state["fit_model_sel"] = "Growth calibration (Monod)"
+    at.session_state["fit_arms"] = ["control"]
+    at.session_state["fit_obs_sel"] = ["cfu"]
+    at.session_state["fit_b0_mode"] = "Estimate (shared)"
+    at.run()
+    _free_targets(at, {"growth_rates[0]"})
+    at.session_state["fit_nls_restarts"] = 1
+    at.session_state["fit_nls_maxnfev"] = 120
+    at.run()
+    [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    assert len(at.exception) == 0
+    fc = at.session_state["calib_fitted_config"]
+    _ic = getattr(fc, "fit_initial_cfu", None)
+    assert _ic is not None and float(np.atleast_1d(_ic).ravel()[0]) > 0
+
+
 def test_fit_draws_fitted_overlay_and_apply_persists():
     """After a fit: (a) the overlay auto-redraws with the fitted curves, and (b)
     'Apply' persists the fitted values into the model (the manual-tuning widgets must
