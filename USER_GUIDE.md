@@ -1,8 +1,8 @@
 # pbisim-app User Guide
 
 **Version:** 0.1.0  
-**Engine:** pbisim 1.0.0  
-**Last updated:** 2026-06-23
+**Engine:** pbisim 1.0.0 · **Estimation:** pbisim-fit 0.1  
+**Last updated:** 2026-07-28
 
 ---
 
@@ -15,28 +15,32 @@
 5. [Dose-Response Sweeps](#5-dose-response-sweeps)
 6. [Parameter Sweeps](#6-parameter-sweeps)
 7. [Clinical Trials & Cohorts](#7-clinical-trials--cohorts)
-8. [AI Assistant](#8-ai-assistant)
-9. [Presets & Tutorials](#9-presets--tutorials)
-10. [Key Parameter Reference](#10-key-parameter-reference)
-11. [Common Workflows](#11-common-workflows)
-12. [Troubleshooting](#12-troubleshooting)
+8. [Calibration (fit to data)](#8-calibration-fit-to-data)
+9. [AI Assistant](#9-ai-assistant)
+10. [Library (Scenarios & Parts)](#10-library-scenarios--parts)
+11. [Key Parameter Reference](#11-key-parameter-reference)
+12. [Common Workflows](#12-common-workflows)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
 ## 1. Introduction
 
 **pbisim-app** is an interactive web interface for the `pbisim` phage–bacteria ODE simulation
-engine. It lets you:
+engine, with parameter estimation via `pbisim-fit`. It lets you:
 
 - Simulate phage therapy, antibiotic treatment, and combination regimens without writing code.
 - Explore dose-response relationships and sweep any biological parameter.
 - Design virtual clinical trials with patient-level variability.
+- **Calibrate the model against your own experimental data** (CFU / PFU / OD / luminescence)
+  and fit parameters with pbisim-fit's non-linear least squares.
+- Save configurations as reusable **Models**, **Scenarios**, and **Parts**.
 - Ask an AI assistant to build simulations from plain-language descriptions.
 
 The app is aimed at researchers who understand the biology of phage–bacteria interactions
 but want a rapid-exploration tool. Familiarity with basic PK/PD concepts helps for the
-clinical-trial features. No programming experience is required for most workflows; the AI
-assistant handles code generation on demand.
+clinical-trial and calibration features. No programming experience is required for most
+workflows; the AI assistant handles code generation on demand.
 
 For deep documentation of the underlying ODE model — compartment structure, resistance
 genetics, PK/PD sub-models — see the pbisim
@@ -51,29 +55,45 @@ This guide focuses on navigating the app itself.
 
 ### Prerequisites
 
-- Python ≥ 3.10 with the `pbisim202602` (Linux) or `pbisim202606` (Windows) conda environment
-  active.
-- The Anthropic API key is **only** needed for the AI Assistant page; all simulation and
-  sweep features run entirely offline.
+- Python ≥ 3.10 with the `pbisim` conda environment active (has `pbisim`, `pbisim-fit`, and
+  this package installed). See the [README](README.md) for setup.
+- The Anthropic API key is **only** needed for the AI Assistant page; all simulation, sweep,
+  and calibration features run entirely offline.
 
-### Launching the server
+### Launching the server (browser)
 
 ```bash
-conda activate pbisim202602      # or pbisim202606 on Windows
+conda activate pbisim
 cd /path/to/pbisim-app
-python -m streamlit run pbisim_app/app.py
+python -m streamlit run pbisim_app/app.py     # or, once installed:  pbisim-app
 ```
 
 The terminal prints the local URL (default **http://localhost:8501**). Open it in a browser.
 
-### Stopping the server
+### Desktop window (optional)
 
-Press **Ctrl+C** in the terminal where Streamlit is running. If the process persists, from
-a second terminal:
+For a native-window experience instead of a browser tab, install the desktop extra and run
+the desktop launcher:
 
 ```bash
-pkill -f "streamlit run"
+pip install -e '.[desktop]'
+pbisim-app-desktop
 ```
+
+It runs the same local server inside a native OS window. If no native webview engine is
+available it opens your browser instead; `PBISIM_APP_BROWSER=1` forces the browser. (Windows
+and macOS work out of the box; Linux needs a current system webview library.)
+
+### Hosted version
+
+A deployed instance runs on Render and may be gated by a shared password — no local install
+needed, but the AI code sandbox is research-grade, so treat the hosted instance as trusted-use
+only.
+
+### Stopping the server
+
+Press **Ctrl+C** in the terminal where Streamlit is running (or close the desktop window). If
+the process persists: `pkill -f "streamlit run"`.
 
 ### Session state and cache
 
@@ -85,36 +105,46 @@ tab — or use the **Reset Environment** button in the sidebar (see §3).
 
 ## 3. App Layout
 
-The sidebar on the left contains two sections:
+The sidebar on the left holds the navigation, the active-Model selector, and the AI settings.
 
 ### Navigation radio buttons
 
-Select one of six pages:
+Select one of seven pages:
 
 | Page | Purpose |
 |---|---|
 | **Interactive Simulator** | Build and run a single simulation manually |
+| **Calibration** | Fit the model to experimental data (pbisim-fit NLS) |
 | **Dose-Response Sweeps** | Sweep dose range for one or two agents |
 | **Parameter Sweeps** | Sweep any model parameter (1D or 2D) |
 | **Clinical Trials & Cohorts** | Virtual patient cohorts, KM curves, NLME export |
 | **AI Assistant** | Natural-language simulation builder |
-| **Presets & Tutorials** | Load example configurations |
+| **Library** | Save/load full-config Scenarios and composable Parts |
 
-### AI Settings panel (sidebar, below navigation)
+### Models — reusable frozen configurations
 
-- **Anthropic API Key** — paste your key here (not stored between sessions). Needed only for
-  the AI Assistant. The field shows a lock icon; the key is masked.
-- **Claude Model** — select which Claude model powers the AI. With a valid key the list is
-  populated automatically from your account. Without a key a curated default list is shown.
-- **Test API Key & List Models** — verifies your key and shows which models are authorized on
-  your account.
-- **Show generated code / Show assumptions** — toggle visibility of AI-generated code and
-  its stated assumptions in the AI Assistant page.
+The **Interactive Simulator** edits a *live builder draft*. You can **freeze** the current
+organism/kinetics/environment as a named **Model** (sidebar), and every task page (sweeps,
+trials, calibration) has a **Model selector** to run against either the live draft or a chosen
+frozen Model — so builder edits don't silently change a task you set up earlier. A Model
+captures organism/kinetics/environment/solver only, not dosing or trial design. On the
+Simulator and each task page, a **📋 Show model config** toggle reveals a full sectioned
+snapshot of the selected model (growth & nutrient environment, dormancy, phage, immunity,
+OD/debris, initial conditions, solver) — no tab-hunting.
+
+### AI Settings (sidebar expander)
+
+- **Anthropic API Key** — masked; needed only for the AI Assistant, never stored between
+  sessions.
+- **Model** — which Claude model powers the AI. With a valid key the list is fetched from your
+  account (`/v1/models`); otherwise a curated default is shown.
+- **Test API Key & List Models** — verifies the key and lists authorized models.
+- **Show generated code / assumptions** toggles live on the AI Assistant page itself.
 
 ### Reset Environment button
 
-At the bottom of the sidebar. Clears all session state and reloads Tutorial 01 defaults.
-Use this to start fresh without restarting the server.
+At the bottom of the sidebar. Clears session state and reloads the default configuration —
+a fresh start without restarting the server.
 
 ---
 
@@ -419,7 +449,76 @@ log-normal or other distributions.
 
 ---
 
-## 8. AI Assistant
+## 8. Calibration (fit to data)
+
+The **Calibration** page fits the model to your own experimental data using `pbisim-fit`'s
+non-linear least squares (`refine_nls`). It runs against the Model chosen in the page's Model
+selector (live draft or a frozen Model).
+
+### Workflow
+
+1. **Upload & column mapping (§1).** Upload a CSV. Map the columns: **time**, **value** (the
+   measurement / NONMEM `DV`), **observable** (fixed, or a column of `cfu` / `pfu` / `od` /
+   `lum`), and one or more **arm-defining** columns. If the file interleaves NONMEM/Monolix
+   **dose rows**, also map the **dose-event (EVID)** and **amount (AMT)** columns (see *Dose-row
+   import* below).
+2. **Filter · group · statistics (§2–3).** Filter rows, choose the grouping variables that
+   define your curves/arms, and aggregate replicates (raw points, mean, or median + a
+   percentile band).
+3. **Overlay (§4).** Pick the arms and observables to overlay. The model is simulated once per
+   arm and each observable is projected from that trajectory; you get per-arm **RMSE / R²** and
+   a pooled objective. For **OD** data, set the single **od_to_cfu** factor here (see below).
+4. **Per-arm conditions.** Each arm can carry its own initial density **B₀**, growth phase
+   (**pre-run** = 0 for log phase, > 0 to equilibrate toward stationary phase), and phage dose.
+5. **Manual tuning.** A **Show model builder** toggle reveals the *same* builder as the
+   Interactive Simulator (all modes, every parameter, in **ratio** form for the inoculum) plus a
+   compact global/structural block — so you can hand-tune and re-overlay before fitting.
+6. **Fit parameters (§5).** In the parameter table set each parameter's **role** (see below),
+   optionally add custom **θ** and priors, then **Run NLS fit**. The fit runs in a background
+   thread; the fitted curves overlay automatically. **Apply** writes the fitted values back into
+   the model, and you can **save the calibrated configuration** as a Scenario.
+
+### Observables & the `od_to_cfu` factor
+
+Supported observables: **CFU/mL**, **PFU/mL**, **OD**, and **luminescence (RLU)**. OD and
+luminescence need a *link* to model state. For OD there is **one** factor, `od_to_cfu` (CFU per
+OD unit), edited once in the §4 Overlay OD field. That single value drives everything: the
+initial density (B₀ = first OD × od_to_cfu), the overlay (model OD = biomass ÷ od_to_cfu), the
+debris `get_od()` if the OD/debris module is on, and the fit — so there are no competing OD
+factors.
+
+### Initial density B₀ (source modes)
+
+B₀ follows pbisim-fit's **additive model** — a known inoculum is a *dose*, exactly like a phage
+dose. The per-arm **B₀** selector offers:
+
+- **First observation** — each arm starts at its earliest CFU (or OD × od_to_cfu). Simple, but
+  carries measurement noise (a warning is shown).
+- **Shared value** / **Per-arm values** — a *known* inoculum, recorded as a `bacteria` dose.
+- **Estimate (shared / per-arm)** — B₀ is fit as an additive offset (`free_initial_conditions`).
+
+If the dataset carries a `bacteria` dose row for an arm, that overrides the manual field.
+
+### Fit-parameter roles
+
+Each model parameter has a **role**: **Fixed** (held at its value), **Free** (estimated 1:1 with
+its bounds/prior), or **Derived** (`= expression` of a custom θ). Blank bounds mean
+unconstrained; **log** = log-space search; optional Gaussian **priors** (μ, σ) turn the fit into
+MAP. Tie parameters together with the **Share** helper (sets rows to Derived = one θ). A
+two-way **fit-spec text** panel round-trips the whole spec as a compact DSL
+(`free … / fix … / theta … / map …`).
+
+### Dose-row import (NONMEM/Monolix)
+
+When you map an EVID column, dose rows (`EVID = 1`) are parsed — the *observable* column names
+the target compartment (`bacteria` / `phage` / `antibiotic` / `nutrient`) and `AMT` its amount —
+into per-arm doses that **gate the manual fields** (an arm with a data-provided dose hides its
+manual B₀ / MOI) and feed the fit. Parsing is delegated to pbisim-fit's `EventTable`, so it
+stays consistent with the fitter.
+
+---
+
+## 9. AI Assistant
 
 > **Screenshot placeholder** — chat interface with code block and plot output.
 
@@ -462,8 +561,9 @@ Start with 1e7 WT bacteria and no resistant cells.
   can say "now add a second phage dose at t=24" and the AI will update the code.
 - **Inspect the generated code** — enable "Show generated code" in the sidebar to see
   exactly what pbisim calls the AI made. You can copy this to a notebook for further work.
-- **Use presets as a starting point** — load a preset from the Presets & Tutorials page,
-  then switch to the AI Assistant and ask it to modify the loaded configuration.
+- **Use a saved configuration as a starting point** — load a Scenario from the Library (or set
+  up a model in the Simulator), then switch to the AI Assistant and ask it to modify the loaded
+  configuration.
 
 ### Limitations
 
@@ -475,41 +575,38 @@ Start with 1e7 WT bacteria and no resistant cells.
 
 ---
 
-## 9. Presets & Tutorials
+## 10. Library (Scenarios & Parts)
 
-The Presets & Tutorials catalog lists all 13 pbisim tutorial configurations, organized by
-topic.
+The **Library** page is your personal store of reusable configurations. It has two sections,
+each with **Export/Import as versioned JSON** so a library is portable across machines (useful
+since the hosted deploy is stateless).
 
-### Types
+### 💾 Scenarios — full-config snapshots
 
-- **Single** — loads parameter values directly into the Interactive Simulator. Click **Load
-  into Simulator** to populate all fields (strains, phages, antibiotics, doses, solver
-  settings). The simulator page then shows a ready-to-run configuration.
-- **Script** — displays and executes a standalone Python script demonstrating advanced
-  pbisim API features. Output figures and stdout appear below the code block. These scripts
-  use the AI executor sandbox.
+A **Scenario** captures the *entire* input configuration in one snapshot: builder mode,
+strains/phages/antibiotics, pairwise adsorption, dosing, nutrient environment, immunity,
+OD/debris, solver, pre-run, and clinical-trial arms/IIV. **Save current config** stores it;
+**Load** restores the whole configuration (and navigates to the Simulator); **Delete** removes
+it. Use scenarios to snapshot and reload complete experiments.
 
-### Tutorial overview
+### 🧬 Parts — composable building blocks
 
-| # | Title | Key features demonstrated |
-|---|---|---|
-| 01 | Phage treatment basics | Single phage + single strain, Monod growth |
-| 02 | Dormancy & resuscitation | Dormant compartment, D0 sensitivity |
-| 03 | Pseudolysogeny | Hibernation rate, lytic resumption |
-| 04 | Adaptive immunity | Imm compartment, kill50 |
-| 05 | Antibiotic PK/PD | 2-compartment PK, Emax/EC50/Hill |
-| 06 | Effect compartment & PAE | ke0, post-antibiotic effect |
-| 07 | Phage resistance emergence | BRG 2-strain, mutation rate |
-| 08 | Multi-locus resistance | 4-strain BRG, cross-resistance |
-| 09 | Collateral sensitivity | Two phages, CS/CR matrix |
-| 10 | Full CR/CS framework | All 26 cross-resistance fields |
-| 11 | OD debris measurement | Debris compartment, get_od() |
-| 12 | Clinical trial design | ClinicalTrial API, KM curves, NLME |
-| 13 | Advanced features | s_in/s_out, f_lyse, MM elimination, immune CR/CS |
+A **Part** is a single reusable entity — a **bacterium**, **phage**, or **antibiotic** — with
+its parameter dict plus provenance (educated guess / literature / pbisim-fit / experimental) and
+an annotation. Save the current entity as a part; **Load** appends it to the shared strain/phage/
+antibiotic lists so it composes across all pages. Because phage kinetics (burst / latent /
+adsorption) are properties of a phage × *host* pair, not the phage alone, phage parts carry a
+**reference-host tag**; loading one whose host isn't among the current strains raises a soft
+"verify kinetics for this host" note. This maps directly onto a future pbisim-fit "fit → save
+part" pipeline.
+
+> Note: the older tutorial-preset browser was removed — the app no longer tracks the pbisim
+> tutorials (which evolve independently). Fresh sessions start from a built-in default
+> configuration; use Scenarios/Parts to build your own library.
 
 ---
 
-## 10. Key Parameter Reference
+## 11. Key Parameter Reference
 
 ### Bacterial strain
 
@@ -551,11 +648,11 @@ topic.
 
 ---
 
-## 11. Common Workflows
+## 12. Common Workflows
 
 ### Workflow A: First simulation — phage monotherapy
 
-1. Press **Reset Environment** in the sidebar (loads Tutorial 01 defaults).
+1. Press **Reset Environment** in the sidebar (reloads the default configuration).
 2. Go to **Interactive Simulator → Strains & Phages**.
 3. Confirm: 1 bacterial strain (B0 = 1×10⁷), 1 phage (P0 = 1×10⁶).
 4. Go to **Environment & Dosing**: confirm a dose event at t=0 for 1×10⁶ phage.
@@ -600,13 +697,28 @@ topic.
 7. Click **Run Clinical Trial**.
 8. Inspect KM curves. Export CSV for survival analysis in R or Stata.
 
+### Workflow F: Calibrate the model to experimental data
+
+1. Build (or select) a Model whose structure matches your assay (e.g. Monod growth for a
+   plateauing OD curve).
+2. Navigate to **Calibration** and upload your CSV; map time / value / observable / arm
+   columns (and EVID/AMT if the file has dose rows).
+3. Group by the variables that define your curves; choose an aggregation (mean/median + band).
+4. Select the arms and observables to overlay. For OD, set **od_to_cfu** in §4.
+5. Pick a **B₀ source** (first-observation, a known shared/per-arm dose, or *estimate*).
+6. Optionally **Show model builder** to hand-tune, then click **Overlay** and read the RMSE/R².
+7. In the parameter table, set roles (**Free** the parameters to estimate; **Derived**/θ for
+   shared or reparameterized ones), add priors if desired, then **Run NLS fit**.
+8. The fitted curves overlay automatically. **Apply** the fit to the model and **save** it as a
+   Scenario (or a host-tagged phage Part) for reuse in sweeps/trials.
+
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### App won't start
 
-- Confirm you are in the correct conda environment (`conda activate pbisim202602`).
+- Confirm you are in the correct conda environment (`conda activate pbisim`).
 - Check port 8501 is free: `ss -tlnp | grep 8501`. If occupied, kill the old process
   before restarting.
 
