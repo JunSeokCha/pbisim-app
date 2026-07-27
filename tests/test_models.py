@@ -97,6 +97,36 @@ def test_save_model_keeps_it_active_and_excludes_doses():
     assert len(at.exception) == 0
 
 
+def test_model_snapshot_renders_on_simulator_and_pages():
+    """The click-to-view model-config snapshot renders a full sectioned summary of the
+    live draft (Simulator) and of a frozen Model (a page_model_selector page), so the
+    whole config is visible without tab-hunting."""
+    at = AppTest.from_file(APP, default_timeout=150)
+    at.run()
+    # Simulator — live draft
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    at.session_state["sim_show_cfg"] = True
+    at.run()
+    md = " ".join(m.value for m in at.markdown)
+    assert "Builder mode:" in md
+    assert all(s in md for s in ("Growth & nutrient environment", "Phage", "Solver & structure"))
+    assert len(at.dataframe) >= 5           # one table per section
+    assert len(at.exception) == 0
+
+    # A page that selects a frozen Model — snapshot of that model
+    a = AppTest.from_file(APP, default_timeout=150)
+    a.run()
+    a.session_state["current_page_radio"] = "Parameter Sweeps"
+    a.run()
+    a.session_state["psweep_model_sel"] = "Two-strain resistance (WT + resistant)"
+    a.session_state["psweep_show_cfg"] = True
+    a.run()
+    md2 = " ".join(m.value for m in a.markdown)
+    assert "Builder mode:" in md2 and "Growth & nutrient environment" in md2
+    assert len(a.exception) == 0
+
+
 def test_estimate_b0_mode_runs_end_to_end():
     """Selecting the 'Estimate (shared)' B0 source runs a fit that estimates B0 via
     free_initial_conditions — the fitted config carries a fit_initial_cfu."""

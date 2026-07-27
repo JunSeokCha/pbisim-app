@@ -92,40 +92,60 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
     return out, conditions
 
 
-# Dose compartments a NONMEM/Monolix dose row's `observable` column may name, and the
-# default unit per target (mirrors pbisim_fit.DOSE_TARGETS / DoseRecord.unit).
-DOSE_TARGETS = ("phage", "bacteria", "antibiotic", "nutrient")
+# Default dose unit per target (used when the dataset has no unit column). The set of
+# valid dose targets is sourced from pbisim-fit (below) so it can't drift.
 _DEFAULT_DOSE_UNIT = {"phage": "pfu", "bacteria": "cfu", "antibiotic": "mg", "nutrient": "mg"}
+
+
+def dose_targets():
+    """The valid dose-target compartments — pbisim-fit's `DOSE_TARGETS` (single source
+    of truth), with a static fallback if pbisim-fit isn't importable."""
+    try:
+        from pbisim_fit import DOSE_TARGETS as _t
+        return tuple(_t)
+    except Exception:  # pragma: no cover - pbisim-fit is a declared dep
+        return ("phage", "bacteria", "antibiotic", "nutrient")
+
+
+# Back-compat module constant (kept in sync with pbisim-fit at import time).
+DOSE_TARGETS = dose_targets()
 
 
 def parse_dose_rows(df, arm_cols, evid_col, observable_col, amount_col, time_col, unit_col=None):
     """Per-arm dose records from NONMEM/Monolix dose rows (``dose_event``/EVID == 1).
 
-    Returns ``{arm: [{"time", "target", "amount", "unit"}, ...]}``. The dose's target
-    compartment is the value of the *observable* column on that row (bacteria / phage /
-    antibiotic / nutrient — the column double-duties as CMT for dose rows). Rows whose
-    target isn't a dose compartment, or with a non-finite amount, are skipped. Unit comes
-    from ``unit_col`` when given, else a per-target default. Returns ``{}`` when no EVID
-    or amount column is mapped (observation-only dataset)."""
+    The obs/dose split and the canonical event model are delegated to pbisim-fit's
+    ``EventTable`` (single source of truth — no hand-rolled EVID handling); the app only
+    supplies the column→canonical mapping. The dose's target compartment is the value of
+    the *observable* column on that row (bacteria / phage / antibiotic / nutrient — it
+    double-duties as CMT for dose rows). Returns ``{arm: [{"time","target","amount",
+    "unit"}]}``; ``{}`` when no EVID or amount column is mapped (observation-only)."""
     if (not evid_col or evid_col not in df.columns
             or not amount_col or amount_col not in df.columns):
         return {}
-    evid = pd.to_numeric(df[evid_col], errors="coerce").fillna(0)
-    arm = _join_columns(df, list(arm_cols))
-    amt = pd.to_numeric(df[amount_col], errors="coerce")
-    tt = pd.to_numeric(df[time_col], errors="coerce")
-    _has_unit = bool(unit_col) and unit_col in df.columns
+    from pbisim_fit import EventTable
+    _targets = dose_targets()
+    canon = pd.DataFrame({
+        "arm": _join_columns(df, list(arm_cols)).values,
+        "time": pd.to_numeric(df[time_col], errors="coerce").values,
+        "observable": df[observable_col].astype(str).str.strip().str.lower().values,
+        "amount": pd.to_numeric(df[amount_col], errors="coerce").values,
+        "dose_event": pd.to_numeric(df[evid_col], errors="coerce").fillna(0).values,
+        "unit": (df[unit_col].astype(str).values if unit_col and unit_col in df.columns
+                 else [""] * len(df)),
+    })
+    et = EventTable(events=canon)   # canonicalises + separates obs/dose rows
     out = {}
-    for i in df.index[evid == 1]:
-        tgt = str(df.at[i, observable_col]).strip().lower()
-        if tgt not in DOSE_TARGETS or not np.isfinite(amt.at[i]):
+    for _, r in et.doses.iterrows():
+        tgt = str(r["observable"]).strip().lower()
+        amt = pd.to_numeric(r["amount"], errors="coerce")
+        if tgt not in _targets or not np.isfinite(amt):
             continue
-        unit = (str(df.at[i, unit_col]).strip().lower()
-                if _has_unit and str(df.at[i, unit_col]).strip()
-                else _DEFAULT_DOSE_UNIT.get(tgt, ""))
-        out.setdefault(arm.at[i], []).append({
-            "time": float(tt.at[i]) if np.isfinite(tt.at[i]) else 0.0,
-            "target": tgt, "amount": float(amt.at[i]), "unit": unit})
+        unit = str(r["unit"]).strip().lower() or _DEFAULT_DOSE_UNIT.get(tgt, "")
+        t = pd.to_numeric(r["time"], errors="coerce")
+        out.setdefault(str(r["arm"]), []).append({
+            "time": float(t) if np.isfinite(t) else 0.0,
+            "target": tgt, "amount": float(amt), "unit": unit})
     return out
 
 

@@ -204,6 +204,27 @@ research-grade, so only share the password with trusted people.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-07-27) — EventTable dose-parser migration + model-config snapshot
+
+- **EventTable migration (anti-drift).** `fit_helper.parse_dose_rows` now delegates the
+  obs/dose split + canonical event model to pbisim-fit's **`EventTable`** (builds a
+  canonical events frame from the app's mapped columns → reads `et.doses`), instead of the
+  app's hand-rolled EVID loop. Dose-target vocabulary is sourced from pbisim-fit via
+  `fit_helper.dose_targets()` (`DOSE_TARGETS` kept as a synced module constant). Used the
+  df constructor `EventTable(events=df)` — the in-memory equivalent of `from_csv` (the app
+  already holds a dataframe + its own column-map UI, so `from_csv`'s file/dialect handling
+  isn't needed). Observation ingestion (normalize/filter/group/aggregate) is app-specific
+  and stays. Verified byte-identical behavior (all dose/NONMEM/nls tests pass).
+- **Model-config snapshot.** New `common.render_model_snapshot(container, *, snapshot=None)`
+  renders a sectioned, mode-agnostic summary of the **fully-resolved** config (builds it
+  via `build_nominal_config_from_gui` inside `model_config_context`, so Direct/BRG/StrainSet
+  all show the same fields, no drift): growth & nutrient environment, death & dormancy,
+  phage, immunity, OD/debris, ICs, solver. Click-to-view **`📋 Show model config`** toggle
+  (gates the build) added to the Simulator (live draft) and `page_model_selector` (chosen
+  frozen Model). No more tab-hunting to see a model's config.
+- Tests: `test_models.py::test_model_snapshot_renders_on_simulator_and_pages`;
+  `parse_dose_rows` migration covered by existing tests. **204 tests passing.**
+
 ## Done this session (2026-07-26) — B0/dose calibration overhaul (pbisim-fit additive-B0)
 
 pbisim-fit finished the additive-B0 / EventTable (NONMEM/Monolix) work (its

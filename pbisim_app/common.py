@@ -951,6 +951,127 @@ def build_config_from_model(snapshot: dict | None = None):
         return build_nominal_config_from_gui()
 
 
+def _snap_fmt(v):
+    """Compact human formatting for a scalar / 1-D / 2-D value in the snapshot view."""
+    if v is None:
+        return "—"
+    if callable(v) or hasattr(v, "__name__"):
+        return getattr(v, "__name__", str(v))
+    if isinstance(v, (bool, str)):
+        return str(v)
+    a = np.asarray(v, dtype=object) if not np.isscalar(v) else None
+    if a is None or np.ndim(v) == 0:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if f == 0:
+            return "0"
+        return f"{f:g}" if 1e-3 <= abs(f) < 1e5 else f"{f:.3e}"
+    arr = np.asarray(v)
+    if arr.ndim == 1:
+        return "[" + ", ".join(_snap_fmt(x) for x in arr) + "]"
+    return "[" + "; ".join(_snap_fmt(row) for row in arr) + "]"
+
+
+def render_model_snapshot(container=None, *, snapshot: dict | None = None):
+    """Render a readable, sectioned summary of the fully-resolved model configuration —
+    organism / kinetics / nutrient environment / immunity / OD-debris / initial
+    conditions / solver — so the whole config is visible in one place instead of
+    hunting through the builder tabs. ``snapshot`` = a `dump_model()` dict for a frozen
+    Model; ``None`` = the live builder draft. Reads the *built config* so it's
+    mode-agnostic (Direct/BRG/StrainSet all resolve to the same fields) and can't drift
+    from what actually runs."""
+    c = container if container is not None else st
+    g = st.session_state.get
+    try:
+        with model_config_context(snapshot):
+            cfg, iB, iP, iS, mk = build_nominal_config_from_gui()
+            mode = g("int_builder_mode", "Direct (ModelBuilder)")
+            gfn = g("int_growth_function", "monod_growth")
+            debris_on = bool(g("int_debris_enabled", False))
+            imm_on = bool(g("int_immunity_enabled", False))
+            solver = [
+                ("Integrator", g("int_solver_method", "BDF")),
+                ("Extinction threshold", g("int_extinction_threshold", 1.0)),
+                ("Extinction check interval (h)", g("int_extinction_check_interval", 0.0)),
+                ("Stationary pre-run (h)", g("int_t_prerun", 0.0)),
+                ("Latent compartments (L)", g("int_n_latent", 5)),
+            ]
+    except Exception as e:  # noqa: BLE001 — snapshot must never crash the page
+        c.warning(f"Could not build the model config for the snapshot: {e}")
+        return
+
+    def _ga(*names):
+        for n in names:
+            v = getattr(cfg, n, None)
+            if v is not None:
+                return v
+        return None
+
+    def _section(title, pairs):
+        rows = [(k, _snap_fmt(v)) for k, v in pairs if v is not None]
+        if rows:
+            c.markdown(f"**{title}**")
+            c.dataframe(pd.DataFrame(rows, columns=["parameter", "value"]),
+                        hide_index=True, width="stretch")
+
+    _na = getattr(cfg, "n_antibiotics", 0) or 0
+    c.markdown(f"**Builder mode:** {mode}  ·  **{getattr(cfg, 'n_bacteria', len(np.atleast_1d(iB)))}** "
+               f"strain(s) · **{getattr(cfg, 'n_phages', len(np.atleast_1d(iP)))}** phage(s)"
+               + (f" · **{_na}** antibiotic(s)" if _na else ""))
+    _section("Growth & nutrient environment", [
+        ("Growth signal", gfn),
+        ("Growth rates (h⁻¹)", _ga("growth_rates")),
+        ("Monod constant Ks", _ga("monod_constant")),
+        ("Carrying capacity K", _ga("carrying_capacity")),
+        ("Bacteria : resource ratio", _ga("bacteria_to_resource_ratio")),
+        ("Track nutrients", g("int_track_nutrients", True)),
+        ("Initial nutrient S₀", iS),
+        ("Recycle fraction", _ga("recycle_fraction")),
+        ("Nutrient inflow s_in", _ga("s_in")),
+        ("Nutrient washout s_out", _ga("s_out")),
+    ])
+    _section("Death & dormancy", [
+        ("Natural death dB (h⁻¹)", _ga("death_rate_B")),
+        ("Dormant death dD (h⁻¹)", _ga("death_rate_D")),
+        ("Dormancy function", _ga("dormancy_function")),
+        ("Dormancy rate (h⁻¹)", _ga("dormancy_rate")),
+        ("Resuscitation rate (h⁻¹)", _ga("resuscitation_rate")),
+        ("Depth diffusion (h⁻¹)", _ga("dormancy_diffusion_rate")),
+        ("Dormancy density threshold", _ga("dormancy_carrying_capacity")),
+        ("Depth layers (Q)", _ga("n_depth")),
+    ])
+    _section("Phage", [
+        ("Adsorption (mL·h⁻¹)", _ga("adsorption_rates")),
+        ("Adsorption → dormant", _ga("adsorption_rates_dormant")),
+        ("Burst size", _ga("burst_sizes")),
+        ("Latent period (h)", _ga("latent_periods")),
+        ("Phage decay (h⁻¹)", _ga("phage_decay_rates")),
+        ("Dormant attenuation", _ga("attenuation_rate")),
+    ])
+    if imm_on:
+        _section("Host immunity", [
+            ("Module", g("int_immune_module", "innate")),
+            ("Stim rate", _ga("imm_stim_rate")), ("Stim50", _ga("imm_stim50")),
+            ("Kill rate", _ga("imm_kill_rate")), ("Kill50", _ga("imm_kill50")),
+            ("Imm max (hill)", _ga("imm_max")), ("Decay rate", _ga("imm_decay_rate")),
+            ("Dormant kill rate", _ga("imm_kill_rate_D")),
+        ])
+    if debris_on:
+        _section("OD / debris", [
+            ("od_to_cfu (CFU per OD)", _ga("od_to_cfu_conversion_factor")),
+            ("Debris · deaths (u)", _ga("debris_u")), ("Debris · lysis (v)", _ga("debris_v")),
+            ("Dissolution k_dis", _ga("debris_kdis")),
+            ("Dormant OD weight", _ga("dormant_od_fraction")),
+        ])
+    _section("Initial conditions", [
+        ("Initial bacteria B₀", iB), ("Initial phage P₀", iP),
+        ("Initial dormant D₀", mk.get("initial_D") if isinstance(mk, dict) else None),
+    ])
+    _section("Solver & structure", solver)
+
+
 def resolve_model_snapshot(selection: str) -> dict | None:
     """Map a Model selector value to a frozen snapshot (or None = live Working draft).
 
@@ -995,6 +1116,12 @@ def page_model_selector(page_key: str, label: str = "Model") -> str:
                    "Simulator flow through here.")
     else:
         st.caption(f"Running against frozen model **{sel}** — builder edits won't affect this.")
+    # Click-to-view full config of the selected Model (no tab-hunting). The toggle gates
+    # the (moderately expensive) config build so it only runs when the user asks.
+    if st.toggle("📋 Show model config", key=f"{page_key}_show_cfg",
+                 help="A full snapshot of the selected model's parameters — strains, phages, "
+                      "growth & nutrient environment, immunity, OD/debris, ICs, solver."):
+        render_model_snapshot(snapshot=resolve_model_snapshot(sel))
     return sel
 
 
@@ -2671,6 +2798,7 @@ __all__ = [
     'apply_model_to_state',
     'model_config_context',
     'build_config_from_model',
+    'render_model_snapshot',
     'resolve_model_snapshot',
     'model_options',
     'page_model_selector',

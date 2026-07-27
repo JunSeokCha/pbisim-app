@@ -866,6 +866,13 @@ def render():
         st.caption(f"Editing a working copy of model **{_am}** — save changes as a Model "
                    "in the sidebar to keep them; downstream tasks can then select it.")
 
+    # Click-to-view snapshot of the whole configured model (the live draft being built
+    # here) — every section resolved in one place, no tab-hunting. Toggle gates the build.
+    if st.toggle("📋 Show current model config", key="sim_show_cfg",
+                 help="A full snapshot of the model you're building — strains, phages, growth "
+                      "& nutrient environment, immunity, OD/debris, initial conditions, solver."):
+        render_model_snapshot()
+
     # 1. Retrieve current lists from state
     strains = st.session_state.get("int_strains", [])
     phages = st.session_state.get("int_phages", [])
