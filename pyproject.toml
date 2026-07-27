@@ -32,9 +32,16 @@ fit = [
 dev = [
     "pytest>=7.4",
 ]
+desktop = [
+    # Wraps the local Streamlit server in a native OS window (`pbisim-app-desktop`).
+    # Additive: the browser mode and the Render deploy don't need it. On Linux it also
+    # needs a system webview lib (e.g. `apt install gir1.2-webkit2-4.1 python3-gi`).
+    "pywebview>=5.0",
+]
 
 [project.scripts]
 pbisim-app = "pbisim_app.cli:main"
+pbisim-app-desktop = "pbisim_app.desktop:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

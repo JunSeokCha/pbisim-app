@@ -177,6 +177,15 @@ python -m streamlit run pbisim_app/app.py
 # or, once installed:  pbisim-app
 ```
 
+**Desktop window (optional):** `pbisim_app/desktop.py` (console script `pbisim-app-desktop`,
+extra `.[desktop]` → pywebview) starts the *same* local Streamlit server and wraps it in a
+native OS window — additive, no app-logic or Render-deploy changes (the browser mode is
+unchanged; updates flow through normally, nothing is frozen). Falls back to the default
+browser if pywebview / a native webview backend is missing (Linux also needs a system lib,
+e.g. `apt install gir1.2-webkit2-4.1 python3-gi`). Groundwork for a future local
+"power-user mode" (in-app scripting + local-LLM assistant), which are only safe/viable when
+everything runs locally.
+
 ## Access gate (deployment)
 
 `pbisim_app/auth.py` adds an optional shared-credential sign-in (`require_login()`,
