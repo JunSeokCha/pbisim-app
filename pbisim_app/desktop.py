@@ -102,6 +102,15 @@ def _open_in_browser(url: str, proc: subprocess.Popen) -> None:
         pass
 
 
+def _force_browser() -> bool:
+    """User opted out of the native window (``PBISIM_APP_BROWSER=1``). Escape hatch for
+    machines whose native webview engine is too old to render current Streamlit — the
+    window would open but stay blank (a JS error in the page, not a Python exception, so
+    it can't auto-fall-back). Old Qt WebEngine on old Linux is the known case; Windows
+    (WebView2) / macOS (WKWebView) / up-to-date Linux are fine."""
+    return os.environ.get("PBISIM_APP_BROWSER", "").strip().lower() in ("1", "true", "yes")
+
+
 def main() -> None:
     """Start the local server and show it in a native window (browser fallback)."""
     port = _free_port()
@@ -110,6 +119,11 @@ def main() -> None:
     try:
         if not _wait_until_up(f"{url}/_stcore/health"):
             print("pbisim-app: the local server did not start in time.", file=sys.stderr)
+            _open_in_browser(url, proc)
+            return
+
+        if _force_browser():
+            print("pbisim-app: PBISIM_APP_BROWSER set — using the browser.", file=sys.stderr)
             _open_in_browser(url, proc)
             return
 

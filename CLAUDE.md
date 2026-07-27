@@ -179,12 +179,18 @@ python -m streamlit run pbisim_app/app.py
 
 **Desktop window (optional):** `pbisim_app/desktop.py` (console script `pbisim-app-desktop`,
 extra `.[desktop]` → pywebview) starts the *same* local Streamlit server and wraps it in a
-native OS window — additive, no app-logic or Render-deploy changes (the browser mode is
-unchanged; updates flow through normally, nothing is frozen). Falls back to the default
-browser if pywebview / a native webview backend is missing (Linux also needs a system lib,
-e.g. `apt install gir1.2-webkit2-4.1 python3-gi`). Groundwork for a future local
-"power-user mode" (in-app scripting + local-LLM assistant), which are only safe/viable when
-everything runs locally.
+native OS window — additive, no app-logic or Render-deploy changes (browser mode unchanged;
+updates flow normally, nothing is frozen). Groundwork for a future local "power-user mode"
+(in-app scripting + local-LLM assistant), only safe when everything runs locally.
+- **Verified 2026-07-28** on this Linux box: launcher works end-to-end (server up → native
+  Qt window → clean shutdown). **BUT the webview's browser engine must be modern enough for
+  current Streamlit** (needs `Object.hasOwn`, ES2022 / Chromium ≥ ~93). This dev box's old
+  PyQt5 QtWebEngine (Ubuntu 20.04) is too old → the window opens but the UI stays blank (a JS
+  error in the page, NOT a Python exception, so it can't auto-fall-back). Windows (WebView2 =
+  evergreen), macOS (WKWebView), and up-to-date Linux (recent WebKit2GTK/Qt) are fine.
+- Escape hatches: `PBISIM_APP_BROWSER=1` forces the browser; a missing pywebview / native
+  backend also falls back to the browser automatically. Linux native window needs a system
+  webview lib (`apt install gir1.2-webkit2-4.1 python3-gi`, or a recent PyQt6-WebEngine).
 
 ## Access gate (deployment)
 
