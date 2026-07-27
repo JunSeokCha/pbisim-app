@@ -17,9 +17,10 @@ This file is read at the start of every Claude Code session in this repository.
 run parameter sweeps, design clinical trials, and ask an AI assistant to build and
 explain simulations in natural language.
 
-**Status:** active development (**orchestrator owns this repo** — antigravity built
-the initial scaffold; API wiring requires engine-author oversight). **201 tests passing.** Depends on `pbisim>=1.0` (and,
-optionally and not-yet-wired-up, `pbisim-fit>=0.1` — see §5.3 in ECOSYSTEM.md).
+**Status:** active development, **deployed on Render** (Standard instance, auto-deploy
+from `main`). **204 tests passing.** Depends on `pbisim>=1.0` **and `pbisim-fit>=0.1`**
+— the fit integration is **LIVE** (the Calibration page runs pbisim-fit's NLS; lazy
+import keeps the app torch-free). See §5.3 in ECOSYSTEM.md.
 
 ---
 
@@ -189,9 +190,14 @@ research-grade, so only share the password with trusted people.
 
 ## Known gaps / next steps
 
-- **pbisim-fit integration is deferred by design** until pbisim-fit v1.0 ships;
-  the `[fit]` extra is a documented placeholder. Intended hook:
-  `pbisim_fit.output.to_model_config` (ECOSYSTEM.md §3.5, §5.3).
+- **pbisim-fit integration is LIVE** (Calibration page): CSV ingest → overlay →
+  NLS fit via `refine_nls` (lazy import, torch-free); role-based fit-parameter
+  table + MAP priors + statement DSL; **additive-B0** (bacteria-dose /
+  `free_initial_conditions` estimate / `cfu[0]` fallback); **NONMEM/Monolix
+  dose-row import**; real-builder reuse for tuning. *Remaining (non-urgent):* route
+  ingestion through pbisim-fit's `EventTable.from_csv` to retire the app's
+  hand-rolled dose parser + get covariate pass-through (see
+  `../pbisim-fit/APP_INTEGRATION_NOTES.md`); optional `to_model_config`.
 - No streaming, no tool-use, brittle regex parsing, no rate limiting, no UI tests.
 - Model pin lives in `agent.py` `_MODEL` (currently `claude-sonnet-4-6`); keep it
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
