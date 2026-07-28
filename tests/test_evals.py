@@ -262,6 +262,22 @@ class _ChatFakeAgent:
                         "", None, False, 0, ())
 
 
+def test_answer_contains_any():
+    r = ExecutionResult(success=True, figures=[], stdout="A typical burst size is 50 progeny.", error="")
+    assert checks.answer_contains_any(["progeny", "released"])("", r)[0] is True
+    assert checks.answer_contains_any(["adsorption", "latent"])("", r)[0] is False
+
+
+def test_run_case_chat_surfaces_narrative_for_answer_checks():
+    # The runner must route the model's text answer into result.stdout so answer-content
+    # checks can score the prose (the chat agent returns no code / no ExecutionResult).
+    chat_case = CASES[0].__class__(
+        "q", "what's a realistic rate?",
+        [checks.no_code_run(), checks.answer_contains_any(["1e-8"])], intent="chat")
+    res = run_case(chat_case, _ChatFakeAgent(), execute_code, clock=lambda: 0.0)
+    assert res.passed, res.failed_checks
+
+
 def test_run_case_chat_intent_segments():
     chat_case = CASES[0].__class__("q", "what's a realistic rate?",
                                    [checks.no_code_run()], intent="chat")

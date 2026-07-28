@@ -69,7 +69,17 @@ def run_case(case, agent, execute, max_retries: int = 3, clock=time.perf_counter
     run = agent.generate(case.prompt, execute, max_tool_calls=max_retries + 1)
     latency = clock() - t0
 
-    result = run.result if run.result is not None else _no_code_result()
+    if run.result is not None:
+        result = run.result
+    else:
+        # Chat/no-code turn: surface the model's text answer as stdout so answer-content
+        # checks (answer_contains_any) can score the prose. Empty answer → the plain
+        # no-code failure sentinel.
+        result = _no_code_result()
+        answer = (getattr(run, "narrative", "") or "").strip()
+        if answer:
+            from pbisim_app.executor import ExecutionResult
+            result = ExecutionResult(success=True, figures=[], stdout=answer, error="")
     rows, passed = run_checks(case.checks, run.code, result)
     attempts = max(1, run.tool_calls)
     transcript = getattr(run, "transcript", ()) or ()

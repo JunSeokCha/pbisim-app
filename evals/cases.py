@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from evals.checks import (
     runs_ok, has_figure, stdout_contains, stdout_contains_any, code_contains,
-    uses_cfu_sum_prefixes, no_code_run,
+    uses_cfu_sum_prefixes, no_code_run, answer_contains_any,
 )
 
 
@@ -141,21 +141,62 @@ CASES = [
         tags=("core",),
     ),
 
-    # ── chat / Q&A: the copilot should ANSWER, not run a simulation (Phase 1 routing) ──
+    # ── chat / Q&A: the copilot should ANSWER, not run a simulation (Phase 1 routing).
+    #    These also score the ANSWER for the expected domain reasoning (answer_contains_any)
+    #    — the measurable target of the domain-expert prompt layer. Option lists are broad:
+    #    the point is "did it name the right mechanism," not one exact phrasing. ─────────────
     EvalCase(
         "q_adsorption",
         "What is a realistic adsorption rate for a lytic phage, and what are its units?",
-        [no_code_run()], tags=("qa",), intent="chat",
+        [no_code_run(), answer_contains_any(["1e-8", "1e-9", "10^-8", "10^-9", "ml/", "ml ",
+                                             "per pfu"])],
+        tags=("qa",), intent="chat",
     ),
     EvalCase(
         "q_burst_meaning",
         "Explain what phage burst size means and give a typical value.",
-        [no_code_run()], tags=("qa",), intent="chat",
+        [no_code_run(), answer_contains_any(["progeny", "released", "per cell", "per infected",
+                                             "lysis", "20", "50", "100"])],
+        tags=("qa",), intent="chat",
     ),
     EvalCase(
         "q_immune_resistance",
         "Why can phage-resistant bacteria sometimes still be cleared by the host immune system?",
-        [no_code_run()], tags=("qa",), intent="chat",
+        [no_code_run(), answer_contains_any(["immune", "phagocyt", "clear", "innate"])],
+        tags=("qa",), intent="chat",
+    ),
+    EvalCase(
+        "q_synergy_reason",
+        "Why might combining a phage with an antibiotic outperform either one alone against "
+        "the same bacterial strain?",
+        [no_code_run(), answer_contains_any(["synerg", "collateral", "re-sensit", "resensit",
+                                             "fitness cost", "trade-off", "tradeoff",
+                                             "different subpop", "steer", "evolution"])],
+        tags=("qa", "combo"), intent="chat",
+    ),
+    EvalCase(
+        "q_implausible_adsorption",
+        "I set the phage adsorption rate to 1e-5 mL/h. Is that realistic?",
+        [no_code_run(), answer_contains_any(["too high", "too fast", "implausible", "unrealistic",
+                                             "orders of magnitude", "1e-9", "1e-8", "high"])],
+        tags=("qa", "plausibility"), intent="chat",
+    ),
+    EvalCase(
+        "q_regrowth_meaning",
+        "My bacterial curve drops to a low nadir and then climbs back up. What does that "
+        "rebound most likely mean?",
+        [no_code_run(), answer_contains_any(["resist", "mutant", "escape", "persist", "dorman",
+                                             "refuge", "regrow", "selection"])],
+        tags=("qa", "interpret"), intent="chat",
+    ),
+    EvalCase(
+        "q_dormancy_refuge",
+        "Why does adding host immunity sometimes still fail to clear an infection when the "
+        "bacteria can go dormant?",
+        [no_code_run(), answer_contains_any(["dorman", "persist", "refuge", "shield",
+                                             "imm_kill_rate_d", "reservoir", "privileg",
+                                             "tolerat"])],
+        tags=("qa", "dormancy"), intent="chat",
     ),
 ]
 

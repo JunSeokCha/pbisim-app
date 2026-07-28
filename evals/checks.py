@@ -50,6 +50,22 @@ def stdout_contains_any(substrs):
     return _c
 
 
+def answer_contains_any(substrs):
+    """The assistant's TEXT answer mentions at least one of ``substrs`` (case-insensitive).
+
+    For chat/no-code cases the runner surfaces the model's narrative into ``result.stdout``,
+    so this scores the prose answer for the expected mechanistic concepts (e.g. a synergy
+    explanation naming "resistance" or "collateral sensitivity"). Keep the option list broad
+    — accept any reasonable phrasing of the right idea."""
+    subs = tuple(substrs)
+    def _c(code, result):
+        low = (result.stdout or "").lower()
+        ok = any(s.lower() in low for s in subs)
+        return ok, ("" if ok else f"answer mentions none of {subs}")
+    _c.__name__ = f"answer_contains_any({subs})"
+    return _c
+
+
 def no_code_run():
     """The assistant answered WITHOUT generating/running a simulation (chat / interpret
     intent) — i.e. it routed to a text answer, not the code path."""
