@@ -15,10 +15,28 @@ from typing import NamedTuple
 
 import anthropic
 
+from pbisim_app.knowledge import select_cards
+
 
 # ── Load system prompt ────────────────────────────────────────────────────────
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system_prompt.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _system_blocks(user_message: str, *, extra: list | None = None) -> list:
+    """Build the ``system`` blocks for a request.
+
+    The base prompt (API contract + general reasoning) is a single **cached** block so it
+    is re-used across turns and self-healing retries. Keyword-gated **knowledge cards** for
+    this specific query are appended as a small, uncached tail (:func:`knowledge.select_cards`),
+    so the always-cached prefix stays roughly constant-size as the knowledge library grows.
+    """
+    blocks = [{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    blocks += extra or []
+    cards = select_cards(user_message or "")
+    if cards:
+        blocks.append({"type": "text", "text": cards})
+    return blocks
 
 # ── Claude model ──────────────────────────────────────────────────────────────
 # Default to the strongest code model — one-shot accuracy matters more here than
@@ -318,14 +336,8 @@ class SimulationAgent:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                # Send the long, static API reference as a cached content block. It is
-                # re-used across every turn and every self-healing retry within the
-                # 5-minute cache window, cutting latency and cost substantially.
-                system=[{
-                    "type": "text",
-                    "text": _SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }],
+                # Cached API-reference block + any query-relevant knowledge cards.
+                system=_system_blocks(user_message),
                 messages=self.history,
             )
         except Exception:
@@ -355,10 +367,8 @@ class SimulationAgent:
         self._trim_history()             # keep the conversation (and memory/cost) bounded
         _entry_len = len(self.history)   # roll back to here if this turn fails
         self.history.append({"role": "user", "content": user_message})
-        system = [
-            {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": _TOOL_INSTRUCTION},
-        ]
+        system = _system_blocks(
+            user_message, extra=[{"type": "text", "text": _TOOL_INSTRUCTION}])
         tools = ([_RUN_TOOL, _LOOKUP_TOOL]
                  + ([_CONFIGURE_TOOL] if configure is not None else [])
                  + ([_SUMMARY_TOOL] if summarize is not None else []))

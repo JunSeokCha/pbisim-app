@@ -49,51 +49,98 @@ pbisim API is in the numbered sections below — apply this knowledge, but never
 
 | Quantity | Typical range | Note |
 |---|---|---|
-| Adsorption rate | 1e-9 (very weak phage) – 1e-6 (very strong phage) mL·h⁻¹ | therapy candidates ~1e-8 to 5e-7; flag > 1e-6 or < 1e-11 |
-| Burst size | 20 – 200 PFU/cell | phage/host dependent; **covaries with latent period** |
-| Latent period | 0.3 – 1 h | eclipse + maturation; **longer latent ↔ larger burst** |
+| Adsorption rate | ~6e-9 – 6e-7 mL·h⁻¹ (candidates **1e-8 – 5e-7**) | **the single most important efficacy parameter**; see note for units/ceiling |
+| Burst size | 20 – 500 PFU/cell | ~50–200 common; models explore 50–500 [src: Rao 2024, Bulssico 2023] |
+| Latent period | 0.3 – 1 h | eclipse + maturation (Payne's model ≈ 0.83 h) [src: Payne 2003] |
 | Bacterial growth rate | 0.5 – 2 h⁻¹ | doubling ≈ 20–80 min |
-| Phage decay rate | ~0 (in vitro) – fast (in vivo plasma) h⁻¹ | **compartment-dependent** — see note |
-| Mutation rate (per division) | 1e-9 – 1e-6 | resistance emergence |
+| Phage decay rate | in vitro ≈ 0; in vivo plasma **~0.15–4.5 h⁻¹** | **compartment-dependent** — see note + phage-PK table |
+| Mutation rate (per division) | 1e-9 – 1e-6 | resistance emergence; SOS-inducing antibiotics raise it ~5× |
 | Initial density B₀ | 1e6 – 1e9 CFU/mL | 1e8–1e9 = stationary / high inoculum |
 | Antibiotic MIC / EC50 | class-dependent | see §9 antibiotic PK values |
 
-- **Adsorption** spans three orders of magnitude — 1e-9 mL·h⁻¹ is a very weak phage, 1e-6 a
-  very strong one; realistic phage-therapy candidates sit around **1e-8 to 5e-7**. Don't
-  reflexively flag a high value: 1e-7 is a strong-but-plausible therapeutic phage. Flag only the
-  extremes (> 1e-6 implausibly fast, < 1e-11 ≈ no infection).
-- **Burst size and latent period covary** — phages with a longer latent period generally
-  produce a larger burst (more maturation time per infection). Pair them accordingly (e.g. a
-  short 0.3 h latent with burst ~20–50; a long ~1 h latent with burst ~100–200), rather than
-  combining a very short latent with a very large burst.
-- **Phage decay is compartment-dependent.** *In vitro* (test-tube / batch culture) free-phage
-  decay is **negligible** (≈ 0.01 h⁻¹ or less). *In vivo* it depends on the organ compartment:
-  **plasma clearance is rapid** (hepatic/splenic uptake, neutralising antibody), while tissue or
-  bacterial-biofilm compartments retain phage far longer. State which compartment you're modelling
-  and pick the decay accordingly — don't apply fast plasma clearance to an in-vitro simulation.
+- **Adsorption is the dominant determinant of phage efficacy** [src: Bull 2014, Rao 2024] — it
+  sets the *inundation threshold* (see the phage-dosing block below). **Watch the units:** pbisim
+  uses **mL·h⁻¹**; much of the literature reports mL·min⁻¹. The physical encounter-limited ceiling
+  is ≈ **1e-8 mL·min⁻¹ ≈ 6e-7 mL·h⁻¹** [src: Bull 2014]; realistic therapy candidates sit at
+  **1e-8 – 5e-7 mL·h⁻¹** (pbisim's WT default is 1e-8). Don't reflexively flag a high value — 1e-7
+  is a strong-but-plausible therapeutic phage; flag only implausible extremes (> ~6e-7 exceeds the
+  physical ceiling; < 1e-11 ≈ no infection). A 10-fold drop in adsorption can flip a phage from
+  suppressing bacteria to mere coexistence [src: Bull 2014].
+- **Burst / latent period are second-order for efficacy** [src: Bull 2014] and their covariation is
+  axis-dependent, so don't over-constrain: *across phage genotypes*, a longer latent period allows
+  more intracellular maturation → often a larger burst; but *host physiology* runs the other way —
+  starved/slow-growing cells give **longer latent AND smaller burst** [src: Bull 2014 (Hadas 1997)].
+  State which you mean. Sub-MIC filamentation-inducing antibiotics raise burst ~28–36% (see PAS).
+- **Phage decay is compartment-dependent — do not apply plasma clearance to an in-vitro run.**
+  *In vitro*: effectively **negligible** (use ≈ 0.01 h⁻¹ as a modelling assumption — not a cited
+  value). *In vivo plasma*: **rapid**, dominated by RES (liver/spleen) phagocytosis — mouse IV gives
+  **k ≈ 3–4.5 h⁻¹ (t½ ≈ 9–13 min)** [src: Wang 2023]; other models span t½ ~0.5–7 h (k ≈ 0.1–1.4 h⁻¹)
+  and humans clear slower than mice [src: Dabrowska]. Route matters (IV t½ ~3 h vs intratracheal ~12 h
+  in lung [src: Rao 2024]). Neutralising **antibody is a delayed repeat-dose effect** (develops over
+  ~1–5 weeks, seen in ~39% of treated patients), not acute first-dose clearance [src: Dabrowska, 100
+  cases 2024]. See the phage-PK-by-compartment table for values.
 
 **MOI (multiplicity of infection) = PFU added ÷ CFU present.** Experimental MOIs span
 ~0.01–10. The app doses **absolute PFU/mL**, so to hit a target MOI set the initial phage /
-t=0 phage dose to `MOI × B₀`. Always state the MOI you assumed.
+t=0 phage dose to `MOI × B₀`. Always state the MOI you assumed. **Low MOI may fail to control;
+very high MOI can accelerate resistance selection** [src: Rao 2024].
 
 ### Mechanisms to know and explain
 
-- **Phage–antibiotic synergy (PAS).** Combinations often beat either agent alone because they
-  hit **different subpopulations** and **steer evolution**: phage-resistance mutations
-  (receptor / efflux / capsule changes) frequently carry a fitness cost or **re-sensitise** the
-  cell to an antibiotic (collateral sensitivity), and sub-lytic antibiotics can boost phage
-  production. In-silico, synergy shows as a lower nadir / faster clearance than the best
-  monotherapy.
-- **Resistance evolution.** A large culture already contains **pre-existing rare mutants** (see
-  §10 seeding rule); *selection*, not de-novo mutation, usually drives takeover. The signature
-  is **nadir-then-regrowth** as a resistant subpopulation escapes.
+- **Phage–antibiotic synergy (PAS) — the mechanism is often filamentation.** Sub-MIC
+  **filamentation-inducing** antibiotics — β-lactams (ceftazidime, cephalexin) and fluoroquinolones
+  (ciprofloxacin, via the SOS response) — make cells elongate, which **raises adsorption ∝ surface
+  area (2–3× more phage adsorbed per cell)** and **raises burst ~28–36%** with latent period
+  unchanged [src: Bulssico 2023, Rao 2024, Kim 2024]. **Aminoglycosides (e.g. tobramycin) do NOT
+  filament → no such boost** — so PAS is *antibiotic-class-specific*, not generic. Model it as
+  adsorption↑/burst↑ on the drug-exposed subpopulation. Combinations also hit **different
+  subpopulations** and **steer evolution** (below). In-silico, synergy = a lower nadir / faster
+  clearance than the best monotherapy.
+- **Resistance evolution & steering.** A large culture already contains **pre-existing rare
+  mutants** (see §10 seeding rule); *selection*, not de-novo mutation, drives takeover — signature
+  **nadir-then-regrowth**. Resistant subpopulations **bloom by competitive release** the moment
+  susceptibles fall, so therapy is a **race**: drive total bacteria below the clearance threshold
+  before resistance breaches it — favouring **"hit hard and early" with a receptor-diverse cocktail**
+  (adding independent phages matters more than tuning adsorption). Phage-resistance is usually
+  **receptor loss** (pili/LPS/capsule/OMP/WTA)
+  and typically **costs fitness/virulence** (lost motility, reduced LD₅₀) [src: Kim 2024, Holger
+  2021, 100 cases 2024]. **Collateral sensitivity** — phage-resistance re-sensitising to an
+  antibiotic — is real but receptor-specific (classic case: phage OMKO1 forces loss of the OprM
+  efflux component → re-sensitises to ciprofloxacin/ceftazidime) [src: Holger 2021]; treat it as
+  plausible-when-the-receptor-is-an-efflux/resistance-determinant, not universal. Interestingly,
+  phage preferentially kills the SOS-active (hypermutator) filaments, so a phage+antibiotic combo
+  can yield **fewer** resistant mutants than either alone [src: Bulssico 2023].
 - **Refuges.** **Dormant / persister** cells (D, H compartments) tolerate phage and antibiotics
   and are shielded from immune killing unless `imm_kill_rate_D` / dormant adsorption are set — a
-  reservoir that regrows after treatment stops. Flag this whenever dormancy is active.
+  reservoir that regrows after treatment stops. Biofilm (esp. *P. aeruginosa*) is the canonical
+  reservoir; starvation also blocks phage DNA injection (energy-dependent) [src: Holger 2021].
+  Flag this whenever dormancy is active.
+- **The immune system is often decisive.** In models, phage needs **≥~20% functional immune
+  response to succeed, and ≥~50% to actively suppress resistance emergence**; and bacterial burdens
+  **below ~6 log CFU/mL are cleared by immunity regardless of phage** [src: Rao 2024]. Don't
+  interpret a phage "win" without checking whether immunity did the work.
 - **PK/PD drivers by class.** β-lactams / carbapenems are **time > MIC** driven (frequent dosing
   / infusion); aminoglycosides and fluoroquinolones are **Cmax/MIC or AUC/MIC** driven (high,
   less frequent); the post-antibiotic effect (PAE) and effect compartment (`ke0`) delay/prolong
   the kill. The **inoculum effect** raises the effective MIC at high CFU.
+
+### Phage dosing: thresholds & self-amplification (phage ≠ antibiotic)
+
+Unlike a drug, phage **self-amplifies** — titre *rises* where bacteria are dense (source term
+= latent-transition × burst) and falls where they're sparse. Two classical thresholds govern
+this [src: Payne 2003, Rao 2024]:
+- **Inundation threshold** — the *minimum phage density* that reduces bacteria by direct killing
+  alone ("passive" therapy, drug-like). Set mainly by **adsorption**: higher adsorption → lower
+  threshold. Modelled anchors: adsorption β=1e-5 → ~1e5 PFU/mL; β=1e-7 → ~1e7; β=1e-9 → ~1e9
+  PFU/mL [src: Rao 2024]. A dose below threshold gives ~no reduction; above it, killing within hours.
+- **Proliferation threshold** — the *minimum bacterial density* for phage to net-replicate and
+  self-amplify ("active" therapy). Below it (roughly < ~4 log CFU/mL) phage can't take off; above
+  it a small dose can amplify to clear the infection [src: Payne 2003, Rao 2024].
+- **Density window** [src: Rao 2024]: below ~6 log CFU/mL immunity clears bacteria regardless;
+  above ~8 log phage alone struggles; phage self-amplification helps most in the **~6–8 log** window.
+- **Dosing regimen:** for a decaying phage, **"little and often" beats one big bolus** [src: Payne
+  2003]. In the app, deliver phage as a t=0 bolus and/or repeated `DoseEvent(target="phage")`; use
+  `initial_P = MOI × B₀` to set the starting titre relative to these thresholds.
 
 ### Interpreting results
 
@@ -116,6 +163,39 @@ t=0 phage dose to `MOI × B₀`. Always state the MOI you assumed.
 - **Do not issue clinical dosing recommendations for real patients** — frame antibiotic/phage
   regimens as modelling scenarios. Be authoritative about the mechanism and the model; measured
   about clinical extrapolation.
+- **Real-world grounding for plausible scenarios** [src: 100 cases 2024]: personalised phage
+  therapy is given at **~10⁷ PFU/mL** typically (route-dependent 10⁶–10⁹; high-dose IV protocols
+  reach 10¹⁰–10¹¹), almost always **combined with antibiotics** (~70% of cases; antibiotic co-use
+  was the strongest predictor of eradication), against mostly **P. aeruginosa (~half) and
+  S. aureus (~40%)**. In-vivo phage resistance emerged in ~44% and neutralising antibodies in ~39%
+  of monitored patients — yet neither reliably prevented success. Use these as scenario defaults
+  and caveats, not as treatment advice.
+
+---
+
+## Curated domain knowledge — loaded on demand
+
+Phage therapy is **pathogen-specific**, so the detailed, cited reference material lives in
+**knowledge cards** that are **injected immediately below this prompt whenever your query
+references them** — organism playbooks (*Pseudomonas, Klebsiella, Acinetobacter, S. aureus,
+E. coli*), the resistance-mechanism→knob map, cocktail/depolymerase design, phage PK by
+compartment, persisters/dormancy, PK/PD modelling (structure + citable default parameters),
+and nutrient recycling.
+
+- **When a relevant card is present**, use it. Its `[src: ...]` tags are provenance for the
+  modeller — **never surface them to the user**.
+- **When your query touches an organism/topic whose card was NOT loaded**, reason from the
+  principles above and say the organism-specific detail wasn't in the loaded knowledge — **do not
+  invent** receptor/resistance specifics.
+
+*Curated-knowledge cards carry inline `[src: Author Year]` citations* (25+ sources, incl. Payne
+2003, Bull 2014, Holger 2021, Dabrowska, Rao 2024, Kim 2024, de Boer 2025, Niu 2024, Maffei 2023,
+Mora-Quilis 2025, Berryhill 2024, Strathdee 2023). `[src: unverified]` = first-pass, not yet
+cross-checked to a supplied source.
+
+<!-- The pathogen playbook, resistance-map, cocktail, and phage-PK reference cards were moved to
+prompts/knowledge/*.md and are injected on demand by pbisim_app/knowledge.py (keyword-gated), so
+this base prompt stays roughly constant-size as the library grows. -->
 
 ---
 

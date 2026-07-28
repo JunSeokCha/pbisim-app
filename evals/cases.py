@@ -198,6 +198,38 @@ CASES = [
                                              "tolerat"])],
         tags=("qa", "dormancy"), intent="chat",
     ),
+
+    # ── pathogen / mechanism knowledge (curated domain layer) ──
+    EvalCase(
+        "q_klebsiella_depolymerase",
+        "Why do many Klebsiella pneumoniae phages carry a depolymerase enzyme?",
+        [no_code_run(), answer_contains_any(["capsule", "cps", "k-type", "k type",
+                                             "polysaccharide", "barrier", "degrad", "digest"])],
+        tags=("qa", "pathogen", "klebsiella"), intent="chat",
+    ),
+    EvalCase(
+        "q_pseudomonas_mucoid",
+        "A Pseudomonas aeruginosa culture turns mucoid under phage pressure. What happened, "
+        "and how would I represent it in the model?",
+        [no_code_run(), answer_contains_any(["alginate", "mucoid", "adsorption", "receptor",
+                                             "refuge", "fitness cost", "biofilm"])],
+        tags=("qa", "pathogen", "pseudomonas"), intent="chat",
+    ),
+    EvalCase(
+        "q_receptor_loss_knob",
+        "Which pbisim parameter represents phage resistance by receptor loss, and how should I "
+        "set it?",
+        [no_code_run(), answer_contains_any(["adsorption", "cr_adsorption", "adsorption_r"])],
+        tags=("qa", "mechanism"), intent="chat",
+    ),
+    EvalCase(
+        "q_cocktail_rationale",
+        "Why would I use a receptor-diverse phage cocktail instead of a single very strong phage?",
+        [no_code_run(), answer_contains_any(["cross-resist", "cross resist", "multiple mutation",
+                                             "different receptor", "diverse receptor",
+                                             "independent", "escape", "suppress resist"])],
+        tags=("qa", "cocktail"), intent="chat",
+    ),
 ]
 
 
