@@ -516,6 +516,27 @@ into per-arm doses that **gate the manual fields** (an arm with a data-provided 
 manual B₀ / MOI) and feed the fit. Parsing is delegated to pbisim-fit's `EventTable`, so it
 stays consistent with the fitter.
 
+### Covariate effects (per-arm parameter links)
+
+By default the fit builds **one shared model** for all arms (only the doses differ). The
+**Covariate effects — per-arm parameter links (advanced)** panel (in the Fit-parameters section)
+lets a parameter instead vary **per arm** by a covariate, NONMEM/Monolix-style:
+
+- **θᵢ = θ_ref · (cov / ref)^β** (`power`), or `1 + β·(cov/ref − 1)` (`linear`), or
+  `exp(β·(cov/ref − 1))` (`exponential`). The parameter's own row in the fit table sets **θ_ref**;
+  the slope **β is estimated** as an extra fit parameter (one per link).
+- A **covariate** is a **numeric grouping column** (e.g. temperature, inoculum) or **MOI** (the
+  phage dose). Add the column as a grouping variable (§3) to make it available in the panel.
+- Fill one row per link: *parameter · covariate · form · **ref** (the covariate value where the
+  multiplier = 1) · β lower / upper / init*. The multiplier is exactly 1 at `cov = ref`, so θ_ref
+  keeps its plain meaning. Control arms (no covariate) are left unmodulated.
+- After the fit, the **fitted overlay applies each arm's link**, so every arm's model curve
+  reflects its own covariate value.
+
+*Example:* link **adsorption** to **MOI** (power form, ref = 1) to test whether apparent adsorption
+scales with the multiplicity of infection — the fit returns the exponent β. The panel is
+opt-in: an empty table leaves the fit as a single shared model.
+
 ---
 
 ## 9. AI Assistant
