@@ -113,6 +113,28 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
     return out, conditions
 
 
+def arm_covariate_values(df, group_cols, cov_cols):
+    """Per-arm value of each numeric covariate column, keyed by the same ``" | "``-joined
+    arm label as :func:`normalize_fit_dataframe`. A covariate must be constant within an
+    arm (it usually IS a grouping column); the first finite value per arm is taken.
+
+    Returns ``{arm_label: {col: float}}`` for feeding covariate-link fitting.
+    """
+    group_cols, cov_cols = list(group_cols or []), list(cov_cols or [])
+    if not group_cols or not cov_cols or not len(df):
+        return {}
+    arm = _join_columns(df, group_cols)
+    out: dict = {}
+    for c in cov_cols:
+        if c not in df.columns:
+            continue
+        firsts = pd.to_numeric(df[c], errors="coerce").groupby(arm).first()
+        for a, v in firsts.items():
+            if pd.notna(v):
+                out.setdefault(a, {})[c] = float(v)
+    return out
+
+
 # Default dose unit per target (used when the dataset has no unit column). The set of
 # valid dose targets is sourced from pbisim-fit (below) so it can't drift.
 _DEFAULT_DOSE_UNIT = {"phage": "pfu", "bacteria": "cfu", "antibiotic": "mg", "nutrient": "mg"}

@@ -5,6 +5,30 @@ import time as _time
 
 from pbisim_app.common import *  # noqa: F401,F403
 
+# Covariate-link forms (mirror pbisim-fit's covariates.FORMS).
+_COV_FORMS = ("power", "linear", "exponential")
+
+
+def _apply_arm_covariates(config, cov):
+    """Return a per-arm config with covariate links applied, given the arm's covariate
+    values ``cov`` ({name: value}). No-op (returns ``config``) unless the config carries
+    ``covariate_effects`` (only the post-fit fitted config does), so the manual overlay is
+    unchanged. Deep-copies so arms don't stomp each other's scaled paths."""
+    if not getattr(config, "covariate_effects", None):
+        return config
+    try:
+        import copy as _copy
+        from pbisim_fit.refinement.covariates import apply_covariate_effects
+
+        class _Arm:  # minimal arm: covariates dict (+ empty dose_events for the moi reader)
+            def __init__(self, c):
+                self.covariates = dict(c or {})
+                self.dose_events = []
+
+        return apply_covariate_effects(_copy.deepcopy(config), _Arm(cov), None)
+    except Exception:
+        return config
+
 # Widget-key prefixes owned by the shared model builder (render_model_builder). These
 # are WIDGET keys only — NOT model-data keys like ``ads_<i>_<j>`` (pairwise adsorption)
 # or ``direct_phg_res_rates`` (mutation list), which must survive. Popping these on
@@ -41,7 +65,8 @@ def _fit_worker(holder):
             holder["ds"], holder["obs"], od_to_cfu=holder["od_link"],
             n_restarts=holder["restarts"], max_nfev=holder["maxnfev"],
             estimate_b0=holder.get("estimate_b0", "none"),
-            obs_compartments=holder.get("obs_compartments") or None)
+            obs_compartments=holder.get("obs_compartments") or None,
+            covariate_effects=holder.get("covariate_effects") or None)
         holder["fp"] = fp
         holder["status"] = "done"
     except Exception as e:  # noqa: BLE001 — surface any failure to the UI
@@ -153,10 +178,14 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
             # unit (from an imported dose record) overrides the global default.
             _du = _cond.get("moi_unit", ctx.get("dose_unit"))
             _armP[0] = _moi if _du == "pfu" else _moi * _arm_b0
+        # Per-arm covariate scaling: a fitted config carries covariate_effects, so each
+        # arm's model parameters are modulated by that arm's covariate (θ_i = θ_ref·f(cov)).
+        # No-op for the manual overlay (base config has no covariate_effects).
+        _cfg_arm = _apply_arm_covariates(config, ctx.get("arm_covariates", {}).get(_arm, {}))
         _mk_arm = dict(mk)
         _iS_arm = iS
         if _arm_prerun > 0:
-            _ic = stationary_phase_ic(config, t_prerun=_arm_prerun, B0=_armB, initial_S=_iS_arm)
+            _ic = stationary_phase_ic(_cfg_arm, t_prerun=_arm_prerun, B0=_armB, initial_S=_iS_arm)
             _armB = _ic.B
             _iS_arm = max(float(_ic.S), 0.0)
             if _ic.D is not None:
@@ -164,7 +193,7 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
             if _ic.Imm is not None:
                 _mk_arm["initial_Imm"] = _ic.Imm
             _carry_prerun_debris(_ic, _mk_arm)
-        _m = PBIModel(config, initial_B=_armB, initial_P=_armP, initial_S=_iS_arm, **_mk_arm)
+        _m = PBIModel(_cfg_arm, initial_B=_armB, initial_P=_armP, initial_S=_iS_arm, **_mk_arm)
         _r = solve_ode(_m, t_end=ctx["t_end"], dt=0.25, method=ctx["method"],
                        extinction_threshold=ctx["thr"])
         for _ok in ctx["sel_obs"]:
@@ -406,6 +435,19 @@ def render():
         if _long is not None and len(_long):
             _arms = sorted(_long["arm"].unique())
             _obs_keys = sorted(_long["observable"].unique())
+
+            # Per-arm covariate values (for covariate-link fitting): numeric grouping
+            # columns (constant within an arm) plus the dose-derived MOI. Available names
+            # feed the covariate-effects table in the fit section below.
+            _num_cov_cols = [c for c in _group_cols if c in _filtered.columns
+                             and pd.api.types.is_numeric_dtype(_filtered[c])]
+            _arm_covariates = arm_covariate_values(_filtered, _group_cols, _num_cov_cols)
+            _has_moi = any(float(_c.get("moi", 0) or 0) > 0 for _c in _conds.values())
+            if _has_moi:
+                for _a, _c in _conds.items():
+                    if float(_c.get("moi", 0) or 0) > 0:
+                        _arm_covariates.setdefault(_a, {})["moi"] = float(_c["moi"])
+            _cov_names = list(dict.fromkeys(_num_cov_cols + (["moi"] if _has_moi else [])))
 
             st.markdown("### 4 · Overlay")
             st.caption(f"{len(_arms)} group(s) · {len(_obs_keys)} observable(s) in the data · "
@@ -724,7 +766,7 @@ def render():
             _ovl_ctx = {
                 "sel_arms": _sel_arms, "sel_obs": _sel_obs, "arm_cond": _arm_cond,
                 "conds": _conds, "agg": _agg, "link_vals": _link_vals,
-                "obs_compartments": _obs_comp,
+                "obs_compartments": _obs_comp, "arm_covariates": _arm_covariates,
                 "debris_on": _debris_on, "band": _band, "band_choice": _band_choice,
                 "stat_key": _stat_key, "stat": _stat, "t_end": _t_end_fit,
                 "dose_unit": _dose_unit, "dose_label": _dose_lbl,
@@ -989,6 +1031,55 @@ def render():
                     _th_names = [str(r["name"]).strip() for r in _th_ed.to_dict("records")
                                  if str(r.get("name", "")).strip()]
 
+                # -- Covariate effects: per-arm parameter links (NONMEM/Monolix style) --
+                _covariate_effects = []
+                with st.expander("Covariate effects — per-arm parameter links (advanced)", expanded=False):
+                    if not _cov_names:
+                        st.caption("No covariates available. A covariate is a **numeric grouping "
+                                   "column** (e.g. temperature, inoculum) or **MOI** (a phage dose). "
+                                   "Add one as a grouping variable above to link a parameter to it.")
+                    else:
+                        st.caption("Let a parameter vary **per arm** by a covariate: "
+                                   "θᵢ = θ_ref · (cov/ref)^β (power), or linear / "
+                                   "exponential. The slope **β is estimated**; the parameter's own "
+                                   "row above sets θ_ref. Available covariates: "
+                                   + ", ".join(f"`{c}`" for c in _cov_names) + ".")
+                        if "fit_covariates_df" not in st.session_state:
+                            st.session_state["fit_covariates_df"] = pd.DataFrame(
+                                [{"parameter": "", "covariate": "", "form": "power",
+                                  "ref": "", "β lower": "-3", "β upper": "3", "β init": "0"}])
+                        _cov_ed = st.data_editor(
+                            st.session_state["fit_covariates_df"], key=f"fit_covariates_editor_{_rev}",
+                            num_rows="dynamic", hide_index=True, width="stretch",
+                            column_config={
+                                "parameter": st.column_config.SelectboxColumn(
+                                    "parameter", options=[l for (l, *_r) in _targets_cat],
+                                    help="Model parameter to modulate (its row above sets θ_ref)."),
+                                "covariate": st.column_config.SelectboxColumn(
+                                    "covariate", options=_cov_names, help="Per-arm covariate."),
+                                "form": st.column_config.SelectboxColumn(
+                                    "form", options=list(_COV_FORMS), required=True),
+                                "ref": st.column_config.TextColumn(
+                                    "ref (cov₀)", help="Reference covariate value; multiplier=1 here. Blank=1."),
+                                "β lower": st.column_config.TextColumn("β lower", help="Blank = -3."),
+                                "β upper": st.column_config.TextColumn("β upper", help="Blank = 3."),
+                                "β init": st.column_config.TextColumn("β init", help="Start slope. Blank = 0."),
+                            })
+                        for r in _cov_ed.to_dict("records"):
+                            _plab = str(r.get("parameter", "")).strip()
+                            _cvn = str(r.get("covariate", "")).strip()
+                            if not _plab or not _cvn or _plab not in _label_to_path:
+                                continue
+                            _blo, _bhi = _pf(r.get("β lower")), _pf(r.get("β upper"))
+                            _covariate_effects.append({
+                                "path": _label_to_path[_plab], "covariate": _cvn,
+                                "form": str(r.get("form", "power") or "power"),
+                                "ref": (_pf(r.get("ref")) or 1.0),
+                                "beta_lo": (_blo if _blo is not None else -3.0),
+                                "beta_hi": (_bhi if _bhi is not None else 3.0),
+                                "beta_init": (_pf(r.get("β init")) or 0.0),
+                            })
+
                 # -- Assembly: role -> free targets + Derived mappings; thetas --
                 _targets, _mappings, _bad = [], [], []
                 for r in _tg_ed.to_dict("records"):
@@ -1106,12 +1197,14 @@ def render():
                         try:
                             _ds_fit = _nls.build_dataset(_agg, _sel_arms, _sel_obs, _arm_cond,
                                                          od_to_cfu=_od_link, dose_unit=_dose_unit,
-                                                         arm_doses=_arm_doses)
+                                                         arm_doses=_arm_doses,
+                                                         arm_covariates=_arm_covariates)
                             _holder = {
                                 "status": "running", "t0": _time.time(), "fp": None, "error": None,
                                 "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,
                                 "mappings": _mappings, "ds": _ds_fit, "obs": list(_sel_obs),
                                 "obs_compartments": dict(_obs_comp),
+                                "covariate_effects": list(_covariate_effects),
                                 "od_link": _od_link, "restarts": _restarts, "maxnfev": _maxnfev,
                                 "estimate_b0": _estimate_b0,
                                 # post-processing context captured now, so edits during the

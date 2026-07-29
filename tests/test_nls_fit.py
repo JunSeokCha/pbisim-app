@@ -206,6 +206,59 @@ def test_estimate_b0_fit_runs_and_sets_initial_cfu():
     assert _ic is not None and float(np.atleast_1d(_ic).ravel()[0]) > 0
 
 
+def test_arm_covariate_values_matches_arm_labels():
+    """Per-arm covariate values are keyed by the same ' | '-joined arm label as the
+    normaliser, so they line up with the dataset arms."""
+    from pbisim_app.fit_helper import arm_covariate_values
+    df = pd.DataFrame([{"PHAGE": "A", "MOI": 0.1, "temp": 30},
+                       {"PHAGE": "A", "MOI": 0.1, "temp": 30},
+                       {"PHAGE": "B", "MOI": 1.0, "temp": 37}])
+    out = arm_covariate_values(df, ["PHAGE", "MOI"], ["MOI", "temp"])
+    assert out == {"A | 0.1": {"MOI": 0.1, "temp": 30.0},
+                   "B | 1.0": {"MOI": 1.0, "temp": 37.0}}
+
+
+def test_build_dataset_attaches_per_arm_covariates():
+    agg = _agg_from_csv()
+    ds = nls.build_dataset(agg, ["control"], ["cfu"], {},
+                           arm_covariates={"control": {"temp": 37.0}})
+    assert ds.arms[0].covariates == {"temp": 37.0}
+
+
+def test_build_param_spec_v2_wires_covariate_effect():
+    """A covariate effect adds one estimated β to the spec and attaches the
+    CovariateEffect structure to the config (consumed at solve time by pbisim-fit)."""
+    from pbisim_fit.synthetic import reference_config
+    cfg = reference_config()
+    tg = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
+           "lo": 0.1, "hi": 3.0, "log": False, "prior_mu": None, "prior_sd": None}]
+    _c0, spec0 = nls.build_param_spec_v2(cfg, tg)
+    cov = [{"path": "growth_rates[0]", "covariate": "temp", "form": "power",
+            "ref": 37.0, "beta_lo": -2.0, "beta_hi": 2.0, "beta_init": 0.0}]
+    c1, spec1 = nls.build_param_spec_v2(cfg, tg, covariate_effects=cov)
+    assert spec1.n_params == spec0.n_params + 1            # one β θ added
+    effs = getattr(c1, "covariate_effects", None)
+    assert effs and effs[0].path == "growth_rates[0]" and effs[0].covariate == "temp"
+    assert effs[0].form == "power" and effs[0].ref == 37.0
+
+
+def test_covariate_fit_runs_and_estimates_beta():
+    """A short fit with a covariate link completes; the fitted config carries the
+    covariate structure so the app can apply it per arm in the overlay."""
+    from pbisim_fit.synthetic import reference_config
+    cfg = reference_config()
+    ds = nls.build_dataset(_agg_from_csv(), ["control"], ["cfu"],
+                           {}, arm_covariates={"control": {"temp": 37.0}})
+    tg = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
+           "lo": 0.1, "hi": 3.0, "log": False, "prior_mu": None, "prior_sd": None}]
+    cov = [{"path": "growth_rates[0]", "covariate": "temp", "form": "power",
+            "ref": 37.0, "beta_lo": -2.0, "beta_hi": 2.0, "beta_init": 0.0}]
+    fp = nls.run_nls_fit_v2(cfg, tg, [], [], ds, ["cfu"], n_restarts=1, max_nfev=60,
+                            covariate_effects=cov)
+    fc = fp.to_config()
+    assert getattr(fc, "covariate_effects", None)          # structure survives to_config
+
+
 def test_available_targets_is_comprehensive():
     """The target catalog includes mutation, debris, and the fit-side virtuals
     (fitness cost, initial CFU/PFU, resistant fraction) the user flagged."""

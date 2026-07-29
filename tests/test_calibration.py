@@ -76,6 +76,22 @@ def test_calibration_loads_dataset_with_nonregistry_observable():
     assert len(at.exception) == 0, at.exception
 
 
+def test_calibration_covariate_panel_renders():
+    """With a numeric grouping column (a covariate), the Calibration page renders the
+    covariate-effects panel and offers that column as an available covariate — no errors."""
+    rows = [{"ARM": "A", "temp": 30.0, "TIME": t, "DV": 1e7} for t in (0.0, 2.0, 4.0)]
+    rows += [{"ARM": "B", "temp": 37.0, "TIME": t, "DV": 5e6} for t in (0.0, 2.0, 4.0)]
+    at = AppTest.from_file(APP, default_timeout=180)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": pd.DataFrame(rows), "time": "TIME", "value": "DV",
+        "observable": "cfu", "arm_cols": ["ARM", "temp"], "moi": None,
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+
+
 def test_manual_tuning_edits_model_directly():
     """Phase B: the manual-tuning panel now renders the SAME model builder as the
     Interactive Simulator (render_model_builder), so editing an absolute value there

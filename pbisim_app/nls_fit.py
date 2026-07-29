@@ -400,14 +400,16 @@ def estimate_od_to_cfu(agg, sel_arms):
 
 
 def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit="moi",
-                  arm_doses=None):
+                  arm_doses=None, arm_covariates=None):
     """Construct a pbisim-fit ExperimentalDataset from the app's aggregated calibration
     data + per-arm conditions (growth-phase pre-run, B₀, phage dose).
 
     ``dose_unit`` is how each arm's manual dose value is interpreted: ``"moi"`` (× the
     arm's B₀) or ``"pfu"`` (absolute PFU/mL). ``arm_doses`` = ``{arm: [{time, target,
     amount, unit}]}`` imported from NONMEM/Monolix dose rows; these are emitted verbatim
-    and, for whichever targets they specify, override the manual per-arm dose/inoculum."""
+    and, for whichever targets they specify, override the manual per-arm dose/inoculum.
+    ``arm_covariates`` = ``{arm: {name: value}}`` attached to each TreatmentRecord for
+    per-arm covariate-link fitting (MOI also resolves from the phage dose automatically)."""
     from pbisim_fit.data.ingestion import (
         ExperimentalDataset, TreatmentRecord, DoseRecord, DatasetMetadata)
 
@@ -452,10 +454,13 @@ def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit
         _b0_is_dose = bool(cond.get("b0_is_dose", False)) and b0 > 0 and "bacteria" not in _ds_targets
         if _b0_is_dose and pr <= 0:
             doses.append(DoseRecord(time=0.0, amount=b0, unit="cfu", target="bacteria"))
+        _cov = {k: float(v) for k, v in (arm_covariates or {}).get(a, {}).items()
+                if v is not None}
         arms.append(TreatmentRecord(
             label=str(a), dose_events=doses,
             pretreatment_h=(pr if pr > 0 else None),
             pretreatment_inoculum=(b0 if (_b0_is_dose and pr > 0) else None),
+            covariates=_cov,
             **kw,
         ))
     meta = DatasetMetadata(od_to_cfu=(float(od_to_cfu) if od_to_cfu else None))
@@ -550,12 +555,16 @@ def build_param_spec(base_config, free_params, shared_groups=None, fitness_links
 
 
 def build_param_spec_v2(base_config, targets, thetas=None, mappings=None,
-                        *, dataset=None, estimate_b0="none"):
+                        *, dataset=None, estimate_b0="none", covariate_effects=None):
     """Build a parameter spec from the table-driven UI.
 
     ``estimate_b0`` ("shared" | "per_arm") wires an estimated additive B0 offset via
     ``free_initial_conditions`` (needs ``dataset``); the role-table ``fit_initial_cfu``
     target, if any, is then skipped so the two don't double-wire.
+
+    ``covariate_effects`` = [{"path","covariate","form","ref","beta_lo","beta_hi",
+    "beta_init"}] — per-arm covariate links (NONMEM/Monolix style ``θ_i = θ_ref·(cov/ref)^β``)
+    wired via pbisim-fit's ``with_covariate``; each adds one estimated β to the fit.
 
     - ``targets`` = [{"path","free"(bool),"value","lo","hi","log"}] — every model
       parameter. ``free`` → estimated 1:1 with [lo,hi]; else fixed at ``value``.
@@ -618,12 +627,22 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None,
     if estimate_b0 in ("shared", "per_arm") and dataset is not None:
         from pbisim_fit import free_initial_conditions
         rp = free_initial_conditions(rp, dataset, cfu=estimate_b0)
+    # Per-arm covariate links: each adds one estimated β so a path varies by the arm's
+    # covariate (θ_i = θ_ref·(cov/ref)^β). with_covariate registers β + attaches the
+    # CovariateEffect to the Reparam's base config.
+    for e in (covariate_effects or []):
+        from pbisim_fit import with_covariate
+        rp = with_covariate(
+            rp, e["path"], e["covariate"], form=e.get("form", "power"),
+            ref=float(e.get("ref", 1.0) or 1.0),
+            beta_bounds=(float(e.get("beta_lo", -3.0)), float(e.get("beta_hi", 3.0))),
+            beta_init=float(e.get("beta_init", 0.0) or 0.0))
     return rp.build()
 
 
 def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
                    od_to_cfu=None, n_restarts=3, max_nfev=300, estimate_b0="none",
-                   obs_compartments=None):
+                   obs_compartments=None, covariate_effects=None):
     """Run NLS from the table-driven spec (see build_param_spec_v2). ``estimate_b0``
     ("shared"|"per_arm") estimates an additive B0 offset via free_initial_conditions.
 
@@ -631,8 +650,22 @@ def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
     ``{"cfu": ("B","D")}`` — culturable CFU excludes non-culturable I/H). The CFU set is
     threaded to pbisim-fit via ``NLSConfig.cfu_compartments`` so the FIT residual uses the
     SAME compartments as the app overlay. (pbisim-fit already defaults CFU to B+D; this only
-    matters when the user overrides the set. Older pbisim-fit without the field → warn.)"""
+    matters when the user overrides the set. Older pbisim-fit without the field → warn.)
+
+    ``covariate_effects`` = per-arm covariate links (see build_param_spec_v2). Requires
+    pbisim-fit's ``with_covariate``; if the installed version lacks it we warn and drop the
+    links (the fit still runs, without the per-arm modulation)."""
     from pbisim_fit.refinement.nls import refine_nls, NLSConfig
+    if covariate_effects:
+        try:
+            from pbisim_fit import with_covariate  # noqa: F401 — feature-detect
+        except ImportError:
+            import warnings
+            warnings.warn(
+                "Installed pbisim-fit lacks with_covariate — covariate-link effects are "
+                "ignored (the fit runs without per-arm covariate modulation). Update pbisim-fit.",
+                RuntimeWarning)
+            covariate_effects = None
     if od_to_cfu and "od" in obs_keys:
         try:
             base_config.od_to_cfu_conversion_factor = float(od_to_cfu)
@@ -643,7 +676,8 @@ def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
     if has_unbounded(targets, thetas):
         n_restarts = 1
     cfg, pspec = build_param_spec_v2(base_config, targets, thetas, mappings,
-                                     dataset=dataset, estimate_b0=estimate_b0)
+                                     dataset=dataset, estimate_b0=estimate_b0,
+                                     covariate_effects=covariate_effects)
     _nls_kw = dict(obs_keys=list(obs_keys), n_restarts=int(n_restarts),
                    max_nfev=int(max_nfev), n_arm_jobs=1)
     _cfu_comps = (obs_compartments or {}).get("cfu")
