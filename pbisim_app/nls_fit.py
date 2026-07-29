@@ -622,9 +622,16 @@ def build_param_spec_v2(base_config, targets, thetas=None, mappings=None,
 
 
 def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
-                   od_to_cfu=None, n_restarts=3, max_nfev=300, estimate_b0="none"):
+                   od_to_cfu=None, n_restarts=3, max_nfev=300, estimate_b0="none",
+                   obs_compartments=None):
     """Run NLS from the table-driven spec (see build_param_spec_v2). ``estimate_b0``
-    ("shared"|"per_arm") estimates an additive B0 offset via free_initial_conditions."""
+    ("shared"|"per_arm") estimates an additive B0 offset via free_initial_conditions.
+
+    ``obs_compartments`` = the observation model: ``{obs_key: (prefixes...)}`` (e.g.
+    ``{"cfu": ("B","D")}`` — culturable CFU excludes non-culturable I/H). The CFU set is
+    threaded to pbisim-fit via ``NLSConfig.cfu_compartments`` so the FIT residual uses the
+    SAME compartments as the app overlay. (pbisim-fit already defaults CFU to B+D; this only
+    matters when the user overrides the set. Older pbisim-fit without the field → warn.)"""
     from pbisim_fit.refinement.nls import refine_nls, NLSConfig
     if od_to_cfu and "od" in obs_keys:
         try:
@@ -637,9 +644,20 @@ def run_nls_fit_v2(base_config, targets, thetas, mappings, dataset, obs_keys, *,
         n_restarts = 1
     cfg, pspec = build_param_spec_v2(base_config, targets, thetas, mappings,
                                      dataset=dataset, estimate_b0=estimate_b0)
-    return refine_nls(dataset, pspec, cfg,
-                      cfg=NLSConfig(obs_keys=list(obs_keys), n_restarts=int(n_restarts),
-                                    max_nfev=int(max_nfev), n_arm_jobs=1))
+    _nls_kw = dict(obs_keys=list(obs_keys), n_restarts=int(n_restarts),
+                   max_nfev=int(max_nfev), n_arm_jobs=1)
+    _cfu_comps = (obs_compartments or {}).get("cfu")
+    if _cfu_comps:
+        try:                       # feature-detect pbisim-fit's cfu_compartments field
+            NLSConfig(cfu_compartments=tuple(_cfu_comps))
+            _nls_kw["cfu_compartments"] = tuple(_cfu_comps)
+        except TypeError:
+            import warnings
+            warnings.warn(
+                "Installed pbisim-fit predates NLSConfig.cfu_compartments — the CFU fit "
+                "residual will use its built-in compartment set, which may differ from the "
+                "app's observation model (overlay ≠ fit). Update pbisim-fit.", RuntimeWarning)
+    return refine_nls(dataset, pspec, cfg, cfg=NLSConfig(**_nls_kw))
 
 
 def run_nls_fit(base_config, free_params, dataset, obs_keys, *, od_to_cfu=None,

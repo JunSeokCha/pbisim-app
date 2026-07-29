@@ -93,10 +93,10 @@ def test_entity_series_selector_renders():
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
     labels = [c.label for c in at.checkbox]
-    # the aggregate + per-strain active series are offered and on by default
-    assert "Total viable" in labels, labels
+    # the CFU aggregate + per-strain active series are offered; CFU on by default
+    assert "CFU (culturable: B+D)" in labels, labels
     assert any("(active)" in (l or "") for l in labels), labels
-    tv = [c for c in at.checkbox if c.label == "Total viable"][0]
+    tv = [c for c in at.checkbox if c.label == "CFU (culturable: B+D)"][0]
     assert tv.value is True
 
 
@@ -118,7 +118,13 @@ def test_build_series_registry():
     S = build_series(r, config=cfg, strains=strains, phages=[{"name": "P0", "pk_mode": "None"}],
                      antibiotics=[], builder_mode="Direct (ModelBuilder)")
     by_key = {s.key: s for s in S}
-    assert by_key["total_viable"].default and by_key["B0"].default and by_key["D_0"].default
+    # CFU (B+D) is the default aggregate; total-incl-infected and active-only are opt-in.
+    assert by_key["cfu"].default and by_key["B0"].default and by_key["D_0"].default
+    assert not by_key["total_viable"].default and not by_key["total_active"].default
     assert not by_key["I_0"].default and not by_key["H_0"].default
+    # CFU excludes I/H; the "total incl. infected" series includes them.
+    import numpy as _np
+    assert _np.allclose(by_key["cfu"].getter(r), r.sum_prefixes("B", "D"))
+    assert _np.allclose(by_key["total_viable"].getter(r), r.sum_prefixes("B", "D", "I", "H"))
     for s in S:
         assert np.isfinite(np.asarray(s.getter(r), dtype=float)).all()

@@ -24,19 +24,39 @@ import pandas as pd
 # the detection floor used by the OBJECTIVE, which — matching pbisim-fit's NLS — is
 # always computed in log10 space with these per-observable floors (values are clipped
 # to 10**floor before log10). pbisim-fit: floor_log10=1.0 (CFU/PFU), -2.5 (OD).
+# CFU counts only CULTURABLE cells — active (B) + dormant (D). Infected (I) and
+# hibernating (H) cells don't form colonies on a plate, so they are excluded from CFU.
+# OD (turbidity) still reflects all physically-present cells (B,D,I,H) + debris. The
+# `prefixes` here are the DEFAULT compartment set; the Calibration page can override the
+# set per observable (the "observation model"), and the same set is threaded to the fit.
 OBSERVABLES = {
-    "cfu": {"label": "CFU/mL",               "prefixes": ("B", "D", "I", "H"), "log": True,  "link": None,                        "floor_log10": 1.0},
+    "cfu": {"label": "CFU/mL",               "prefixes": ("B", "D"),           "log": True,  "link": None,                        "floor_log10": 1.0},
     "pfu": {"label": "PFU/mL",               "prefixes": ("P",),               "log": True,  "link": None,                        "floor_log10": 1.0},
     "od":  {"label": "Optical density (OD)", "prefixes": ("B", "D", "I", "H"), "log": False, "link": ("od_to_cfu", "div", 1e9),   "floor_log10": -2.5},
     "lum": {"label": "Luminescence (RLU)",   "prefixes": ("B",),               "log": True,  "link": ("rlu_per_cell", "mul", 1.0), "floor_log10": 1.0},
 }
 
+# Bacterial compartments the user can toggle in the observation model (debris is folded
+# into OD via the model's get_od()). Order = display order.
+OBS_COMPARTMENTS = ("B", "D", "I", "H")
 
-def predicted_observable(result, obs_key, link_value=None, use_model_od=False):
+
+def obs_prefixes(obs_key, overrides=None):
+    """The compartment prefixes for an observable, honoring a per-observable override
+    (the user-defined observation model). Falls back to the registry default; returns
+    ``()`` for an observable not in the registry (a custom label in the data)."""
+    if overrides and obs_key in overrides and overrides[obs_key]:
+        return tuple(overrides[obs_key])
+    spec = OBSERVABLES.get(obs_key)
+    return tuple(spec["prefixes"]) if spec else ()
+
+
+def predicted_observable(result, obs_key, link_value=None, use_model_od=False, prefixes=None):
     """Predicted measured signal from a SimulationResult for the given observable.
 
     ``result`` only needs a ``sum_prefixes(*prefixes)`` method, so this works for any
-    pbisim ``SimulationResult``.
+    pbisim ``SimulationResult``. ``prefixes`` overrides the compartment set (the user's
+    observation model); when None the registry default is used.
 
     When ``use_model_od`` is set and the observable is OD, the debris-inclusive OD
     from the model (``result.get_od()``, which folds in lysed-cell debris and uses the
@@ -46,7 +66,8 @@ def predicted_observable(result, obs_key, link_value=None, use_model_od=False):
     if obs_key == "od" and use_model_od and hasattr(result, "get_od"):
         return result.get_od()
     spec = OBSERVABLES[obs_key]
-    qty = result.sum_prefixes(*spec["prefixes"])
+    px = tuple(prefixes) if prefixes else spec["prefixes"]
+    qty = result.sum_prefixes(*px)
     link = spec.get("link")
     if link is None:
         return qty

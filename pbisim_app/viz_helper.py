@@ -214,6 +214,25 @@ def _sum_states(result, keys):
     return tot if tot is not None else _np.zeros_like(result.time, dtype=float)
 
 
+# Bacterial "basis" definitions for outcome metrics and sweep overlays. CFU counts only the
+# CULTURABLE compartments (active B + dormant D) — infected (I) and hibernating (H) cells do
+# not form colonies on a plate. "Active only" is B alone (e.g. a short assay that misses
+# persisters). Keys are user-facing labels; values are prefixes for result.sum_prefixes(*v).
+BACTERIAL_BASES = {
+    "CFU (culturable: B+D)": ("B", "D"),
+    "Total incl. infected (B+D+I+H)": ("B", "D", "I", "H"),
+    "Active only (B)": ("B",),
+}
+CFU_BASIS_LABEL = "CFU (culturable: B+D)"
+CFU_PREFIXES = ("B", "D")
+
+
+def bacterial_total(result, basis_label=CFU_BASIS_LABEL):
+    """Total bacteria for a chosen basis label (defaults to culturable CFU = B+D)."""
+    prefixes = BACTERIAL_BASES.get(basis_label, CFU_PREFIXES)
+    return result.sum_prefixes(*prefixes)
+
+
 def build_series(result, *, config, strains, phages, antibiotics, builder_mode):
     """Enumerate the plottable series for a result, grouped by category.
 
@@ -226,10 +245,18 @@ def build_series(result, *, config, strains, phages, antibiotics, builder_mode):
     n_phages = getattr(config, "n_phages", 0)
     out = []
 
-    # ── Bacteria ──
-    out.append(Series("total_viable", "Total viable", "Bacteria",
-                      lambda r: r.sum_prefixes("B", "D", "I", "H"),
+    # ── Bacteria ── aggregate views. CFU = only the CULTURABLE compartments (active B +
+    # dormant D); infected (I) and hibernating (H) cells don't form colonies on a plate, so
+    # they are excluded from CFU and shown only in the "total incl. infected" series.
+    out.append(Series("cfu", "CFU (culturable: B+D)", "Bacteria",
+                      lambda r: r.sum_prefixes("B", "D"),
                       default=True, log=True, dash="solid", width=3.0, color="#16211f"))
+    out.append(Series("total_viable", "Total incl. infected (B+D+I+H)", "Bacteria",
+                      lambda r: r.sum_prefixes("B", "D", "I", "H"),
+                      default=False, log=True, dash="solid", width=1.5, color="#6b7770"))
+    out.append(Series("total_active", "Active only (B)", "Bacteria",
+                      lambda r: r.sum_prefixes("B"),
+                      default=False, log=True, dash="solid", width=1.5, color="#0d7a68"))
 
     if builder_mode == "Binary Genotypes (BRG)":
         import itertools

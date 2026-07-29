@@ -151,7 +151,9 @@ def test_dose_response_shows_od_trajectories_when_enabled():
     trace = [s for s in at.selectbox if s.label == "Trace"]
     assert trace, "Trace selectbox missing"
     opts = list(trace[0].options)
-    assert "Total viable bacteria (CFU/mL)" in opts
+    assert "CFU — culturable (B+D)" in opts
+    assert "Total incl. infected (B+D+I+H)" in opts
+    assert "Active only (B)" in opts
     assert "Total free phage (PFU/mL)" in opts
     assert "Optical density (AU)" in opts
 

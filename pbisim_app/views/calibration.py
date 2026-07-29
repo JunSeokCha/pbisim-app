@@ -40,7 +40,8 @@ def _fit_worker(holder):
             holder["cfg"], holder["targets"], holder["thetas"], holder["mappings"],
             holder["ds"], holder["obs"], od_to_cfu=holder["od_link"],
             n_restarts=holder["restarts"], max_nfev=holder["maxnfev"],
-            estimate_b0=holder.get("estimate_b0", "none"))
+            estimate_b0=holder.get("estimate_b0", "none"),
+            obs_compartments=holder.get("obs_compartments") or None)
         holder["fp"] = fp
         holder["status"] = "done"
     except Exception as e:  # noqa: BLE001 — surface any failure to the UI
@@ -169,7 +170,9 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
         for _ok in ctx["sel_obs"]:
             _sp = OBSERVABLES.get(_ok, {"log": True, "link": None, "label": _ok})
             _umo = (_ok == "od" and ctx["debris_on"])
-            _pred = predicted_observable(_r, _ok, ctx["link_vals"].get(_ok), use_model_od=_umo)
+            _px = obs_prefixes(_ok, ctx.get("obs_compartments"))
+            _pred = predicted_observable(_r, _ok, ctx["link_vals"].get(_ok),
+                                         use_model_od=_umo, prefixes=_px)
             _d = ctx["agg"][(ctx["agg"]["arm"] == _arm) & (ctx["agg"]["observable"] == _ok)].sort_values("time")
             if not len(_d):
                 continue
@@ -448,6 +451,39 @@ def render():
             if "od" in _sel_obs and _debris_on:
                 st.caption("OD includes lysed-cell **debris** (`get_od`) — it uses the same "
                            "od_to_cfu set above; the debris rates are in the OD/debris block below.")
+
+            # ── Observation model — which model compartments each signal counts ──
+            # obs = f(B, D, I, H, debris). CFU defaults to culturable cells only (B+D):
+            # infected (I) / hibernating (H) cells don't form colonies. This SAME set is
+            # used for the overlay, the RMSE, and the pbisim-fit residuals (threaded through).
+            _obs_comp = {}
+            # Only registry observables have a defined compartment mapping. A dataset's
+            # observable column can contain arbitrary strings (e.g. "colony_count",
+            # "od600") — skip those here (they still overlay via the defensive path).
+            _bact_obs = [k for k in _sel_obs if k in OBSERVABLES and k != "pfu"]
+            if _bact_obs:
+                with st.expander("🧫 Observation model — which compartments each signal reflects"):
+                    st.caption("Define what each measurement counts. **CFU = culturable only "
+                               "(B + D)** by default; toggle I/H if your assay recovers them. "
+                               "OD/turbidity normally includes all cells (+ debris when the OD "
+                               "module is on).")
+                    _comp_labels = {"B": "B (active)", "D": "D (dormant)",
+                                    "I": "I (infected)", "H": "H (hibernating)"}
+                    for _ok in _bact_obs:
+                        _sp = OBSERVABLES[_ok]
+                        _dflt = set(_sp["prefixes"])
+                        st.markdown(f"**{_sp['label']}** — obs = sum of:")
+                        _ccols = st.columns(len(OBS_COMPARTMENTS))
+                        _chosen = [
+                            _cp for _ci, _cp in enumerate(OBS_COMPARTMENTS)
+                            if _ccols[_ci].checkbox(_comp_labels[_cp], value=(_cp in _dflt),
+                                                    key=f"fit_obscomp_{_ok}_{_cp}")
+                        ]
+                        _obs_comp[_ok] = tuple(_chosen) if _chosen else _sp["prefixes"]
+                        if _ok == "od" and _debris_on:
+                            st.caption("OD/debris module is on → OD uses the model's `get_od()` "
+                                       "(all cells + debris); this choice applies only when debris is off.")
+
             _t_end_fit = st.number_input("Overlay duration (h)", value=float(np.ceil(_long["time"].max())), step=1.0, key="fit_tend")
 
             # Per-arm conditions — each group can carry its own growth phase (pre-run),
@@ -688,6 +724,7 @@ def render():
             _ovl_ctx = {
                 "sel_arms": _sel_arms, "sel_obs": _sel_obs, "arm_cond": _arm_cond,
                 "conds": _conds, "agg": _agg, "link_vals": _link_vals,
+                "obs_compartments": _obs_comp,
                 "debris_on": _debris_on, "band": _band, "band_choice": _band_choice,
                 "stat_key": _stat_key, "stat": _stat, "t_end": _t_end_fit,
                 "dose_unit": _dose_unit, "dose_label": _dose_lbl,
@@ -1074,6 +1111,7 @@ def render():
                                 "status": "running", "t0": _time.time(), "fp": None, "error": None,
                                 "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,
                                 "mappings": _mappings, "ds": _ds_fit, "obs": list(_sel_obs),
+                                "obs_compartments": dict(_obs_comp),
                                 "od_link": _od_link, "restarts": _restarts, "maxnfev": _maxnfev,
                                 "estimate_b0": _estimate_b0,
                                 # post-processing context captured now, so edits during the

@@ -1473,8 +1473,10 @@ def render():
         result = st.session_state.simulation_result
         config = st.session_state.simulation_config
 
-        # 1. Calculate Metrics
-        total_bacteria = result.sum_prefixes("B", "D", "I", "H")
+        # 1. Calculate Metrics. "Total bacteria" here follows the user-chosen basis
+        # (default culturable CFU = B+D); the selector lives in the Bacterial Dynamics tab.
+        _metric_basis = st.session_state.get("sim_metric_basis", CFU_BASIS_LABEL)
+        total_bacteria = bacterial_total(result, _metric_basis)
         nadir_val = np.min(total_bacteria)
         nadir_time = result.time[np.argmin(total_bacteria)]
 
@@ -1624,6 +1626,12 @@ def render():
         # Bacterial Dynamics Plot — pick which compartments to show.
         with plot_tabs[0]:
             _bact = [s for s in _series if s.category == "Bacteria"]
+            st.selectbox(
+                "Outcome metric basis", list(BACTERIAL_BASES.keys()), index=0,
+                key="sim_metric_basis",
+                help="Which compartments count as 'bacteria' for the metrics and outcome badge "
+                     "above. CFU = culturable (active B + dormant D); infected (I) and "
+                     "hibernating (H) cells don't form colonies on a plate.")
             st.caption("Series to plot:")
             _chosen = series_selector("sim_bact_sel", _bact)
             if _chosen:

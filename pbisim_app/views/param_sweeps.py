@@ -212,7 +212,9 @@ def _render_body(theme_mode):
                                f"{list(sweep_values)}")
 
                 runs_outcomes = []
-                trajectories = [] # (time, viable_b, label)
+                trajectories = [] # (time, cfu_b, label) — culturable CFU (B+D)
+                total_incl_trajectories = [] # (time, B+D+I+H, label)
+                active_trajectories = [] # (time, B, label)
                 phage_trajectories = []  # (time, total_free_phage, label)
                 od_trajectories = [] # (time, od, label) — only if OD/debris enabled
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
@@ -243,8 +245,11 @@ def _render_body(theme_mode):
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                     result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
 
-                    # Compute metrics
-                    total_bacteria = result.sum_prefixes("B", "D", "I", "H")
+                    # Compute metrics. Summary metrics use culturable CFU (B+D).
+                    _cfu = result.sum_prefixes("B", "D")
+                    _total_incl = result.sum_prefixes("B", "D", "I", "H")
+                    _active = result.sum_prefixes("B")
+                    total_bacteria = _cfu
                     nadir_val = np.min(total_bacteria)
 
                     _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -264,7 +269,9 @@ def _render_body(theme_mode):
                         "2-Log Red Time (h)": t_log_red if t_log_red is not None else np.nan
                     })
                     _lbl = f"{param1_label} = {val:.2e}"
-                    trajectories.append((result.time, total_bacteria, _lbl))
+                    trajectories.append((result.time, _cfu, _lbl))
+                    total_incl_trajectories.append((result.time, _total_incl, _lbl))
+                    active_trajectories.append((result.time, _active, _lbl))
                     phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
                     if _od_enabled:
                         _od = (_safe_od(result, total_bacteria))
@@ -278,6 +285,8 @@ def _render_body(theme_mode):
                     "spacing": spacing,
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
+                    "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
@@ -301,7 +310,9 @@ def _render_body(theme_mode):
                     st.stop()
 
                 runs_outcomes = []
-                trajectories = []
+                trajectories = []               # culturable CFU (B+D)
+                total_incl_trajectories = []    # B+D+I+H
+                active_trajectories = []        # B
                 phage_trajectories = []  # (time, total_free_phage, label)
                 od_trajectories = []
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
@@ -325,7 +336,10 @@ def _render_body(theme_mode):
                         _carry_prerun_debris(ic, mk_k)
                     model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                     result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
-                    total_bacteria = result.sum_prefixes("B", "D", "I", "H")
+                    _cfu = result.sum_prefixes("B", "D")
+                    _total_incl = result.sum_prefixes("B", "D", "I", "H")
+                    _active = result.sum_prefixes("B")
+                    total_bacteria = _cfu
                     _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
                     t_clear = time_to_clearance(result, threshold=st.session_state.get("int_extinction_threshold", 1.0))
                     _row = {lbl: series[lbl][k] for lbl in labels}
@@ -338,7 +352,9 @@ def _render_body(theme_mode):
                     runs_outcomes.append(_row)
                     _lbl_txt = ", ".join(f"{s.rsplit(' - ',1)[0].split('(')[0].strip()}={series[s][k]:.2g}" for s in labels)
                     _lbl = f"Step {k+1}: {_lbl_txt}"
-                    trajectories.append((result.time, total_bacteria, _lbl))
+                    trajectories.append((result.time, _cfu, _lbl))
+                    total_incl_trajectories.append((result.time, _total_incl, _lbl))
+                    active_trajectories.append((result.time, _active, _lbl))
                     phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
                     if _od_enabled:
                         _od = (_safe_od(result, total_bacteria))
@@ -351,6 +367,8 @@ def _render_body(theme_mode):
                     "labels": list(labels),
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
+                    "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
@@ -409,7 +427,8 @@ def _render_body(theme_mode):
                         model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
                         result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
 
-                        total_bacteria = result.sum_prefixes("B", "D", "I", "H")
+                        # 2D heatmap metrics use culturable CFU (B+D).
+                        total_bacteria = result.sum_prefixes("B", "D")
                         nadir_val = np.min(total_bacteria)
 
                         _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -451,7 +470,11 @@ def _render_body(theme_mode):
                         "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"
                     }),
                     width="stretch")
-                _traces = {"Total viable bacteria (CFU/mL)": ("log", _ps["trajectories"])}
+                _traces = {"CFU — culturable (B+D)": ("log", _ps["trajectories"])}
+                if _ps.get("total_incl_trajectories"):
+                    _traces["Total incl. infected (B+D+I+H)"] = ("log", _ps["total_incl_trajectories"])
+                if _ps.get("active_trajectories"):
+                    _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
                 if _ps.get("phage_trajectories"):
                     _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
                 if _ps.get("od_trajectories"):
@@ -476,7 +499,11 @@ def _render_body(theme_mode):
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
                              "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"})
                 st.dataframe(df_summary.style.format(_fmt), width="stretch")
-                _traces = {"Total viable bacteria (CFU/mL)": ("log", _ps["trajectories"])}
+                _traces = {"CFU — culturable (B+D)": ("log", _ps["trajectories"])}
+                if _ps.get("total_incl_trajectories"):
+                    _traces["Total incl. infected (B+D+I+H)"] = ("log", _ps["total_incl_trajectories"])
+                if _ps.get("active_trajectories"):
+                    _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
                 if _ps.get("phage_trajectories"):
                     _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
                 if _ps.get("od_trajectories"):

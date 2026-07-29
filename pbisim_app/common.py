@@ -40,9 +40,12 @@ from pbisim_app.executor import execute_code
 from pbisim_app.viz_helper import (
     plot_axis_controls, apply_axis_plotly,
     build_series, series_selector, plot_series, plot_sweep_traces,
+    BACTERIAL_BASES, CFU_BASIS_LABEL, CFU_PREFIXES, bacterial_total,
 )
 from pbisim_app.fit_helper import (
     OBSERVABLES,
+    OBS_COMPARTMENTS,
+    obs_prefixes,
     predicted_observable,
     normalize_fit_dataframe,
     parse_dose_rows,
@@ -698,7 +701,8 @@ def summarize_current_results(_inp=None) -> str:
                 "in the Interactive Simulator (or set one up and run it) first.")
     try:
         t = np.asarray(res.time, dtype=float)
-        total = np.asarray(res.sum_prefixes("B", "D", "I", "H"), dtype=float)
+        # Culturable CFU = B + D (infected I / hibernating H cells don't form colonies).
+        total = np.asarray(res.sum_prefixes("B", "D"), dtype=float)
         lines = [f"Current simulation ({st.session_state.get('int_builder_mode', '?')}), "
                  f"t = {t[0]:.1f}–{t[-1]:.1f} h."]
         lines.append(
@@ -2457,7 +2461,8 @@ def generate_reproduction_code() -> str:
         "",
         "# 4. Plot trajectories",
         "fig, ax = plt.subplots(figsize=(8, 4))",
-        "ax.semilogy(result.time, np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0), label='Total Viable')",
+        "# CFU = culturable cells only (active B + dormant D); infected I / hibernating H don't plate.",
+        "ax.semilogy(result.time, np.maximum(result.sum_prefixes('B', 'D'), 1.0), label='CFU (B+D)')",
         "ax.set(xlabel='Time (h)', ylabel='Density (cells/mL)', title='Simulation Run')",
         "ax.legend()",
         "plt.show()",
@@ -2567,7 +2572,7 @@ def generate_param_sweep_reproduction_code() -> str:
         *_repro_prerun_lines("    ", t_prerun),
         "    model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)",
         f"    result = solve_ode(model, {_repro_solve_kwargs()})",
-        "    total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)",
+        "    total = np.maximum(result.sum_prefixes('B', 'D'), 1.0)  # CFU (culturable: B+D)",
         '    ax.semilogy(result.time, total, label="' + _label_lit + ' = %.2e" % val)',
         f'ax.set(xlabel="Time (h)", ylabel="Total viable (cells/mL)", title="1D sweep: {_label_lit}")',
         "ax.legend(fontsize=7)",
@@ -2686,7 +2691,7 @@ def generate_dose_sweep_reproduction_code() -> str:
         *_repro_prerun_lines("    ", t_prerun),
         "    model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)",
         f"    result = solve_ode(model, {_repro_solve_kwargs()})",
-        "    total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)",
+        "    total = np.maximum(result.sum_prefixes('B', 'D'), 1.0)  # CFU (culturable: B+D)",
         '    ax.semilogy(result.time, total, label="run %d" % (k + 1))',
         'ax.set(xlabel="Time (h)", ylabel="Total viable (cells/mL)", title="Dose-response sweep")',
         "ax.legend(fontsize=7)",
@@ -2731,12 +2736,18 @@ __all__ = [
     'SimulationAgent',
     'execute_code',
     'plot_axis_controls',
+    'BACTERIAL_BASES',
+    'CFU_BASIS_LABEL',
+    'CFU_PREFIXES',
+    'bacterial_total',
     'apply_axis_plotly',
     'build_series',
     'series_selector',
     'plot_series',
     'plot_sweep_traces',
     'OBSERVABLES',
+    'OBS_COMPARTMENTS',
+    'obs_prefixes',
     'predicted_observable',
     'normalize_fit_dataframe',
     'parse_dose_rows',

@@ -144,9 +144,11 @@ this [src: Payne 2003, Rao 2024]:
 
 ### Interpreting results
 
-- **CFU** (`sum_prefixes('B','D','I','H')`): monotonic decline to the floor = **clearance**;
-  decline-then-rebound = **resistance or a surviving refuge**; little change = ineffective (dose
-  too low, adsorption too weak, or strong inoculum effect). Always inspect the per-strain split.
+- **CFU** (`sum_prefixes('B','D')` — culturable cells only): monotonic decline to the floor =
+  **clearance**; decline-then-rebound = **resistance or a surviving refuge**; little change =
+  ineffective (dose too low, adsorption too weak, or strong inoculum effect). Always inspect the
+  per-strain split. (Infected `I` and hibernating `H` cells lyse rather than plating, so they are
+  excluded from CFU; use `sum_prefixes('B','D','I','H')` only for *total live load*, e.g. qPCR.)
 - **PFU**: a rise (burst-driven amplification) confirms productive infection; decay to the noise
   floor means the phage failed to establish.
 - **OD**: **lags** viable-count changes, and **debris inflates OD after lysis** — never read OD
@@ -315,7 +317,8 @@ result.get('P0')            # phage species 0 time series
 result.get('S')             # nutrient level time series
 
 # Convenience aggregators:
-result.sum_prefixes('B', 'D', 'I', 'H')   # TOTAL viable bacteria ← ALWAYS use this for CFU
+result.sum_prefixes('B', 'D')              # CFU / culturable bacteria ← use this for plate counts
+result.sum_prefixes('B', 'D', 'I', 'H')   # TOTAL live load (incl. infected I + hibernating H)
 result.sum_prefixes('P')                   # sum of ALL phage species
 result.sum_prefixes('B')                   # active bacteria only (excludes dormant/latent)
 
@@ -331,7 +334,7 @@ print(result.state_names)   # e.g. ['B0', 'B1', 'P0', 'I0_0_0', ..., 'S']
 
 **Always floor before log10:**
 ```python
-B_total = np.maximum(result.sum_prefixes('B', 'D', 'I', 'H'), 1.0)
+B_total = np.maximum(result.sum_prefixes('B', 'D'), 1.0)   # CFU (culturable)
 log10_B = np.log10(B_total)
 ```
 
@@ -404,7 +407,7 @@ fig.suptitle('Monophage therapy — dose comparison', fontsize=13, fontweight='b
 
 for res, label, color in zip(results, labels, colors):
     t = res.time
-    B_total = np.maximum(res.sum_prefixes('B', 'D', 'I', 'H'), 1.0)
+    B_total = np.maximum(res.sum_prefixes('B', 'D'), 1.0)   # CFU (culturable: B+D)
     P_total = np.maximum(res.sum_prefixes('P'), 1.0)
 
     ax1.plot(t, np.log10(B_total), color=color, lw=2, label=label)
@@ -498,7 +501,7 @@ ALWAYS produce:
 **Important rules:**
 - Never use method names that are not listed in this prompt.
 - Always use `result.get('B0')`, `result.get('B1')`, etc. — NOT `result.get_state(...)`.
-- Use `result.sum_prefixes('B', 'D', 'I', 'H')` for total viable bacteria (CFU).  Never omit `'D'`, `'I'`, `'H'`.
+- Use `result.sum_prefixes('B', 'D')` for **CFU** (culturable = active B + dormant D). Never omit `'D'`. Add `'I','H'` only for *total live load* (they don't plate).
 - Apply `np.maximum(..., 1.0)` before `np.log10(...)`.
 - Set `initial_S` in `PBIModel(...)`, not in `solve_ode(...)`.
 - If a parameter is not given, state your assumption in the narrative.

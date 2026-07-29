@@ -40,15 +40,36 @@ def test_observable_registry_covers_the_four_signals():
 
 def test_predicted_observable_links():
     r = _FakeResult({"B": np.array([1e8]), "D": np.array([1e7]),
-                     "I": np.array([0.0]), "H": np.array([0.0]), "P": np.array([1e9])})
-    # CFU = B+D+I+H
+                     "I": np.array([5e7]), "H": np.array([2e7]), "P": np.array([1e9])})
+    # CFU = culturable only (B+D); infected I / hibernating H are NOT counted.
     assert predicted_observable(r, "cfu") == 1.1e8
     # PFU = P
     assert predicted_observable(r, "pfu") == 1e9
-    # OD = total biomass / od_to_cfu
-    assert np.isclose(predicted_observable(r, "od", 1e9), 1.1e8 / 1e9)
+    # OD = all physically-present biomass (B+D+I+H) / od_to_cfu
+    assert np.isclose(predicted_observable(r, "od", 1e9), 1.8e8 / 1e9)
     # luminescence = active biomass (B only) * rlu_per_cell
     assert np.isclose(predicted_observable(r, "lum", 2.0), 1e8 * 2.0)
+
+
+def test_observation_model_override():
+    from pbisim_app.fit_helper import obs_prefixes, OBS_COMPARTMENTS
+    r = _FakeResult({"B": np.array([1e8]), "D": np.array([1e7]),
+                     "I": np.array([5e7]), "H": np.array([2e7])})
+    # default CFU = B+D
+    assert OBSERVABLES["cfu"]["prefixes"] == ("B", "D")
+    assert obs_prefixes("cfu", None) == ("B", "D")
+    # a user observation model can add I/H (total live load) or restrict to B (active only)
+    assert obs_prefixes("cfu", {"cfu": ("B", "D", "I", "H")}) == ("B", "D", "I", "H")
+    assert predicted_observable(r, "cfu", prefixes=("B", "D", "I", "H")) == 1.8e8
+    assert predicted_observable(r, "cfu", prefixes=("B",)) == 1e8
+    assert OBS_COMPARTMENTS == ("B", "D", "I", "H")
+
+
+def test_app_cfu_matches_pbisim_fit_default():
+    """The app's default CFU compartments must equal pbisim-fit's fit residual default,
+    so the Calibration overlay and the NLS fit agree out of the box."""
+    from pbisim_fit.refinement.nls import NLSConfig
+    assert tuple(OBSERVABLES["cfu"]["prefixes"]) == tuple(NLSConfig().cfu_compartments)
 
 
 def test_normalize_monolix_format():

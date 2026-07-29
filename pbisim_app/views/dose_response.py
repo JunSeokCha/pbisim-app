@@ -155,7 +155,9 @@ def _render_body(theme_mode):
                     phages[j]["initial_P"] = 0.0
 
                 runs_outcomes = []
-                trajectories = [] # list of (time, viable_b, label)
+                trajectories = [] # list of (time, cfu_b, label) — culturable CFU (B+D)
+                total_incl_trajectories = [] # (time, B+D+I+H, label)
+                active_trajectories = [] # (time, B, label)
                 phage_trajectories = [] # list of (time, total_free_phage, label)
                 od_trajectories = [] # list of (time, od, label) — only if OD/debris enabled
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
@@ -235,8 +237,12 @@ def _render_body(theme_mode):
                         # Run
                         result, config = run_sim_from_gui_params()
                         
-                        # Compute metrics
-                        total_bacteria = result.sum_prefixes("B", "D", "I", "H")
+                        # Compute metrics. Summary metrics use culturable CFU (B+D); the
+                        # other bacterial bases are captured too so the user can overlay them.
+                        _cfu = result.sum_prefixes("B", "D")
+                        _total_incl = result.sum_prefixes("B", "D", "I", "H")
+                        _active = result.sum_prefixes("B")
+                        total_bacteria = _cfu
                         nadir_val = np.min(total_bacteria)
 
                         _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -258,7 +264,9 @@ def _render_body(theme_mode):
                             "2-Log Red Time (h)": t_log_red if t_log_red is not None else np.nan
                         })
                         
-                        trajectories.append((result.time, total_bacteria, f"Run {k_idx + 1}: {run_label}"))
+                        trajectories.append((result.time, _cfu, f"Run {k_idx + 1}: {run_label}"))
+                        total_incl_trajectories.append((result.time, _total_incl, f"Run {k_idx + 1}: {run_label}"))
+                        active_trajectories.append((result.time, _active, f"Run {k_idx + 1}: {run_label}"))
                         phage_trajectories.append((result.time, result.sum_prefixes("P"), f"Run {k_idx + 1}: {run_label}"))
                         if _od_enabled:
                             _od = (_safe_od(result, total_bacteria))
@@ -277,6 +285,8 @@ def _render_body(theme_mode):
                 st.session_state.dr_sweep_result = {
                     "summary": runs_outcomes,
                     "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
+                    "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
@@ -298,8 +308,12 @@ def _render_body(theme_mode):
                 width="stretch"
             )
 
-            # Trajectories across doses — pick which metric to trace.
-            _traces = {"Total viable bacteria (CFU/mL)": ("log", _dr["trajectories"])}
+            # Trajectories across doses — pick which subpopulation/metric to trace.
+            _traces = {"CFU — culturable (B+D)": ("log", _dr["trajectories"])}
+            if _dr.get("total_incl_trajectories"):
+                _traces["Total incl. infected (B+D+I+H)"] = ("log", _dr["total_incl_trajectories"])
+            if _dr.get("active_trajectories"):
+                _traces["Active only (B)"] = ("log", _dr["active_trajectories"])
             if _dr.get("phage_trajectories"):
                 _traces["Total free phage (PFU/mL)"] = ("log", _dr["phage_trajectories"])
             if _dr.get("od_trajectories"):

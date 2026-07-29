@@ -58,6 +58,24 @@ def test_calibration_config_survives_navigation():
     assert len(at.exception) == 0
 
 
+def test_calibration_loads_dataset_with_nonregistry_observable():
+    """A dataset whose observable column holds custom labels (e.g. 'colony_count',
+    'od600') must still render the Calibration page — the observation-model selector
+    only applies to registry observables and must not KeyError on the rest."""
+    rows = [{"ARM": "A", "TIME": t, "DV": 1e7, "obs": lbl}
+            for lbl in ("cfu", "colony_count", "od600")
+            for t in (0.0, 2.0, 4.0)]
+    at = AppTest.from_file(APP, default_timeout=180)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": pd.DataFrame(rows), "time": "TIME", "value": "DV",
+        "observable": "obs", "arm_cols": ["ARM"], "moi": None,
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+
+
 def test_manual_tuning_edits_model_directly():
     """Phase B: the manual-tuning panel now renders the SAME model builder as the
     Interactive Simulator (render_model_builder), so editing an absolute value there

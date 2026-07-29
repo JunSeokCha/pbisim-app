@@ -129,9 +129,15 @@ Streamlit UI (app.py)
    `TreatmentArm`, `PretreatmentPhase`. Add to the namespace AND the prompt
    together when new surface is needed.
 3. **Honor the shared engine contracts** (see ECOSYSTEM.md §3.2): the prompt must
-   keep instructing the model to use `result.sum_prefixes("B","D","I","H")` for
-   CFU, `result.get('B0')` for individual series, `np.maximum(x, 1.0)` before
-   `log10`, and to set `initial_S` on `PBIModel` (not `solve_ode`).
+   keep instructing the model to use `result.sum_prefixes("B","D")` for **CFU**
+   (culturable = active B + dormant D; infected `I` / hibernating `H` cells lyse rather
+   than plating — use `("B","D","I","H")` only for *total live load*), `result.get('B0')`
+   for individual series, `np.maximum(x, 1.0)` before `log10`, and to set `initial_S` on
+   `PBIModel` (not `solve_ode`). The app plots/metrics default to CFU=B+D (with total and
+   active selectable); Calibration's observation model defaults CFU to B+D and threads the
+   chosen compartments to pbisim-fit via `NLSConfig.cfu_compartments`. **Engine-side
+   `default_metrics`/clinical clearance still default to `B+D+I+H`** pending the ECOSYSTEM
+   §3.2 integration ruling — a known residual gap on the Clinical Trials page.
 4. **Resistance seeding rule** (in the prompt): never start the resistant strain
    at exactly 0 — use `initial_B[resistant] = max(mutation_rate * initial_B[0], 10.0)`,
    because mutation flux → 0 when growth → 0 under nutrient limitation.

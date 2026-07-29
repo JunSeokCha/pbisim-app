@@ -258,13 +258,15 @@ def _render_body(theme_mode):
             # Raw PKPD time trajectories per arm — pick which outputs to show.
             st.markdown("#### PK/PD trajectories (median & IQR per arm)")
             _TRIAL_OUTPUTS = {
-                "Total bacteria (CFU/mL)": (("B", "D", "I", "H"), "log₁₀ CFU/mL"),
+                "CFU — culturable (B+D)": (("B", "D"), "log₁₀ CFU/mL"),
+                "Total incl. infected (B+D+I+H)": (("B", "D", "I", "H"), "log₁₀ cells/mL"),
+                "Active only (B)": (("B",), "log₁₀ cells/mL"),
                 "Free phage (PFU/mL)": (("P",), "log₁₀ PFU/mL"),
                 "Immune effector": (("Imm",), "log₁₀ Imm"),
             }
             _outputs = st.multiselect(
                 "Outputs", list(_TRIAL_OUTPUTS),
-                default=["Total bacteria (CFU/mL)", "Free phage (PFU/mL)"],
+                default=["CFU — culturable (B+D)", "Free phage (PFU/mL)"],
                 key="trial_pkpd_outputs",
             )
             for _name in _outputs:

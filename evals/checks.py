@@ -105,11 +105,12 @@ def code_matches(pattern: str):
 
 
 def uses_cfu_sum_prefixes():
-    """CFU/total-viable is computed via ``result.sum_prefixes('B','D','I','H')`` — the
-    engine contract — rather than a bare ``get('B')`` (ECOSYSTEM.md §3.2)."""
+    """Bacterial totals are computed via ``result.sum_prefixes(...)`` (CFU = culturable
+    ``('B','D')``; total live load = ``('B','D','I','H')``) rather than a bare ``get('B')``
+    (ECOSYSTEM.md §3.2). The check just requires a ``sum_prefixes(`` aggregation."""
     def _c(code, result):
         ok = "sum_prefixes(" in (code or "")
-        return ok, ("" if ok else "CFU should use result.sum_prefixes('B','D','I','H')")
+        return ok, ("" if ok else "bacterial total should use result.sum_prefixes(...)")
     _c.__name__ = "uses_cfu_sum_prefixes"
     return _c
 
