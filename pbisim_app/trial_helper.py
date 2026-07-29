@@ -17,11 +17,13 @@ from pbisim.trial.distributions import LogNormal, Normal, Uniform, Fixed
 from pbisim.trial.runner import default_metrics
 from pbisim import PBIModel
 
-_CFU = ("B", "D", "I", "H")
+# Culturable CFU = active (B) + dormant (D). Infected (I) and hibernating (H) cells are not
+# culturable (they don't form colonies), so they are excluded from CFU-based metrics.
+_CFU = ("B", "D")
 
 
 def _total_cfu(result):
-    """Total bacterial CFU trajectory (all compartments), floored at 1.0 for log."""
+    """Culturable CFU trajectory (B + D), floored at 1.0 for log."""
     return np.maximum(result.sum_prefixes(*_CFU), 1.0)
 
 
@@ -305,8 +307,9 @@ def plot_pkpd_trajectories_plotly(
 ):
     """Per-arm median trajectory (+ IQR band) for a set of state prefixes.
 
-    Use ``prefixes=("B","D","I","H")`` for total bacteria (CFU) and
-    ``prefixes=("P",)`` for free phage (PFU).
+    Use ``prefixes=("B","D")`` for plating CFU (colony-forming: uninfected active +
+    dormant; infected I/H lyse and don't colonize), ``prefixes=("B","D","I","H")`` for
+    total live load (in-vivo burden / qPCR), and ``prefixes=("P",)`` for free phage (PFU).
     """
     fig = go.Figure()
     palette = px.colors.qualitative.Plotly
