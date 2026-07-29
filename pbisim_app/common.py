@@ -94,6 +94,16 @@ def _number_input_precise(label, *args, **kwargs):
 st.number_input = _number_input_precise
 
 
+def scripting_enabled() -> bool:
+    """Whether the notebook-style Scripting page is available (opt-in). It runs arbitrary
+    Python in the app's server process (research sandbox, not isolated), so it is OFF by
+    default and only appears when ``PBISIM_ENABLE_SCRIPTING`` is set to a truthy value —
+    turn it on only where you trust the users (a local run, or an authenticated deploy)."""
+    import os as _os
+    return _os.environ.get("PBISIM_ENABLE_SCRIPTING", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 # ── Dose defaults per target compartment ───────────────────────────────────────
 # 1e8 only makes sense for phage (PFU); antibiotics are dosed in mg and nutrient
 # in resource units, so give each target a plausible default and unit label.
@@ -2704,6 +2714,7 @@ def generate_dose_sweep_reproduction_code() -> str:
 
 
 __all__ = [
+    'scripting_enabled',
     'faulthandler',
     'copy',
     '_dc',

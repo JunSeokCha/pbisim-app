@@ -249,11 +249,21 @@ with st.sidebar:
         st.session_state.current_page_radio = _pending_nav
 
     _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "Calibration", "AI Assistant", "Library"]
+    # Scripting is an opt-in power-user page (arbitrary Python; research sandbox). Hidden
+    # unless PBISIM_ENABLE_SCRIPTING is set — see scripting_enabled().
+    if scripting_enabled():
+        _pages.append("Scripting")
+    # Guard the radio index: if the previously-selected page is no longer present (e.g.
+    # the scripting flag was turned off), fall back to the first page. A keyed radio's
+    # stored value overrides index=, so drop it too when it points at a missing option.
+    if st.session_state.get("current_page_radio") not in _pages:
+        st.session_state.pop("current_page_radio", None)
+    _cur = st.session_state.current_page if st.session_state.current_page in _pages else _pages[0]
     st.session_state.current_page = st.radio(
         "Navigation",
         _pages,
         key="current_page_radio",
-        index=_pages.index(st.session_state.current_page),
+        index=_pages.index(_cur),
     )
     st.session_state.current_page = st.session_state.current_page_radio
 
@@ -475,6 +485,9 @@ elif st.session_state.current_page == "Dose-Response Sweeps":
 elif st.session_state.current_page == "Parameter Sweeps":
     from pbisim_app.views import param_sweeps
     param_sweeps.render()
+elif st.session_state.current_page == "Scripting" and scripting_enabled():
+    from pbisim_app.views import scripting
+    scripting.render()
 elif st.session_state.current_page == "Interactive Simulator":
     from pbisim_app.views import simulator
     simulator.render()

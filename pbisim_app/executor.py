@@ -114,6 +114,13 @@ def _build_namespace() -> dict:
     return ns
 
 
+def new_namespace() -> dict:
+    """A fresh sandbox namespace (the pbisim API + numpy/matplotlib). Use this to create
+    or reset a persistent 'kernel' for the notebook-style Scripting page, then pass it to
+    :func:`execute_code` so variables carry across cells."""
+    return _build_namespace()
+
+
 class ExecutionResult(NamedTuple):
     """Result of executing a generated code snippet."""
     success: bool
@@ -122,14 +129,19 @@ class ExecutionResult(NamedTuple):
     error: str       # full traceback on failure, else ""
 
 
-def execute_code(code: str) -> ExecutionResult:
+def execute_code(code: str, namespace: dict | None = None) -> ExecutionResult:
     """
-    Execute a generated pbisim code snippet in a controlled namespace.
+    Execute a pbisim code snippet in a controlled namespace.
 
     Parameters
     ----------
     code : str
-        Python source code produced by the simulation agent.
+        Python source code (from the AI agent or the Scripting page).
+    namespace : dict, optional
+        The namespace to exec into. **Default None → a fresh namespace per call** (the
+        AI-assistant behaviour — each request is independent). Pass a namespace from
+        :func:`new_namespace` to keep state across calls (notebook 'kernel' semantics),
+        e.g. so a variable defined in one Scripting cell is visible in the next.
 
     Returns
     -------
@@ -144,7 +156,8 @@ def execute_code(code: str) -> ExecutionResult:
     sys.stdout = captured = io.StringIO()
 
     existing_figs = set(plt.get_fignums())
-    namespace = _build_namespace()
+    if namespace is None:
+        namespace = _build_namespace()
 
     try:
         exec(compile(code, "<pbisim-agent>", "exec"), namespace)  # noqa: S102
