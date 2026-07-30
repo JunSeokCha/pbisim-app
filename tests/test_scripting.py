@@ -62,3 +62,42 @@ def test_scripting_page_renders_and_runs_when_enabled(monkeypatch):
     assert "script_outputs" in at.session_state          # SafeSessionState has no .get()
     _outs = at.session_state["script_outputs"]
     assert 0 in _outs and _outs[0]["success"], _outs
+
+
+def _goto_scripting(monkeypatch, timeout=200):
+    monkeypatch.setenv("PBISIM_ENABLE_SCRIPTING", "1")
+    at = AppTest.from_file(APP, default_timeout=timeout)
+    at.run()
+    at.session_state["current_page_radio"] = "Scripting"
+    at.run()
+    return at
+
+
+def _src(at, key):
+    return [t for t in at.text_area if t.key == key][0]
+
+
+def test_add_cell_preserves_existing_source(monkeypatch):
+    """Regression: adding a cell must NOT wipe other cells' code (the earlier st.rerun
+    bug purged not-yet-rendered widget keys)."""
+    at = _goto_scripting(monkeypatch, timeout=240)
+    _src(at, "script_src_0").set_value("keep_me = 111").run()
+    [b for b in at.button if "Add cell" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0
+    assert _src(at, "script_src_0").value == "keep_me = 111"   # source survived the add
+    assert any(t.key == "script_src_1" for t in at.text_area)  # new cell exists
+    # the new cell shares the kernel — Run all executes cell 0 (defines keep_me) then cell 1
+    _src(at, "script_src_1").set_value("print(keep_me)").run()
+    [b for b in at.button if "Run all" in (b.label or "")][0].click().run()
+    _o = at.session_state["script_outputs"][1]
+    assert _o["success"] and "111" in _o["stdout"]
+
+
+def test_delete_cell_removes_only_that_cell(monkeypatch):
+    at = _goto_scripting(monkeypatch)
+    # one cell → Delete is disabled (always keep at least one)
+    assert [b for b in at.button if b.key == "script_del_0"][0].disabled is True
+    [b for b in at.button if "Add cell" in (b.label or "")][0].click().run()
+    [b for b in at.button if b.key == "script_del_0"][0].click().run()
+    keys = sorted(t.key for t in at.text_area if t.key.startswith("script_src_"))
+    assert keys == ["script_src_1"] and len(at.exception) == 0

@@ -6,6 +6,11 @@ A scratchpad for power users: run Python against the live pbisim API in a shared
 (``executor.execute_code``) — so when the executor is later hardened (subprocess
 isolation), both surfaces are hardened at once. The sandbox is research-grade, NOT a
 security boundary: code runs in this server process. Gate it to trusted/authenticated use.
+
+Cells are keyed by **stable ids** (not positional index) and all mutations run in
+``on_click`` callbacks (never ``st.rerun`` mid-page) so that adding/deleting a cell never
+purges another cell's text — Streamlit drops the session-state key of any widget that
+isn't rendered during a run, which a mid-page rerun would trigger.
 """
 import io as _io
 
@@ -26,6 +31,14 @@ _PRELUDE = (
 )
 
 
+def _init_state():
+    if "script_cell_ids" not in st.session_state:
+        st.session_state.script_cell_ids = [0]
+        st.session_state.script_next_id = 1
+        st.session_state.script_outputs = {}
+        st.session_state["script_src_0"] = _PRELUDE
+
+
 def _kernel():
     """The persistent sandbox namespace (created lazily; reset by Restart kernel)."""
     if "script_ns" not in st.session_state:
@@ -33,12 +46,33 @@ def _kernel():
     return st.session_state.script_ns
 
 
-def _run_cell(i):
-    """Execute cell *i*'s source in the shared kernel; store stdout/PNGs/error.
+# ── callbacks (run before the rerun, so no widget keys get purged) ──
+def _add_cell():
+    nid = st.session_state.script_next_id
+    st.session_state.script_cell_ids.append(nid)
+    st.session_state.script_next_id = nid + 1
+
+
+def _delete_cell(cid):
+    ids = st.session_state.script_cell_ids
+    if cid in ids and len(ids) > 1:
+        ids.remove(cid)
+    st.session_state.script_outputs.pop(cid, None)
+    st.session_state.pop(f"script_src_{cid}", None)
+
+
+def _restart_kernel():
+    """Discard all variables + outputs (fresh namespace); the cell CODE is kept."""
+    st.session_state.script_ns = new_namespace()
+    st.session_state.script_outputs = {}
+
+
+def _run_cell(cid):
+    """Execute cell *cid*'s source in the shared kernel; store stdout/PNGs/error.
 
     Figures are rendered to PNG bytes here and the Figure objects closed, so nothing
     leaks into matplotlib's global registry and the output survives reruns."""
-    src = st.session_state.get(f"script_src_{i}", "")
+    src = st.session_state.get(f"script_src_{cid}", "")
     res = execute_code(src, namespace=_kernel())
     pngs = []
     for fig in res.figures:
@@ -48,9 +82,14 @@ def _run_cell(i):
             pngs.append(buf.getvalue())
         finally:
             plt.close(fig)
-    st.session_state.script_outputs[i] = {
+    st.session_state.script_outputs[cid] = {
         "success": res.success, "stdout": res.stdout, "error": res.error, "pngs": pngs,
     }
+
+
+def _run_all():
+    for cid in list(st.session_state.script_cell_ids):
+        _run_cell(cid)
 
 
 def render():
@@ -63,42 +102,27 @@ def render():
         "trusted / authenticated use. A long-running cell blocks the page until it finishes.",
         icon="⚠️")
 
-    # ── state ──
-    if "script_cells" not in st.session_state:
-        st.session_state.script_cells = 1
-        st.session_state.script_outputs = {}
-        st.session_state["script_src_0"] = _PRELUDE
-    st.session_state.setdefault("script_outputs", {})
-    _n = int(st.session_state.script_cells)
+    _init_state()
+    ids = st.session_state.script_cell_ids
 
     # ── toolbar ──
-    _t = st.columns([1, 1, 1, 3])
-    if _t[0].button("Run all", width="stretch", type="primary"):
-        for _i in range(_n):
-            _run_cell(_i)
-    if _t[1].button("Add cell", width="stretch"):
-        st.session_state.script_cells = _n + 1
-        st.rerun()
-    if _t[2].button("Restart kernel", width="stretch",
-                    help="Discard all variables and outputs; start a fresh namespace."):
-        st.session_state.script_ns = new_namespace()
-        st.session_state.script_outputs = {}
-        st.rerun()
+    _t = st.columns([1, 1, 4])
+    _t[0].button("Run all", width="stretch", type="primary", on_click=_run_all)
+    _t[1].button("Restart kernel", width="stretch", on_click=_restart_kernel,
+                 help="Discard all variables and outputs (fresh namespace). Keeps your code.")
 
-    # ── cells ──
-    for _i in range(_n):
-        st.session_state.setdefault(f"script_src_{_i}", "")
-        st.markdown(f"<div class='section-label'>CELL [{_i + 1}]</div>", unsafe_allow_html=True)
-        st.text_area("code", key=f"script_src_{_i}", height=180, label_visibility="collapsed")
+    # ── cells (keyed by stable id) ──
+    for _pos, _cid in enumerate(ids):
+        st.session_state.setdefault(f"script_src_{_cid}", "")
+        st.markdown(f"<div class='section-label'>CELL [{_pos + 1}]</div>", unsafe_allow_html=True)
+        st.text_area("code", key=f"script_src_{_cid}", height=180, label_visibility="collapsed")
         _rc = st.columns([1, 1, 5])
-        if _rc[0].button("Run", key=f"script_run_{_i}", width="stretch"):
-            _run_cell(_i)
-        if _rc[1].button("Clear", key=f"script_clear_{_i}", width="stretch",
-                         help="Empty this cell and its output (variables stay in the kernel)."):
-            st.session_state[f"script_src_{_i}"] = ""
-            st.session_state.script_outputs.pop(_i, None)
-            st.rerun()
-        _out = st.session_state.script_outputs.get(_i)
+        _rc[0].button("Run", key=f"script_run_{_cid}", width="stretch",
+                      on_click=_run_cell, args=(_cid,))
+        _rc[1].button("Delete", key=f"script_del_{_cid}", width="stretch",
+                      on_click=_delete_cell, args=(_cid,), disabled=(len(ids) == 1),
+                      help="Remove this cell (variables stay in the kernel).")
+        _out = st.session_state.script_outputs.get(_cid)
         if _out:
             for _png in _out.get("pngs", []):
                 st.image(_png)
@@ -107,3 +131,6 @@ def render():
             if not _out.get("success"):
                 st.error(_out.get("error", "Execution failed."))
         st.divider()
+
+    # ── add a cell (at the bottom, next to the newest cell) ──
+    st.button("＋ Add cell", key="script_add_bottom", width="stretch", on_click=_add_cell)
