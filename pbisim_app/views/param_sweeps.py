@@ -64,82 +64,101 @@ def _render_body(theme_mode):
         if sweep_type == "1D Sweep":
             param1_label = _pick_param("p1", "Category", "Parameter")
             meta1 = sweep_params[param1_label]
-            # Re-autoscale the range widgets when the swept parameter changes (their
-            # value= default depends on the nominal value; a persisted key would pin it).
-            if st.session_state.get("_ps_1d_last_param") != param1_label:
-                for _k in ("ps_1d_min", "ps_1d_max", "ps_1d_steps", "ps_1d_spacing"):
-                    st.session_state.pop(_k, None)
-                    st.session_state.setdefault("param_sweep_config", {}).pop(_k, None)
-                st.session_state["_ps_1d_last_param"] = param1_label
+            _is_categorical = meta1.get("type") == "categorical"
 
-            # Default values
-            default_val = 1e-9
-            if meta1["type"] == "scalar":
-                default_val = getattr(nominal_config, meta1["field"])
-                if default_val is None:  # e.g. dormancy_monod_constant when inheriting
-                    default_val = meta1.get("default", 1.0)
-            elif meta1["type"] == "dimension":
-                default_val = getattr(nominal_config, meta1["field"])
-            elif meta1["type"] == "array1d":
-                default_val = getattr(nominal_config, meta1["field"])[meta1["index"]]
-            elif meta1["type"] == "array1d_or_none":
-                arr = getattr(nominal_config, meta1["field"])
-                default_val = arr[meta1["index"]] if arr is not None else 0.0
-            elif meta1["type"] in ("array1d_broadcast", "array1d_broadcast_or_none"):
-                arr = getattr(nominal_config, meta1["field"])
-                default_val = float(arr[0]) if arr is not None and len(arr) else 0.0
-            elif meta1["type"] == "initial_B_broadcast":
-                default_val = float(initial_B[0]) if len(initial_B) else 1e7
-            elif meta1["type"] == "array2d":
-                default_val = getattr(nominal_config, meta1["field"])[meta1["index_row"], meta1["index_col"]]
-            elif meta1["type"] == "array2d_broadcast":
-                _arr = getattr(nominal_config, meta1["field"])
-                default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
-            elif meta1["type"] == "pd_array2d_broadcast":
-                _arr = getattr(nominal_config.pd_config, meta1["field"])
-                default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
-            elif meta1["type"] == "pk_array1d":
-                pk_config = nominal_config.phage_pk_config or nominal_config.pk_config
-                default_val = getattr(pk_config, meta1["field"])[meta1["index"]]
-            elif meta1["type"] == "pd_array2d":
-                default_val = getattr(nominal_config.pd_config, meta1["field"])[meta1["index_row"], meta1["index_col"]]
-            elif meta1["type"] == "initial_B":
-                default_val = initial_B[meta1["index"]]
-            elif meta1["type"] == "initial_P":
-                default_val = initial_P[meta1["index"]]
-            elif meta1["type"] == "initial_S":
-                default_val = initial_S
-            elif meta1["type"] == "prerun":
-                default_val = st.session_state.get("int_t_prerun", 0.0) or meta1.get("default", 24.0)
-            elif meta1["type"] == "mutation":
-                _M = getattr(nominal_config, "mutation_rates", None)
-                default_val = float(_M[meta1["dest"], meta1["origin"]]) if _M is not None else 0.0
-                if not default_val:
-                    default_val = meta1.get("default", 1e-7)
+            if _is_categorical:
+                # Categorical (signal-function) sweep — pick which discrete options to
+                # compare. Each rebuilds+re-solves the model (the signal choice resolves
+                # at BUILD time, so we can't mutate a built config), so keep it modest.
+                _cat_opts = list(meta1["options"].keys())
+                if st.session_state.get("ps_1d_cat_opts") and any(
+                        o not in _cat_opts for o in st.session_state["ps_1d_cat_opts"]):
+                    st.session_state.pop("ps_1d_cat_opts", None)  # options changed
+                chosen_opts = st.multiselect(
+                    "Options to compare", _cat_opts, default=_cat_opts, key="ps_1d_cat_opts")
+                st.caption("Each option rebuilds and re-solves the model, then overlays the "
+                           "trajectories and compares outcome metrics. A nutrient-dependent "
+                           "signal under a signal-frozen environment may coerce to *constant* "
+                           "— such runs are labelled.")
+                run_sweep = st.button("Run Categorical Sweep", width="stretch", type="primary")
 
-            st.caption(f"Nominal Value: `{default_val:.2e}`" if isinstance(default_val, (int, float)) else f"Nominal Value: `{default_val}`")
-            
-            _is_dim = meta1["type"] == "dimension"
-            c1, c2, c3 = st.columns(3)
-            if _is_dim:
-                # integer compartment count: integer bounds ≥ 1
-                _dv = max(1, int(round(default_val)))
-                with c1:
-                    min_val = st.number_input("Min Value", min_value=1, value=1, step=1, key="ps_1d_min")
-                with c2:
-                    max_val = st.number_input("Max Value", min_value=1, value=max(_dv + 3, 5), step=1, key="ps_1d_max")
-                with c3:
-                    steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
-            else:
-                with c1:
-                    min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e", key="ps_1d_min")
-                with c2:
-                    max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e", key="ps_1d_max")
-                with c3:
-                    steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
+            if not _is_categorical:
+                # Re-autoscale the range widgets when the swept parameter changes (their
+                # value= default depends on the nominal value; a persisted key would pin it).
+                if st.session_state.get("_ps_1d_last_param") != param1_label:
+                    for _k in ("ps_1d_min", "ps_1d_max", "ps_1d_steps", "ps_1d_spacing"):
+                        st.session_state.pop(_k, None)
+                        st.session_state.setdefault("param_sweep_config", {}).pop(_k, None)
+                    st.session_state["_ps_1d_last_param"] = param1_label
 
-            spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
-            run_sweep = st.button("Run 1D Sweep", width="stretch", type="primary")
+                # Default values
+                default_val = 1e-9
+                if meta1["type"] == "scalar":
+                    default_val = getattr(nominal_config, meta1["field"])
+                    if default_val is None:  # e.g. dormancy_monod_constant when inheriting
+                        default_val = meta1.get("default", 1.0)
+                elif meta1["type"] == "dimension":
+                    default_val = getattr(nominal_config, meta1["field"])
+                elif meta1["type"] == "array1d":
+                    default_val = getattr(nominal_config, meta1["field"])[meta1["index"]]
+                elif meta1["type"] == "array1d_or_none":
+                    arr = getattr(nominal_config, meta1["field"])
+                    default_val = arr[meta1["index"]] if arr is not None else 0.0
+                elif meta1["type"] in ("array1d_broadcast", "array1d_broadcast_or_none"):
+                    arr = getattr(nominal_config, meta1["field"])
+                    default_val = float(arr[0]) if arr is not None and len(arr) else 0.0
+                elif meta1["type"] == "initial_B_broadcast":
+                    default_val = float(initial_B[0]) if len(initial_B) else 1e7
+                elif meta1["type"] == "array2d":
+                    default_val = getattr(nominal_config, meta1["field"])[meta1["index_row"], meta1["index_col"]]
+                elif meta1["type"] == "array2d_broadcast":
+                    _arr = getattr(nominal_config, meta1["field"])
+                    default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
+                elif meta1["type"] == "pd_array2d_broadcast":
+                    _arr = getattr(nominal_config.pd_config, meta1["field"])
+                    default_val = float(_arr.flat[0]) if _arr is not None and _arr.size else 0.0
+                elif meta1["type"] == "pk_array1d":
+                    pk_config = nominal_config.phage_pk_config or nominal_config.pk_config
+                    default_val = getattr(pk_config, meta1["field"])[meta1["index"]]
+                elif meta1["type"] == "pd_array2d":
+                    default_val = getattr(nominal_config.pd_config, meta1["field"])[meta1["index_row"], meta1["index_col"]]
+                elif meta1["type"] == "initial_B":
+                    default_val = initial_B[meta1["index"]]
+                elif meta1["type"] == "initial_P":
+                    default_val = initial_P[meta1["index"]]
+                elif meta1["type"] == "initial_S":
+                    default_val = initial_S
+                elif meta1["type"] == "prerun":
+                    default_val = st.session_state.get("int_t_prerun", 0.0) or meta1.get("default", 24.0)
+                elif meta1["type"] == "mutation":
+                    _M = getattr(nominal_config, "mutation_rates", None)
+                    default_val = float(_M[meta1["dest"], meta1["origin"]]) if _M is not None else 0.0
+                    if not default_val:
+                        default_val = meta1.get("default", 1e-7)
+
+                st.caption(f"Nominal Value: `{default_val:.2e}`" if isinstance(default_val, (int, float)) else f"Nominal Value: `{default_val}`")
+
+                _is_dim = meta1["type"] == "dimension"
+                c1, c2, c3 = st.columns(3)
+                if _is_dim:
+                    # integer compartment count: integer bounds ≥ 1
+                    _dv = max(1, int(round(default_val)))
+                    with c1:
+                        min_val = st.number_input("Min Value", min_value=1, value=1, step=1, key="ps_1d_min")
+                    with c2:
+                        max_val = st.number_input("Max Value", min_value=1, value=max(_dv + 3, 5), step=1, key="ps_1d_max")
+                    with c3:
+                        steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
+                else:
+                    with c1:
+                        min_val = st.number_input("Min Value", value=float(default_val * 0.1) if default_val > 0 else 0.0, format="%.2e", key="ps_1d_min")
+                    with c2:
+                        max_val = st.number_input("Max Value", value=float(default_val * 10.0) if default_val > 0 else 1.0, format="%.2e", key="ps_1d_max")
+                    with c3:
+                        steps = st.number_input("Steps", min_value=2, max_value=25, value=5, key="ps_1d_steps")
+
+                spacing = st.selectbox("Spacing", ["Linear", "Logarithmic"], key="ps_1d_spacing")
+                run_sweep = st.button("Run 1D Sweep", width="stretch", type="primary")
 
         elif sweep_type == "2D Sweep":
             param1_label = _pick_param("p1", "Parameter 1 category (X-axis)", "Parameter 1")
@@ -195,7 +214,88 @@ def _render_body(theme_mode):
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            if sweep_type == "1D Sweep":
+            if sweep_type == "1D Sweep" and _is_categorical:
+                # Categorical sweep: the signal-function choice resolves at BUILD time
+                # (via session state + the *_kwargs() helpers), so we can't mutate a
+                # built config — instead set the session key and rebuild+re-solve per
+                # option (save/restore the key like the dose-response sweep does).
+                if not chosen_opts:
+                    st.error("Select at least one option to compare.")
+                    st.stop()
+                _sess_key = meta1["session_key"]
+                _opt_map = meta1["options"]
+                _saved = st.session_state.get(_sess_key)
+
+                runs_outcomes = []
+                trajectories = []           # (time, cfu_b, label) — culturable CFU (B+D)
+                total_incl_trajectories = []  # (time, B+D+I+H, label)
+                active_trajectories = []    # (time, B, label)
+                phage_trajectories = []     # (time, total_free_phage, label)
+                od_trajectories = []        # (time, od, label) — only if OD/debris enabled
+                _od_enabled = st.session_state.get("int_debris_enabled", False)
+                _seen = []                  # (label, cfu) for coercion/duplicate flagging
+                _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
+                try:
+                    for idx, opt in enumerate(chosen_opts):
+                        status_text.text(f"Running option {idx+1} of {len(chosen_opts)}: {opt}...")
+                        st.session_state[_sess_key] = _opt_map[opt]
+                        # Full rebuild + solve (handles prerun / debris / immunity itself).
+                        result, _cfg = run_sim_from_gui_params()
+
+                        _cfu = result.sum_prefixes("B", "D")
+                        _total_incl = result.sum_prefixes("B", "D", "I", "H")
+                        _active = result.sum_prefixes("B")
+                        nadir_val = float(np.min(_cfu))
+                        auc_val = float(_trapz(_cfu, result.time))
+                        t_clear = time_to_clearance(
+                            result, threshold=st.session_state.get("int_extinction_threshold", 1.0))
+                        t_log_red = time_to_log_reduction(result, n_logs=2.0)
+
+                        _lbl = str(opt)
+                        # A nutrient-dependent signal under a signal-frozen environment
+                        # coerces to constant, giving dynamics identical to another option
+                        # — flag the collapse rather than silently overlap the lines.
+                        for _plbl, _pcfu in _seen:
+                            if _pcfu.shape == _cfu.shape and np.allclose(_pcfu, _cfu, rtol=1e-6, atol=0.0):
+                                _lbl = f"{opt} (≡ {_plbl})"
+                                break
+                        _seen.append((_lbl, _cfu))
+
+                        runs_outcomes.append({
+                            "Option": _lbl,
+                            "Nadir (cells/mL)": nadir_val,
+                            "AUC (cells·h/mL)": auc_val,
+                            "Clearance Time (h)": t_clear if t_clear is not None else np.nan,
+                            "2-Log Red Time (h)": t_log_red if t_log_red is not None else np.nan,
+                        })
+                        trajectories.append((result.time, _cfu, _lbl))
+                        total_incl_trajectories.append((result.time, _total_incl, _lbl))
+                        active_trajectories.append((result.time, _active, _lbl))
+                        phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
+                        if _od_enabled:
+                            od_trajectories.append((result.time, _safe_od(result, _cfu), _lbl))
+                        progress_bar.progress((idx + 1) / len(chosen_opts))
+                finally:
+                    # Restore the swept key so the sweep leaves no residue on the model.
+                    if _saved is None:
+                        st.session_state.pop(_sess_key, None)
+                    else:
+                        st.session_state[_sess_key] = _saved
+
+                status_text.text("Sweep completed!")
+                st.session_state.param_sweep_result = {
+                    "type": "categorical",
+                    "param1_label": param1_label,
+                    "summary": runs_outcomes,
+                    "trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in trajectories],
+                    "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
+                    "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
+                    "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
+                    "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
+                }
+
+            elif sweep_type == "1D Sweep":
                 # Compute sweep values
                 if spacing == "Logarithmic":
                     if min_val <= 0 or max_val <= 0:
@@ -520,6 +620,38 @@ def _render_body(theme_mode):
                     yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
                     template="plotly_white" if theme_mode == "Light" else "plotly_dark")
                 st.plotly_chart(fig_metric, width="stretch")
+            elif _ps["type"] == "categorical":
+                _p1 = _ps["param1_label"]
+                df_summary = pd.DataFrame(_ps["summary"])
+                _sweep_summary_tiles(df_summary)
+                st.markdown(f"#### Summary of Runs — {_p1}")
+                st.dataframe(
+                    df_summary.style.format({
+                        "Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
+                        "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"}),
+                    width="stretch")
+                _traces = {"CFU — culturable (B+D)": ("log", _ps["trajectories"])}
+                if _ps.get("total_incl_trajectories"):
+                    _traces["Total incl. infected (B+D+I+H)"] = ("log", _ps["total_incl_trajectories"])
+                if _ps.get("active_trajectories"):
+                    _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
+                if _ps.get("phage_trajectories"):
+                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                if _ps.get("od_trajectories"):
+                    _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
+                plot_sweep_traces(_traces, "pscat_traj", title_suffix="across options")
+                st.markdown("#### Outcome Metrics by Option")
+                _opts = df_summary["Option"].astype(str).tolist()
+                fig_metric = go.Figure()
+                fig_metric.add_trace(go.Bar(x=_opts, y=df_summary["AUC (cells·h/mL)"], name="Bacterial AUC", yaxis="y1"))
+                fig_metric.add_trace(go.Scatter(x=_opts, y=df_summary["Nadir (cells/mL)"], mode="markers", marker=dict(size=11, symbol="diamond"), name="Nadir", yaxis="y2"))
+                fig_metric.update_layout(
+                    xaxis=dict(title=_p1, type="category"),
+                    yaxis=dict(title="AUC (cells·h/mL)", type="log"),
+                    yaxis2=dict(title="Nadir (cells/mL)", type="log", overlaying="y", side="right"),
+                    barmode="group",
+                    template="plotly_white" if theme_mode == "Light" else "plotly_dark")
+                st.plotly_chart(fig_metric, width="stretch")
             else:
                 _p1, _p2 = _ps["param1_label"], _ps["param2_label"]
                 _xt = "log" if _ps["spacing"] == "Logarithmic" else "linear"
@@ -540,7 +672,8 @@ def _render_body(theme_mode):
     with st.expander("View Python Reproduction Code"):
         st.caption("Standalone script that reproduces this sweep — the recorded base model "
                    "plus a loop calling the app's own apply_sweep_parameter per value. "
-                   "(1D sweeps only.)")
+                   "(1D numeric sweeps only — categorical signal-function sweeps rebuild the "
+                   "model per option through the full builder and aren't exported.)")
         try:
             st.code(generate_param_sweep_reproduction_code(), language="python")
         except Exception as _e:

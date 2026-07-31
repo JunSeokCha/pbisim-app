@@ -49,20 +49,38 @@ def render_model_builder(inoculum_mode="magnitude"):
             "Growth signal function", _gs_labels, index=_gs_labels.index(_gs_cur_label),
             help="How the per-strain growth rate is modulated:  constant = unlimited;  "
                  "nutrient = Monod S/(Ks+S);  density = logistic (1−ΣB/K);  "
-                 "nutrient+density = Monod × logistic.",
+                 "nutrient+density = Monod × logistic;  density-throttled = Monod × a soft "
+                 "hyperbolic throttle 1/(1+ΣB/Kd) (never fully stops);  Gompertz = "
+                 "exp(−exp(−k(S−S∞))).",
         )
     _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
     st.session_state["int_growth_function"] = _gs_fn
     st.session_state["int_track_nutrients"] = _gs_track
     with _gm2:
-        if _gs_fn in ("monod_growth", "monod_logistic_growth"):
+        # Monod Ks — also reused as the Gompertz shape parameter k.
+        if _gs_fn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"):
+            _is_gomp = _gs_fn == "gompertz_growth"
             st.session_state["int_monod_constant"] = st.number_input(
-                "Monod constant (Ks)", value=float(st.session_state.get("int_monod_constant", 0.3)),
-                step=0.05, help="Nutrient half-saturation for Monod growth S/(Ks+S).")
-        if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
+                "Gompertz shape k" if _is_gomp else "Monod constant (Ks)",
+                value=float(st.session_state.get("int_monod_constant", 0.3)), step=0.05, format="%g",
+                help=("Gompertz curvature k in exp(−exp(−k(S−S∞)))." if _is_gomp
+                      else "Nutrient half-saturation for Monod growth S/(Ks+S)."))
+        # Carrying capacity K — also reused as the Gompertz inflection nutrient level S∞.
+        if _gs_fn in ("logistic_growth", "monod_logistic_growth", "gompertz_growth"):
+            _is_gomp = _gs_fn == "gompertz_growth"
             st.session_state["int_carrying_capacity"] = st.number_input(
-                "Carrying capacity K (CFU·mL⁻¹)", value=float(st.session_state.get("int_carrying_capacity", 1e9)),
-                format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
+                "Gompertz inflection S∞" if _is_gomp else "Carrying capacity K (CFU·mL⁻¹)",
+                value=float(st.session_state.get("int_carrying_capacity", 1e9)),
+                format="%g" if _is_gomp else "%.1e",
+                help=("Gompertz inflection nutrient level S∞." if _is_gomp
+                      else "Density ceiling for logistic growth (1 − ΣB/K)."))
+        # Density-throttle constant Kd (soft, hyperbolic — 0.5 at ΣB=Kd, never 0).
+        if _gs_fn == "density_throttled_growth":
+            st.session_state["int_density_growth_constant"] = st.number_input(
+                "Density throttle Kd (CFU·mL⁻¹)",
+                value=float(st.session_state.get("int_density_growth_constant", 1e9)),
+                format="%.1e", help="Hyperbolic density throttle 1/(1+ΣB/Kd): 0.5 at ΣB=Kd, "
+                                    "never fully stops (growth creeps past Kd toward the nutrient plateau).")
 
     # Death signal (model-wide) — modulates the per-strain natural death rate dB.
     _dth_cur_fn = st.session_state.get("int_death_function", "constant_death")
@@ -75,6 +93,81 @@ def render_model_builder(inoculum_mode="magnitude"):
              "deplete);  density = crowding d·min(1, ΣB/K). Note: starvation death only separates "
              "stationary from death phase when nutrients persist at a low plateau (recycling).")
     st.session_state["int_death_function"] = DEATH_SIGNALS[_dth_choice]
+
+    # Lysis signal (model-wide) — how fast the infected→lysis (latent) chain progresses.
+    _ly1, _ly2 = st.columns([2, 1])
+    with _ly1:
+        _ly_cur_fn = st.session_state.get("int_lysis_function", "constant_lysis")
+        _ly_labels = list(LYSIS_SIGNALS.keys())
+        _ly_cur_label = next((L for L, fn in LYSIS_SIGNALS.items() if fn == _ly_cur_fn), _ly_labels[0])
+        _ly_choice = st.selectbox(
+            "Lysis signal function", _ly_labels, index=_ly_labels.index(_ly_cur_label),
+            help="How the infected→lysis (latent-chain) progression is modulated:  constant = "
+                 "fixed rate (phi_lysis = 1, the previous behaviour);  nutrient (Monod) = "
+                 "frac_lysis, phi_lysis = S/(Ks+S), which slows lysis when nutrients are scarce "
+                 "(needs a nutrient-tracking growth signal).")
+    _ly_fn = LYSIS_SIGNALS[_ly_choice]
+    st.session_state["int_lysis_function"] = _ly_fn
+    with _ly2:
+        if _ly_fn == "frac_lysis":
+            _ly_track = st.session_state.get("int_growth_function", "monod_growth") in (
+                "monod_growth", "monod_logistic_growth")
+            if _ly_track:
+                st.session_state["int_monod_constant_lysis"] = st.number_input(
+                    "Lysis Ks (Ks_lysis)",
+                    value=float(st.session_state.get("int_monod_constant_lysis", 0.3)),
+                    step=0.05, format="%g",
+                    help="Nutrient half-saturation for phi_lysis = S/(Ks_lysis + S). "
+                         "Lower = lysis more sensitive to nutrient depletion.")
+    if _ly_fn == "frac_lysis" and st.session_state.get("int_growth_function", "monod_growth") not in (
+            "monod_growth", "monod_logistic_growth"):
+        st.caption("⚠ Nutrient-coupled lysis needs a nutrient-tracking growth signal "
+                   "(Monod) — it will fall back to constant lysis until you enable one.")
+
+    # Dormancy signal functions (model-wide) — the engine's dormancy_function /
+    # dormancy_monod_constant / dormancy_carrying_capacity are SINGLE fields for the whole
+    # model, so these apply to every dormancy-enabled strain (per-strain RATES stay on each
+    # strain card). Shown always, like the growth/death/lysis selectors above.
+    _dm = st.columns(3)
+    with _dm[0]:
+        st.session_state["int_dormancy_signal"] = st.selectbox(
+            "Dormancy signal function", SIGNAL_OPTIONS,
+            index=SIGNAL_OPTIONS.index(canonical_signal(st.session_state.get("int_dormancy_signal", "nutrient"))),
+            help="How the dormancy-ENTRY rate is modulated (applies to all strains with dormancy "
+                 "enabled):  constant;  nutrient = Monod S/(Ks+S);  density = ΣB/K_dorm;  nutrient+density.")
+    with _dm[1]:
+        st.session_state["int_resuscitation_signal"] = st.selectbox(
+            "Resuscitation signal function", SIGNAL_OPTIONS,
+            index=SIGNAL_OPTIONS.index(canonical_signal(st.session_state.get("int_resuscitation_signal", "nutrient"))),
+            help="How the wake-up (resuscitation) rate is modulated. Same four options.")
+    with _dm[2]:
+        st.session_state["int_diffusion_signal"] = st.selectbox(
+            "Depth-diffusion signal function", SIGNAL_OPTIONS,
+            index=SIGNAL_OPTIONS.index(canonical_signal(st.session_state.get("int_diffusion_signal", "constant"))),
+            help="How cells ratchet between dormancy depth layers. constant = legacy symmetric; "
+                 "nutrient/density drive cells deeper under prolonged stress.")
+    _ds_now = canonical_signal(st.session_state["int_dormancy_signal"])
+    _rs_now = canonical_signal(st.session_state["int_resuscitation_signal"])
+    _dfs_now = canonical_signal(st.session_state["int_diffusion_signal"])
+    _dm_needs_ks = any(s in ("nutrient", "nutrient+density") for s in (_ds_now, _rs_now, _dfs_now))
+    _dm_needs_k = any(s in ("density", "nutrient+density") for s in (_ds_now, _rs_now, _dfs_now))
+    if _dm_needs_ks or _dm_needs_k:
+        _dmk = st.columns(2)
+        if _dm_needs_ks:
+            with _dmk[0]:
+                st.session_state["int_dormancy_monod_constant"] = st.number_input(
+                    "Dormancy nutrient half-saturation (Ks)",
+                    value=float(st.session_state.get("int_dormancy_monod_constant", 0.0) or 0.0),
+                    min_value=0.0, format="%g",
+                    help="Half-saturation for the nutrient dormancy signal. 0 = inherit the growth Monod constant.")
+        if _dm_needs_k:
+            with _dmk[1]:
+                st.session_state["int_dormancy_carrying_capacity"] = st.number_input(
+                    "Dormancy density threshold (CFU·mL⁻¹)",
+                    value=float(st.session_state.get("int_dormancy_carrying_capacity", 1e8) or 1e8),
+                    min_value=0.0, format="%.2e",
+                    help="Density threshold for the density dormancy signal (rate ∝ ΣB/K_dorm). "
+                         "0 = inherit the growth carrying capacity.")
 
     # What "density" counts for ALL density signals (dormancy / resuscitation / death).
     st.session_state["int_density_total_cells"] = st.checkbox(
@@ -205,53 +298,8 @@ def render_model_builder(inoculum_mode="magnitude"):
                             step=0.01,
                             key=f"str_diff_{i}",
                         )
-                        strains[i]["dormancy_signal"] = st.selectbox(
-                            "Dormancy Signal",
-                            SIGNAL_OPTIONS,
-                            index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("dormancy_signal"))),
-                            key=f"str_dsig_{i}",
-                            help="Entry-rate modulation: constant, nutrient-scarcity (Monod), "
-                                 "density (quorum), or nutrient×density.",
-                        )
-                        strains[i]["resuscitation_signal"] = st.selectbox(
-                            "Resuscitation Signal",
-                            SIGNAL_OPTIONS,
-                            index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("resuscitation_signal"))),
-                            key=f"str_rsig_{i}",
-                        )
-                        strains[i]["diffusion_signal"] = st.selectbox(
-                            "Depth-diffusion Signal",
-                            SIGNAL_OPTIONS,
-                            index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("diffusion_signal", "constant"))),
-                            key=f"str_difsig_{i}",
-                            help="How cells ratchet between dormancy depths: constant "
-                                 "(legacy symmetric), or nutrient/density-driven — prolonged "
-                                 "starvation drives cells to the deepest layer (delayed death phase).",
-                        )
-                        _dsig_i = canonical_signal(strains[i].get("dormancy_signal"))
-                        _rsig_i = canonical_signal(strains[i].get("resuscitation_signal"))
-                        if "nutrient" in (_dsig_i, _rsig_i) or "nutrient+density" in (_dsig_i, _rsig_i):
-                            # Inherit the growth Monod constant by default (pbisim
-                            # convention: dormancy_monod_constant=None → monod_constant);
-                            # the user only changes it to decouple the two.
-                            _grow_ks = float(st.session_state.get("int_monod_constant", 0.3))
-                            strains[i]["dormancy_monod_constant"] = st.number_input(
-                                "Dormancy nutrient half-saturation (Ks)",
-                                value=float(strains[i].get("dormancy_monod_constant", _grow_ks)),
-                                min_value=0.0, format="%g", key=f"str_dks_{i}",
-                                help="Half-saturation for the nutrient dormancy signal. Defaults to the "
-                                     "growth Monod constant (inherited); change it to decouple the two. "
-                                     "0 also inherits the growth Monod constant.",
-                            )
-                        if _dsig_i in ("density", "nutrient+density") or _rsig_i in ("density", "nutrient+density"):
-                            strains[i]["dormancy_carrying_capacity"] = st.number_input(
-                                "Dormancy density threshold (CFU·mL⁻¹)",
-                                value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
-                                min_value=0.0, format="%.2e", key=f"str_dcc_{i}",
-                                help="Density threshold (CFU/mL) for the density dormancy signal "
-                                     "(rate ∝ ΣB/K_dorm). Default 1e8. Set 0 to inherit the growth "
-                                     "carrying capacity instead.",
-                            )
+                        # Dormancy signal FUNCTIONS + their Ks/threshold are model-wide
+                        # (set in the topmost panel) — only per-strain RATES live here.
                         strains[i]["initial_D"] = st.number_input(
                             "Initial dormant density (D0)",
                             value=float(strains[i].get("initial_D", 0.0)),
@@ -477,36 +525,8 @@ def render_model_builder(inoculum_mode="magnitude"):
                 st.session_state["int_brg_death_rate_D"] = st.number_input(
                     "Dormant death rate (h⁻¹)", value=float(st.session_state.get("int_brg_death_rate_D", 0.0)), step=0.01
                 )
-                _bds = canonical_signal(st.session_state.get("int_brg_dorm_signal", "nutrient"))
-                _brs = canonical_signal(st.session_state.get("int_brg_resus_signal", "nutrient"))
-                st.session_state["int_brg_dorm_signal"] = st.selectbox(
-                    "Dormancy signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_bds),
-                    key="widget_brg_dorm_signal",
-                    help="Entry-rate modulation: constant, nutrient-scarcity (Monod), density (quorum), or nutrient×density.")
-                st.session_state["int_brg_resus_signal"] = st.selectbox(
-                    "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_brs),
-                    key="widget_brg_resus_signal")
-                st.session_state["int_brg_diffusion_signal"] = st.selectbox(
-                    "Depth-diffusion signal", SIGNAL_OPTIONS,
-                    index=SIGNAL_OPTIONS.index(canonical_signal(st.session_state.get("int_brg_diffusion_signal", "constant"))),
-                    key="widget_brg_diffusion_signal",
-                    help="How cells ratchet between dormancy depths: constant (legacy symmetric), "
-                         "or nutrient/density-driven — prolonged starvation drives cells to the "
-                         "deepest layer (delayed death phase).")
-                _bds2 = canonical_signal(st.session_state["int_brg_dorm_signal"])
-                _brs2 = canonical_signal(st.session_state["int_brg_resus_signal"])
-                if "nutrient" in (_bds2, _brs2) or "nutrient+density" in (_bds2, _brs2):
-                    st.session_state["int_brg_dorm_ks"] = st.number_input(
-                        "Dormancy nutrient half-saturation (Ks)",
-                        value=float(st.session_state.get("int_brg_dorm_ks", st.session_state.get("int_monod_constant", 0.3))),
-                        min_value=0.0, format="%g",
-                        help="Defaults to the growth Monod constant (inherited); change to decouple.")
-                if _bds2 in ("density", "nutrient+density") or _brs2 in ("density", "nutrient+density"):
-                    st.session_state["int_brg_dorm_kdorm"] = st.number_input(
-                        "Dormancy density threshold (CFU·mL⁻¹)",
-                        value=float(st.session_state.get("int_brg_dorm_kdorm", 1e8)),
-                        min_value=0.0, format="%.2e",
-                        help="Density threshold (CFU/mL) for the density dormancy signal. 0 inherits growth K.")
+                st.caption("Dormancy/resuscitation/diffusion **signal functions** (+ their Ks / "
+                           "density threshold) are model-wide — set them in the topmost builder panel.")
 
             # Renders the loci count
             st.markdown("---")
@@ -701,32 +721,8 @@ def render_model_builder(inoculum_mode="magnitude"):
                         strains[i]["resuscitation_rate"] = st.number_input("Resuscitation rate (h⁻¹)", value=float(strains[i].get("resuscitation_rate", 0.1)), key=f"ss_str_wake_{i}")
                         strains[i]["dormancy_diffusion_rate"] = st.number_input("Depth diffusion (h⁻¹)", value=float(strains[i].get("dormancy_diffusion_rate", 0.05)), key=f"ss_str_diff_{i}")
                         strains[i]["death_rate_D"] = st.number_input("Dormant death rate (h⁻¹)", value=float(strains[i].get("death_rate_D", 0.0)), step=0.01, key=f"ss_str_death_d_{i}")
-                        _sds = canonical_signal(strains[i].get("dormancy_signal", "nutrient"))
-                        _srs = canonical_signal(strains[i].get("resuscitation_signal", "nutrient"))
-                        strains[i]["dormancy_signal"] = st.selectbox(
-                            "Dormancy signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_sds), key=f"ss_str_dsig_{i}",
-                            help="Model-wide dormancy entry signal (taken from the first dormancy-enabled strain).")
-                        strains[i]["resuscitation_signal"] = st.selectbox(
-                            "Resuscitation signal", SIGNAL_OPTIONS, index=SIGNAL_OPTIONS.index(_srs), key=f"ss_str_rsig_{i}")
-                        strains[i]["diffusion_signal"] = st.selectbox(
-                            "Depth-diffusion signal", SIGNAL_OPTIONS,
-                            index=SIGNAL_OPTIONS.index(canonical_signal(strains[i].get("diffusion_signal", "constant"))),
-                            key=f"ss_str_difsig_{i}",
-                            help="Depth-diffusion signal (from the first dormancy-enabled strain).")
-                        _sds2 = canonical_signal(strains[i]["dormancy_signal"])
-                        _srs2 = canonical_signal(strains[i]["resuscitation_signal"])
-                        if "nutrient" in (_sds2, _srs2) or "nutrient+density" in (_sds2, _srs2):
-                            strains[i]["dormancy_monod_constant"] = st.number_input(
-                                "Dormancy nutrient half-saturation (Ks)",
-                                value=float(strains[i].get("dormancy_monod_constant", st.session_state.get("int_monod_constant", 0.3))),
-                                min_value=0.0, format="%g", key=f"ss_str_dks_{i}",
-                                help="Defaults to the growth Monod constant (inherited); change to decouple.")
-                        if _sds2 in ("density", "nutrient+density") or _srs2 in ("density", "nutrient+density"):
-                            strains[i]["dormancy_carrying_capacity"] = st.number_input(
-                                "Dormancy density threshold (CFU·mL⁻¹)",
-                                value=float(strains[i].get("dormancy_carrying_capacity", 1e8)),
-                                min_value=0.0, format="%.2e", key=f"ss_str_dcc_{i}",
-                                help="Density threshold (CFU/mL). 0 inherits growth K.")
+                        # Signal FUNCTIONS + their Ks/threshold are model-wide (topmost panel);
+                        # only per-strain rates live here.
 
                     if len(phages) > 0:
                         st.markdown("**Phage Adsorption Rates**")
@@ -1230,6 +1226,41 @@ def render():
                     value=float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8)),
                     format="%.1e",
                 )
+                # Nutrient-dependent OD absorptivity (Geng et al. 2024): live cells shrink as
+                # nutrients deplete, so OD-per-cell falls into stationary phase (OD declines even
+                # at constant CFU). OFF by default (equal asymptotes = constant OD/CFU).
+                st.session_state["int_od_nutrient_enabled"] = st.checkbox(
+                    "Nutrient-dependent OD (cell-size shrinkage)",
+                    value=bool(st.session_state.get("int_od_nutrient_enabled", False)),
+                    key="widget_od_nutrient_enabled",
+                    help="Scale OD-per-cell by a Hill function of nutrient S: eps(S) goes from the "
+                         "stationary-phase absorptivity (low S) to the exponential-phase absorptivity "
+                         "(high S). Needs a nutrient-tracking growth signal. Equal asymptotes = off.")
+                if st.session_state["int_od_nutrient_enabled"]:
+                    _oc1, _oc2 = st.columns(2)
+                    with _oc1:
+                        st.session_state["int_od_abs_exp"] = st.number_input(
+                            "Exponential-phase absorptivity", min_value=0.0,
+                            value=float(st.session_state.get("int_od_abs_exp", 1.0)), step=0.1, format="%g",
+                            help="OD-per-cell at high nutrient (exponential growth). Reference = 1.0.")
+                        st.session_state["int_od_abs_S50"] = st.number_input(
+                            "OD transition nutrient level (S50)", min_value=0.0,
+                            value=float(st.session_state.get("int_od_abs_S50", 0.3)), step=0.05, format="%g",
+                            help="Nutrient S at the half-transition of eps(S).")
+                    with _oc2:
+                        st.session_state["int_od_abs_stat"] = st.number_input(
+                            "Stationary-phase absorptivity", min_value=0.0,
+                            value=float(st.session_state.get("int_od_abs_stat", 0.4)), step=0.1, format="%g",
+                            help="OD-per-cell at low nutrient (stationary). < exponential → OD falls as "
+                                 "nutrients deplete even at constant CFU.")
+                        st.session_state["int_od_abs_hill"] = st.number_input(
+                            "OD transition sharpness (Hill)", min_value=0.1,
+                            value=float(st.session_state.get("int_od_abs_hill", 2.0)), step=0.5, format="%g",
+                            help="Hill exponent of the eps(S) sigmoid.")
+                    if st.session_state.get("int_growth_function", "monod_growth") not in (
+                            "monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"):
+                        st.caption("⚠ Nutrient-dependent OD needs a nutrient-tracking growth signal "
+                                   "(S must vary) — otherwise eps(S) is constant.")
 
         # Dosing Schedule
         with col2:

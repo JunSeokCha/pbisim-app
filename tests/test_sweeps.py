@@ -461,8 +461,70 @@ def test_sweep_all_broadcast_and_categorization():
 
     cats = categorize_sweep_params(p)
     assert set(cats) <= {"Bacterial", "Phage", "Immune", "Nutrient & environment",
-                         "Antibiotic", "OD & debris", "Initial conditions", "Structure & pre-run", "Other"}
+                         "Antibiotic", "OD & debris", "Initial conditions", "Structure & pre-run",
+                         "Signal functions", "Other"}
     # every parameter lands in exactly one category
     assert sum(len(v) for v in cats.values()) == len(p)
     assert sweep_category("Adsorption (ALL strains × phages)", p[mk]) == "Phage"
     assert sweep_category("Growth Rate - WT", {"type": "array1d", "field": "growth_rates"}) == "Bacterial"
+
+
+def test_categorical_sweep_parameters_registered():
+    """get_sweep_parameters emits categorical signal-function entries grouped under
+    'Signal functions', each carrying a session_key + options map."""
+    import numpy as np
+    from pbisim import ModelBuilder
+    from pbisim_app.sweep_helper import (
+        get_sweep_parameters, categorize_sweep_params, sweep_category,
+    )
+    cfg = ModelBuilder(n_bacteria=1, n_phages=1).build()
+    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}], phages=[{"name": "P0"}])
+    for lbl, key in [("Growth signal function", "int_growth_function"),
+                     ("Death signal function", "int_death_function"),
+                     ("Lysis signal function", "int_lysis_function"),
+                     ("Dormancy signal function", "int_dormancy_signal"),
+                     ("Resuscitation signal function", "int_resuscitation_signal"),
+                     ("Depth-diffusion signal function", "int_diffusion_signal")]:
+        assert lbl in p, lbl
+        assert p[lbl]["type"] == "categorical"
+        assert p[lbl]["session_key"] == key
+        assert isinstance(p[lbl]["options"], dict) and p[lbl]["options"]
+        assert sweep_category(lbl, p[lbl]) == "Signal functions"
+    cats = categorize_sweep_params(p)
+    assert "Growth signal function" in cats["Signal functions"]
+
+
+def test_categorical_growth_signal_sweep_runs():
+    """A categorical sweep over the growth signal function rebuilds+solves once per
+    chosen option and stores a categorical result with a bar-chartable summary."""
+    at = AppTest.from_file(APP, default_timeout=240)
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    # pick the Signal-functions category → Growth signal function
+    at.session_state["p1_cat"] = "Signal functions"
+    at.run()
+    at.session_state["p1_sweep_label"] = "Growth signal function"
+    at.run()
+    # limit to two options to keep the run fast + deterministic
+    at.session_state["ps_1d_cat_opts"] = ["nutrient (Monod)", "constant (unlimited)"]
+    at.run()
+    [b for b in at.button if "Run Categorical Sweep" in (b.label or "")][0].click().run()
+    res = at.session_state["param_sweep_result"]
+    assert res["type"] == "categorical"
+    assert len(res["summary"]) == 2
+    assert {r["Option"].split(" (≡")[0] for r in res["summary"]} == {
+        "nutrient (Monod)", "constant (unlimited)"}
+    assert len(res["trajectories"]) == 2
+    assert len(at.exception) == 0
+    # the sweep leaves no residue on the live model key (restored to the default)
+    assert ("int_growth_function" not in at.session_state
+            or at.session_state["int_growth_function"] == "monod_growth")
+
+    # Reproduction code for a categorical sweep must be the explanatory message, NOT a
+    # numeric linspace/apply_sweep_parameter loop (which silently produces identical runs
+    # — the "continuous sweep" bug).
+    _codes = [c.value for c in at.code]
+    assert any("Categorical (signal-function) sweep" in v for v in _codes)
+    assert not any(("np.linspace" in v or "np.logspace" in v) and "apply_sweep_parameter" in v
+                   for v in _codes)

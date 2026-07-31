@@ -480,6 +480,9 @@ def load_preset_to_state(params: dict):
     st.session_state["int_growth_function"] = _gf
     st.session_state["int_track_nutrients"] = _gf in ("monod_growth", "monod_logistic_growth")
     st.session_state["int_death_function"] = params.get("death_function_name", "constant_death")
+    # Lysis signal: frac_lysis (nutrient-coupled) vs constant_lysis (default).
+    st.session_state["int_lysis_function"] = params.get("lysis_function_name", "constant_lysis")
+    st.session_state["int_monod_constant_lysis"] = params.get("monod_constant_lysis", 0.3) or 0.3
     st.session_state["int_density_total_cells"] = params.get("density_signal_uses_total_cells", False)
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
@@ -510,6 +513,12 @@ def load_preset_to_state(params: dict):
     st.session_state["int_debris_kdis"] = params.get("debris_kdis", 0.01)
     st.session_state["int_dormant_od_fraction"] = params.get("dormant_od_fraction", 1.0)
     st.session_state["int_od_to_cfu_conversion_factor"] = params.get("od_to_cfu_conversion_factor", 2e8)
+    # Nutrient-dependent OD absorptivity (on when the config carries a function; else off).
+    st.session_state["int_od_nutrient_enabled"] = params.get("od_absorptivity_function") is not None
+    st.session_state["int_od_abs_exp"] = params.get("od_abs_exp", 1.0) or 1.0
+    st.session_state["int_od_abs_stat"] = params.get("od_abs_stat", 0.4) or 0.4
+    st.session_state["int_od_abs_S50"] = params.get("od_abs_S50", 0.3) or 0.3
+    st.session_state["int_od_abs_hill"] = params.get("od_abs_hill", 2.0) or 2.0
 
     # 5. Strains list
     strains_list = []
@@ -534,6 +543,22 @@ def load_preset_to_state(params: dict):
             }
         )
     st.session_state["int_strains"] = strains_list
+
+    # Dormancy signal FUNCTIONS + Ks/threshold are now MODEL-WIDE. Seed them from a
+    # config-level value if present, else from the first strain's stored (legacy per-strain)
+    # signal — so old presets/scenarios keep their dormancy-signal choice.
+    _pf = next((s for s in strains_list if s.get("dormancy_enabled")),
+               strains_list[0] if strains_list else {})
+    st.session_state["int_dormancy_signal"] = canonical_signal(
+        params.get("dormancy_signal", _pf.get("dormancy_signal", "nutrient")))
+    st.session_state["int_resuscitation_signal"] = canonical_signal(
+        params.get("resuscitation_signal", _pf.get("resuscitation_signal", "nutrient")))
+    st.session_state["int_diffusion_signal"] = canonical_signal(
+        params.get("diffusion_signal", _pf.get("diffusion_signal", "constant")))
+    st.session_state["int_dormancy_monod_constant"] = float(
+        params.get("dormancy_monod_constant", _pf.get("dormancy_monod_constant", 0.0)) or 0.0)
+    st.session_state["int_dormancy_carrying_capacity"] = float(
+        params.get("dormancy_carrying_capacity", _pf.get("dormancy_carrying_capacity", 1e8)) or 1e8)
 
     # 6. Phages list
     phages_list = []
@@ -674,7 +699,6 @@ def apply_ai_configuration(config: dict) -> str:
             st.session_state["int_brg_dorm_rate"] = base.get("dormancy_rate", 0.001)
             st.session_state["int_brg_resus_rate"] = base.get("resuscitation_rate", 0.1)
             st.session_state["int_brg_diff_rate"] = base.get("dormancy_diffusion_rate", 0.05)
-            st.session_state["int_brg_diffusion_signal"] = base.get("diffusion_signal", "constant")
             st.session_state["int_brg_death_rate_B"] = base.get("death_rate_B", 0.0)
             st.session_state["int_brg_death_rate_D"] = base.get("death_rate_D", 0.0)
             st.session_state["int_brg_use_eq_ic"] = bool(config.get("equilibrium_ic", False))
@@ -1168,10 +1192,23 @@ DEMO_MODELS = [
             "int_antibiotics": [],
             "int_track_nutrients": True,
             "int_growth_function": "monod_growth",
+            "int_lysis_function": "constant_lysis",
+            "int_monod_constant_lysis": 0.3,
+            "int_dormancy_signal": "nutrient",
+            "int_resuscitation_signal": "nutrient",
+            "int_diffusion_signal": "constant",
+            "int_dormancy_monod_constant": 0.0,
+            "int_dormancy_carrying_capacity": 1e8,
             "int_monod_constant": 0.3,
+            "int_density_growth_constant": 1e9,
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
+            "int_od_nutrient_enabled": False,
+            "int_od_abs_exp": 1.0,
+            "int_od_abs_stat": 0.4,
+            "int_od_abs_S50": 0.3,
+            "int_od_abs_hill": 2.0,
             "int_debris_enabled": True,
             "int_debris_u": 0.4,
             "int_debris_v": 0.2,
@@ -1200,10 +1237,23 @@ DEMO_MODELS = [
             "int_antibiotics": [],
             "int_track_nutrients": True,
             "int_growth_function": "monod_growth",
+            "int_lysis_function": "constant_lysis",
+            "int_monod_constant_lysis": 0.3,
+            "int_dormancy_signal": "nutrient",
+            "int_resuscitation_signal": "nutrient",
+            "int_diffusion_signal": "constant",
+            "int_dormancy_monod_constant": 0.0,
+            "int_dormancy_carrying_capacity": 1e8,
             "int_monod_constant": 0.3,
+            "int_density_growth_constant": 1e9,
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
+            "int_od_nutrient_enabled": False,
+            "int_od_abs_exp": 1.0,
+            "int_od_abs_stat": 0.4,
+            "int_od_abs_S50": 0.3,
+            "int_od_abs_hill": 2.0,
             "int_debris_enabled": True,
             "int_debris_u": 0.4,
             "int_debris_v": 0.2,
@@ -1333,7 +1383,17 @@ GROWTH_SIGNALS = {
     "nutrient + density":          ("monod_logistic_growth", True),
     "density (logistic)":          ("logistic_growth", False),
     "constant (unlimited)":        ("constant_growth", False),
+    # Newer pbisim growth functions (all nutrient-tracking):
+    "density-throttled (Monod × 1/(1+ΣB/Kd))": ("density_throttled_growth", True),
+    "Gompertz (nutrient)":         ("gompertz_growth", True),
 }
+
+# Growth functions that read nutrient S (need track_nutrients) and that need a carrying
+# capacity / S∞. gompertz_growth REUSES monod_constant as its shape k and carrying_capacity
+# as its inflection S∞ (a pbisim convention), so it appears in both sets.
+_GROWTH_NUTRIENT = {"monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"}
+_GROWTH_NEEDS_K = {"logistic_growth", "monod_logistic_growth", "gompertz_growth"}
+_GROWTH_NEEDS_KD = {"density_throttled_growth"}
 
 
 # Death-signal options → pbisim death function name. constant_death (default) is the
@@ -1345,6 +1405,43 @@ DEATH_SIGNALS = {
     "density (crowding)":           "density_dependent_death",
     "nutrient + density":           "nutrient_and_density_death",
 }
+
+
+# Lysis-signal options → pbisim lysis-progression function name. `constant_lysis` (the
+# engine default) makes the latent→lysis chain progress at a fixed rate (phi_lysis = 1.0);
+# `frac_lysis` couples it to nutrients (phi_lysis = S/(Ks_lysis + S)), slowing lysis when
+# nutrients are scarce. frac_lysis reads S, so it needs a nutrient-tracking growth signal.
+LYSIS_SIGNALS = {
+    "constant":            "constant_lysis",
+    "nutrient (Monod)":    "frac_lysis",
+}
+
+
+def lysis_signal_function(name):
+    """pbisim lysis-progression function object for a stored name, or ``None`` (the engine
+    default, constant_lysis) — ModelConfig treats ``lysis_progression_function=None`` as
+    constant lysis, so we don't import a constant_lysis object."""
+    if name == "frac_lysis":
+        from pbisim import frac_lysis
+        return frac_lysis
+    return None
+
+
+def lysis_kwargs():
+    """Lysis-progression config for the selected lysis signal, as ModelConfig fields
+    (``lysis_progression_function`` + ``monod_constant_lysis``). frac_lysis is
+    nutrient-coupled, so it is coerced to constant when nutrients aren't tracked (same
+    guard as the dormancy signals). Returns ``{lysis_progression_function, monod_constant_lysis,
+    coerced}`` — ``coerced`` True when a nutrient signal was downgraded."""
+    name = st.session_state.get("int_lysis_function", "constant_lysis")
+    track = st.session_state.get("int_growth_function", "monod_growth") in (
+        "monod_growth", "monod_logistic_growth")
+    coerced = False
+    if name == "frac_lysis" and not track:
+        name, coerced = "constant_lysis", True
+    fn = lysis_signal_function(name)
+    ks = st.session_state.get("int_monod_constant_lysis", 0.3) if name == "frac_lysis" else None
+    return {"lysis_progression_function": fn, "monod_constant_lysis": ks, "coerced": coerced}
 
 
 def canonical_signal(v):
@@ -1381,13 +1478,15 @@ def growth_nutrient_kwargs():
     for the Direct builder (split into with_growth_function + with_nutrient) and for
     BRG / StrainSet ``to_config(**extra_config_kwargs)`` (forwarded to ModelConfig).
     """
-    from pbisim import monod_growth, logistic_growth, constant_growth, monod_logistic_growth
+    from pbisim import (monod_growth, logistic_growth, constant_growth, monod_logistic_growth,
+                        density_throttled_growth, gompertz_growth)
     fns = {"monod_growth": monod_growth, "logistic_growth": logistic_growth,
-           "constant_growth": constant_growth, "monod_logistic_growth": monod_logistic_growth}
+           "constant_growth": constant_growth, "monod_logistic_growth": monod_logistic_growth,
+           "density_throttled_growth": density_throttled_growth, "gompertz_growth": gompertz_growth}
     name = st.session_state.get("int_growth_function", "monod_growth")
     fn = fns.get(name, monod_growth)
-    nutrient_based = name in ("monod_growth", "monod_logistic_growth")
-    needs_K = name in ("logistic_growth", "monod_logistic_growth")
+    nutrient_based = name in _GROWTH_NUTRIENT
+    needs_K = name in _GROWTH_NEEDS_K
     # monod_constant + recycle_fraction are always supplied — StrainSet.to_config
     # requires them (they are simply unused by non-nutrient growth functions).
     kw = {
@@ -1405,6 +1504,8 @@ def growth_nutrient_kwargs():
         kw["s_out"] = st.session_state.get("int_s_out", 0.0)
     if needs_K:
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+    if name in _GROWTH_NEEDS_KD:  # density_throttled_growth's hyperbolic throttle constant
+        kw["density_growth_constant"] = st.session_state.get("int_density_growth_constant", 1e9)
     return kw
 
 
@@ -1681,7 +1782,12 @@ def build_nominal_config_from_gui():
     n_latent = int(st.session_state.get("int_n_latent", 5))  # latency compartments (all builders)
 
     # ── Resolve solver settings ───────────────────────────────────────────────
-    track_nutrients = st.session_state.get("int_track_nutrients", True)
+    # track_nutrients is a property of the chosen growth signal (a non-nutrient growth
+    # function freezes S), not an independent flag — derive it from int_growth_function
+    # so the dormancy-compat coercion below stays consistent with what with_nutrient()
+    # actually sets (int_track_nutrients can drift, e.g. when only the growth function
+    # is changed, as in a categorical growth-signal sweep).
+    track_nutrients = st.session_state.get("int_growth_function", "monod_growth") in _GROWTH_NUTRIENT
     superinfection = st.session_state.get("int_superinfection", False)
     
     # ── Resolve Debris parameters ─────────────────────────────────────────────
@@ -1697,7 +1803,17 @@ def build_nominal_config_from_gui():
         # explicitly to with_od_debris() below. (Previously omitted here → BRG/StrainSet
         # silently ignored int_dormant_od_fraction and used the engine default 1.0.)
         extra_kwargs["dormant_od_fraction"] = st.session_state.get("int_dormant_od_fraction", 1.0)
-        
+        # Nutrient-dependent OD absorptivity eps(S) — get_od scales the cell term by it.
+        # BRG/StrainSet forward these ModelConfig fields via to_config; Direct instead calls
+        # with_nutrient_dependent_od() below (ModelBuilder.build takes no kwargs).
+        if st.session_state.get("int_od_nutrient_enabled", False):
+            from pbisim import nutrient_dependent_absorptivity
+            extra_kwargs["od_absorptivity_function"] = nutrient_dependent_absorptivity
+            extra_kwargs["od_abs_exp"] = st.session_state.get("int_od_abs_exp", 1.0)
+            extra_kwargs["od_abs_stat"] = st.session_state.get("int_od_abs_stat", 0.4)
+            extra_kwargs["od_abs_S50"] = st.session_state.get("int_od_abs_S50", 0.3)
+            extra_kwargs["od_abs_hill"] = st.session_state.get("int_od_abs_hill", 2.0)
+
     # ── Resolve Dose Schedule ─────────────────────────────────────────────────
     dose_events = []
     for d in doses:
@@ -1754,7 +1870,14 @@ def build_nominal_config_from_gui():
             death_rate_D=np.array(death_rates_D) if any(dd > 0 for dd in death_rates_D) else None,
             death_function=_dthk["death_function"],
         )
-        
+
+        # Lysis signal — nutrient-coupled (frac_lysis) vs the default constant lysis.
+        _lyk = lysis_kwargs()
+        if _lyk["lysis_progression_function"] is not None:
+            builder = rec.call(
+                "builder", builder, "with_lysis_function",
+                _lyk["lysis_progression_function"], Ks_lysis=_lyk["monod_constant_lysis"])
+
         # Dormancy
         any_dormancy = any(s.get("dormancy_enabled", False) for s in strains)
         if any_dormancy:
@@ -1762,11 +1885,12 @@ def build_nominal_config_from_gui():
             resus_rates = [s["resuscitation_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             diff_rates = [s["dormancy_diffusion_rate"] if s.get("dormancy_enabled", False) else 0.0 for s in strains]
             enabled_strains = [s for s in strains if s.get("dormancy_enabled", False)]
-            ds = canonical_signal(enabled_strains[0]["dormancy_signal"]) if enabled_strains else "nutrient"
-            rs = canonical_signal(enabled_strains[0]["resuscitation_signal"]) if enabled_strains else "nutrient"
-            dfs = canonical_signal(enabled_strains[0].get("diffusion_signal", "constant")) if enabled_strains else "constant"
-            _dorm_ks = float(enabled_strains[0].get("dormancy_monod_constant", 0.0)) if enabled_strains else 0.0
-            _dorm_kdorm = float(enabled_strains[0].get("dormancy_carrying_capacity", 0.0)) if enabled_strains else 0.0
+            # Dormancy signal functions + Ks/threshold are model-wide (single engine fields).
+            ds = canonical_signal(st.session_state.get("int_dormancy_signal", "nutrient"))
+            rs = canonical_signal(st.session_state.get("int_resuscitation_signal", "nutrient"))
+            dfs = canonical_signal(st.session_state.get("int_diffusion_signal", "constant"))
+            _dorm_ks = float(st.session_state.get("int_dormancy_monod_constant", 0.0) or 0.0)
+            _dorm_kdorm = float(st.session_state.get("int_dormancy_carrying_capacity", 0.0) or 0.0)
             # nutrient dormancy/diffusion signals need S tracked; coerce when it isn't.
             ds, _cd = compat_dormancy_signal(ds, track_nutrients)
             rs, _cr = compat_dormancy_signal(rs, track_nutrients)
@@ -1934,6 +2058,14 @@ def build_nominal_config_from_gui():
                 od_to_cfu_conversion_factor=extra_kwargs.get("od_to_cfu_conversion_factor", 2e8),
                 dormant_od_fraction=st.session_state.get("int_dormant_od_fraction", 1.0),
             )
+            # Nutrient-dependent OD absorptivity eps(S) — pairs with with_od_debris.
+            if st.session_state.get("int_od_nutrient_enabled", False):
+                builder = rec.call(
+                    "builder", builder, "with_nutrient_dependent_od",
+                    exponential=st.session_state.get("int_od_abs_exp", 1.0),
+                    stationary=st.session_state.get("int_od_abs_stat", 0.4),
+                    S50=st.session_state.get("int_od_abs_S50", 0.3),
+                    hill=st.session_state.get("int_od_abs_hill", 2.0))
 
         config = rec.result("cfg", "builder", builder, "build")
 
@@ -2057,14 +2189,19 @@ def build_nominal_config_from_gui():
 
         # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
         extra_kwargs.update(growth_nutrient_kwargs())
-        # Dormancy signal functions (+ Ks / K_dorm) from the BRG selectors.
+        # Dormancy signal functions (+ Ks / K_dorm) — model-wide (topmost panel).
         extra_kwargs.update(mode_dormancy_kwargs(
-            st.session_state.get("int_brg_dorm_signal", "nutrient"),
-            st.session_state.get("int_brg_resus_signal", "nutrient"),
-            float(st.session_state.get("int_brg_dorm_ks", 0.0)),
-            float(st.session_state.get("int_brg_dorm_kdorm", 0.0)),
+            st.session_state.get("int_dormancy_signal", "nutrient"),
+            st.session_state.get("int_resuscitation_signal", "nutrient"),
+            float(st.session_state.get("int_dormancy_monod_constant", 0.0) or 0.0),
+            float(st.session_state.get("int_dormancy_carrying_capacity", 0.0) or 0.0),
         ))
         extra_kwargs.update(death_kwargs())  # death signal function (+ K for density death)
+        # Lysis signal (nutrient-coupled frac_lysis vs the default constant lysis).
+        _lyk = lysis_kwargs()
+        extra_kwargs["lysis_progression_function"] = _lyk["lysis_progression_function"]
+        if _lyk["monod_constant_lysis"] is not None:
+            extra_kwargs["monod_constant_lysis"] = _lyk["monod_constant_lysis"]
 
         # Dose schedule
         if schedule:
@@ -2107,7 +2244,7 @@ def build_nominal_config_from_gui():
         # directly from the BRG diffusion selector (post-build).
         if dormancy_enabled:
             config = set_diffusion_functions(
-                config, st.session_state.get("int_brg_diffusion_signal", "constant"), rec=rec)
+                config, st.session_state.get("int_diffusion_signal", "constant"), rec=rec)
 
         # Resolve initial densities
         if st.session_state.get("int_brg_use_eq_ic", False):
@@ -2247,16 +2384,19 @@ def build_nominal_config_from_gui():
 
         # Growth signal + nutrient config (forwarded to ModelConfig via to_config).
         extra_kwargs.update(growth_nutrient_kwargs())
-        # Dormancy signal functions (+ Ks / K_dorm) from the first dormancy-enabled
-        # strain's selectors (the engine dormancy function is model-wide).
-        _ss_dorm = [s for s in strains if s.get("dormancy_enabled", False)]
+        # Dormancy signal functions (+ Ks / K_dorm) — model-wide (topmost panel).
         extra_kwargs.update(mode_dormancy_kwargs(
-            _ss_dorm[0].get("dormancy_signal", "nutrient") if _ss_dorm else "nutrient",
-            _ss_dorm[0].get("resuscitation_signal", "nutrient") if _ss_dorm else "nutrient",
-            float(_ss_dorm[0].get("dormancy_monod_constant", 0.0)) if _ss_dorm else 0.0,
-            float(_ss_dorm[0].get("dormancy_carrying_capacity", 0.0)) if _ss_dorm else 0.0,
+            st.session_state.get("int_dormancy_signal", "nutrient"),
+            st.session_state.get("int_resuscitation_signal", "nutrient"),
+            float(st.session_state.get("int_dormancy_monod_constant", 0.0) or 0.0),
+            float(st.session_state.get("int_dormancy_carrying_capacity", 0.0) or 0.0),
         ))
         extra_kwargs.update(death_kwargs())  # death signal function (+ K for density death)
+        # Lysis signal (nutrient-coupled frac_lysis vs the default constant lysis).
+        _lyk = lysis_kwargs()
+        extra_kwargs["lysis_progression_function"] = _lyk["lysis_progression_function"]
+        if _lyk["monod_constant_lysis"] is not None:
+            extra_kwargs["monod_constant_lysis"] = _lyk["monod_constant_lysis"]
 
         # Dose schedule
         if schedule:
@@ -2285,8 +2425,11 @@ def build_nominal_config_from_gui():
             **extra_kwargs  # includes growth_function + monod_constant/recycle/etc.
         )
         # StrainSet.to_config doesn't expose the depth-diffusion signal — set it on the
-        # config directly from the per-strain diffusion_signal (post-build).
-        config = apply_diffusion_signal(config, strains, rec=rec)
+        # config directly from the model-wide diffusion signal (post-build), when any
+        # strain has dormancy enabled.
+        if any(s.get("dormancy_enabled", False) for s in strains):
+            config = set_diffusion_functions(
+                config, st.session_state.get("int_diffusion_signal", "constant"), rec=rec)
 
         initial_B = np.array([s["initial_B"] for s in strains])
         initial_P = np.array([p["initial_P"] for p in phages])
@@ -2553,6 +2696,29 @@ def generate_param_sweep_reproduction_code() -> str:
     if not label or label not in sweep_params:
         return "# Configure and run a 1D parameter sweep first."
     meta = sweep_params[label]
+
+    if meta.get("type") == "categorical":
+        # A categorical (signal-function) sweep changes which growth/death/lysis/dormancy
+        # function the model uses. That choice is resolved by the full model builder at
+        # BUILD time (it also toggles track_nutrients and coerces incompatible dormancy
+        # signals), so — unlike a numeric sweep — it can't be reproduced by mutating a
+        # single already-built config in a standalone loop. The app therefore rebuilds
+        # the model per option internally. Reproduction code is not exported for it.
+        _opts = list(meta.get("options", {}))
+        return (
+            "# ── Categorical (signal-function) sweep ──\n"
+            f"# Swept: {label}\n"
+            f"# Options compared: {_opts}\n"
+            "#\n"
+            "# No standalone reproduction script is exported for categorical sweeps. The\n"
+            "# signal function is resolved by the full model builder at build time (it also\n"
+            "# sets track_nutrients and coerces incompatible dormancy signals), so it can't\n"
+            "# be reproduced by mutating one built config in a loop — the app rebuilds the\n"
+            "# model per option. To script this yourself, rebuild the model for each option\n"
+            "# (e.g. call ModelBuilder.with_growth_function(...) / .with_dormancy(...) etc.\n"
+            "# per option) rather than editing a single config's function fields.\n"
+            "#\n"
+            "# The 'View Python Reproduction Code' export covers 1D NUMERIC sweeps.")
 
     t_prerun = st.session_state.get("int_t_prerun", 0.0)
     imports, code = _repro_base_config_block(
@@ -2838,6 +3004,9 @@ __all__ = [
     'SIGNAL_OPTIONS',
     'GROWTH_SIGNALS',
     'DEATH_SIGNALS',
+    'LYSIS_SIGNALS',
+    'lysis_signal_function',
+    'lysis_kwargs',
     'canonical_signal',
     'compat_dormancy_signal',
     'growth_nutrient_kwargs',

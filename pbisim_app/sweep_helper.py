@@ -364,12 +364,32 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         ]:
             params[label] = {"type": "pd_array2d_broadcast", "field": field}
 
+    # ── Categorical (signal-function) sweeps ──────────────────────────────────
+    # Model-wide signal selectors are discrete choices, not numerics. A categorical entry
+    # carries its option set + the session key that selects it; param_sweeps sweeps by
+    # setting that key and REBUILDING per option (the signal is resolved at build time).
+    from pbisim_app.common import GROWTH_SIGNALS, DEATH_SIGNALS, LYSIS_SIGNALS, SIGNAL_OPTIONS
+    _sig_opts = {o: o for o in SIGNAL_OPTIONS}
+    params["Growth signal function"] = {
+        "type": "categorical", "session_key": "int_growth_function",
+        "options": {L: fn for L, (fn, _t) in GROWTH_SIGNALS.items()}}
+    params["Death signal function"] = {
+        "type": "categorical", "session_key": "int_death_function", "options": dict(DEATH_SIGNALS)}
+    params["Lysis signal function"] = {
+        "type": "categorical", "session_key": "int_lysis_function", "options": dict(LYSIS_SIGNALS)}
+    params["Dormancy signal function"] = {
+        "type": "categorical", "session_key": "int_dormancy_signal", "options": _sig_opts}
+    params["Resuscitation signal function"] = {
+        "type": "categorical", "session_key": "int_resuscitation_signal", "options": _sig_opts}
+    params["Depth-diffusion signal function"] = {
+        "type": "categorical", "session_key": "int_diffusion_signal", "options": _sig_opts}
+
     return params
 
 
 _SWEEP_CATEGORY_ORDER = [
-    "Bacterial", "Phage", "Immune", "Nutrient & environment",
-    "Antibiotic", "OD & debris", "Initial conditions", "Structure & pre-run", "Other",
+    "Bacterial", "Phage", "Immune", "Nutrient & environment", "Antibiotic",
+    "OD & debris", "Initial conditions", "Structure & pre-run", "Signal functions", "Other",
 ]
 
 
@@ -378,6 +398,8 @@ def sweep_category(label: str, meta: dict) -> str:
     them (mirrors the Interactive Simulator's parameter sections)."""
     t = meta.get("type", "")
     field = meta.get("field", "")
+    if t == "categorical":
+        return "Signal functions"
     if t in ("initial_B", "initial_B_broadcast", "initial_P", "initial_S"):
         return "Initial conditions"
     if t in ("prerun", "dimension"):

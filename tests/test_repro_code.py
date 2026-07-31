@@ -30,11 +30,10 @@ def _run(growth_label, death_label, dorm_signal=None):
     _sel(at, "Growth signal function").set_value(growth_label)
     _sel(at, "Death signal function").set_value(death_label)
     if dorm_signal is not None:
-        # keyed Direct-mode dormancy widgets: seeding session_state before the next
-        # render makes the keyed widgets adopt the value.
+        # dormancy signal FUNCTIONS are model-wide now; the RATE enable stays per-strain.
         at.session_state["str_dorm_en_0"] = True
-        at.session_state["str_dsig_0"] = dorm_signal
-        at.session_state["str_rsig_0"] = dorm_signal
+        at.session_state["int_dormancy_signal"] = dorm_signal
+        at.session_state["int_resuscitation_signal"] = dorm_signal
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
@@ -105,12 +104,10 @@ def test_repro_brg_strainset_diffusion_signal(mode):
     _sel(at, "Growth signal function").set_value("nutrient (Monod)")
     if mode.startswith("Binary"):
         at.session_state["int_brg_dormancy_enabled"] = True
-        at.run()
-        at.session_state["widget_brg_diffusion_signal"] = "nutrient"
     else:
         at.session_state["ss_str_dorm_0"] = True
-        at.run()
-        at.session_state["ss_str_difsig_0"] = "nutrient"
+    at.run()
+    at.session_state["int_diffusion_signal"] = "nutrient"   # model-wide depth-diffusion signal
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
