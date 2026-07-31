@@ -87,6 +87,7 @@ pbisim-app/
 | Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → **filter rows**, **regroup** by chosen variables, aggregate replicates (**raw / mean / median + percentile band**) → overlay the current model vs observations (group multiselect) with live RMSE. Extensible observable registry (CFU/PFU/OD/luminescence). Phase A of the pbisim-fit integration. |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
 | Library | Two sections: **💾 Scenarios** (save/load full-config snapshots) and **🧬 Parts** (composable bacteria/phages/antibiotics — save a current entity, load into config, host-tagged phages); each export/import as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — they tracked the pbisim tutorials, which change independently.) |
+| Help | Curated in-app orientation (quick start, per-page guide, key concepts, troubleshooting) + the bundled `USER_GUIDE.md` rendered from disk at runtime (single source of truth). `views/help.py`; imported as `help_view` in the dispatch to avoid shadowing the builtin. |
 
 ---
 

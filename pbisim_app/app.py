@@ -248,7 +248,7 @@ with st.sidebar:
     if _pending_nav:
         st.session_state.current_page_radio = _pending_nav
 
-    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "Calibration", "AI Assistant", "Library"]
+    _pages = ["Interactive Simulator", "Dose-Response Sweeps", "Parameter Sweeps", "Clinical Trials & Cohorts", "Calibration", "AI Assistant", "Library", "Help"]
     # Scripting is an opt-in power-user page (arbitrary Python; research sandbox). Hidden
     # unless PBISIM_ENABLE_SCRIPTING is set — see scripting_enabled().
     if scripting_enabled():
@@ -488,6 +488,9 @@ elif st.session_state.current_page == "Parameter Sweeps":
 elif st.session_state.current_page == "Scripting" and scripting_enabled():
     from pbisim_app.views import scripting
     scripting.render()
+elif st.session_state.current_page == "Help":
+    from pbisim_app.views import help as help_view
+    help_view.render()
 elif st.session_state.current_page == "Interactive Simulator":
     from pbisim_app.views import simulator
     simulator.render()
