@@ -474,11 +474,28 @@ def load_preset_to_state(params: dict):
     st.session_state["int_carrying_capacity"] = params.get("carrying_capacity", 1e9)
     # Growth signal: prefer an explicit growth_function; else derive from the legacy
     # track_nutrients flag (True → Monod nutrient growth, False → logistic density).
+    _valid_gf = {fn for fn, _ in GROWTH_SIGNALS.values()}
     _gf = params.get("growth_function")
-    if _gf not in ("monod_growth", "logistic_growth", "constant_growth", "monod_logistic_growth"):
+    if _gf not in _valid_gf:
         _gf = "monod_growth" if params.get("track_nutrients", True) else "logistic_growth"
     st.session_state["int_growth_function"] = _gf
-    st.session_state["int_track_nutrients"] = _gf in ("monod_growth", "monod_logistic_growth")
+    st.session_state["int_track_nutrients"] = _gf in _GROWTH_NUTRIENT
+    st.session_state["int_density_growth_constant"] = params.get("density_growth_constant", 1e9) or 1e9
+    # Diauxic (sequential_monod) per-phase parameters, when present.
+    _seq_rf = params.get("growth_phase_rate_factors")
+    _seq_mc = params.get("growth_phase_monod")
+    _seq_th = params.get("growth_phase_thresholds")
+    if _gf == _GROWTH_SEQUENTIAL and _seq_rf is not None and _seq_mc is not None:
+        _rf = list(np.atleast_1d(np.asarray(_seq_rf, dtype=float)))
+        _mc = list(np.atleast_1d(np.asarray(_seq_mc, dtype=float)))
+        _th = list(np.atleast_1d(np.asarray(_seq_th, dtype=float))) if _seq_th is not None else []
+        st.session_state["int_growth_n_phases"] = len(_rf)
+        st.session_state["gp_monod_0"] = _mc[0] if _mc else 0.3
+        for _i in range(1, len(_rf)):
+            st.session_state[f"gp_rate_{_i}"] = _rf[_i]
+            st.session_state[f"gp_monod_{_i}"] = _mc[_i] if _i < len(_mc) else 0.3
+        for _i in range(len(_th)):
+            st.session_state[f"gp_thresh_{_i}"] = _th[_i]
     st.session_state["int_death_function"] = params.get("death_function_name", "constant_death")
     # Lysis signal: frac_lysis (nutrient-coupled) vs constant_lysis (default).
     st.session_state["int_lysis_function"] = params.get("lysis_function_name", "constant_lysis")
@@ -1064,6 +1081,10 @@ def render_model_snapshot(container=None, *, snapshot: dict | None = None):
         ("Growth rates (h⁻¹)", _ga("growth_rates")),
         ("Monod constant Ks", _ga("monod_constant")),
         ("Carrying capacity K", _ga("carrying_capacity")),
+        ("Density throttle Kd", _ga("density_growth_constant") if gfn == "density_throttled_growth" else None),
+        ("Diauxic rate factors", _ga("growth_phase_rate_factors") if gfn == "sequential_monod" else None),
+        ("Diauxic Monod Kᵢ", _ga("growth_phase_monod") if gfn == "sequential_monod" else None),
+        ("Diauxic thresholds θ", _ga("growth_phase_thresholds") if gfn == "sequential_monod" else None),
         ("Bacteria : resource ratio", _ga("bacteria_to_resource_ratio")),
         ("Track nutrients", g("int_track_nutrients", True)),
         ("Initial nutrient S₀", iS),
@@ -1201,6 +1222,7 @@ DEMO_MODELS = [
             "int_dormancy_carrying_capacity": 1e8,
             "int_monod_constant": 0.3,
             "int_density_growth_constant": 1e9,
+            "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1246,6 +1268,7 @@ DEMO_MODELS = [
             "int_dormancy_carrying_capacity": 1e8,
             "int_monod_constant": 0.3,
             "int_density_growth_constant": 1e9,
+            "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1386,14 +1409,18 @@ GROWTH_SIGNALS = {
     # Newer pbisim growth functions (all nutrient-tracking):
     "density-throttled (Monod × 1/(1+ΣB/Kd))": ("density_throttled_growth", True),
     "Gompertz (nutrient)":         ("gompertz_growth", True),
+    "sequential / diauxic (Monod)": ("sequential_monod", True),
 }
 
 # Growth functions that read nutrient S (need track_nutrients) and that need a carrying
 # capacity / S∞. gompertz_growth REUSES monod_constant as its shape k and carrying_capacity
 # as its inflection S∞ (a pbisim convention), so it appears in both sets.
-_GROWTH_NUTRIENT = {"monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"}
+_GROWTH_NUTRIENT = {"monod_growth", "monod_logistic_growth", "density_throttled_growth",
+                    "gompertz_growth", "sequential_monod"}
 _GROWTH_NEEDS_K = {"logistic_growth", "monod_logistic_growth", "gompertz_growth"}
 _GROWTH_NEEDS_KD = {"density_throttled_growth"}
+# sequential_monod (diauxic) needs the per-phase arrays instead of a single Monod K.
+_GROWTH_SEQUENTIAL = "sequential_monod"
 
 
 # Death-signal options → pbisim death function name. constant_death (default) is the
@@ -1470,6 +1497,39 @@ def compat_dormancy_signal(sig, track_nutrients):
     return sig, False  # constant / density are already compatible
 
 
+def sequential_growth_phase_params():
+    """Read the diauxic (``sequential_monod``) per-phase parameters from session state
+    and return ``(rate_factors, monod_constants, thresholds)`` as float ``np.ndarray``.
+
+    ``rate_factors`` / ``monod_constants`` have length X (= ``int_growth_n_phases``);
+    ``thresholds`` has length X-1. Phase 1's rate factor is pinned to 1.0 (the engine
+    treats phase 1 as the reference). Returns engine-ready arrays; the caller validates
+    (see :func:`validate_sequential_growth`).
+    """
+    n = int(st.session_state.get("int_growth_n_phases", 2) or 2)
+    n = max(2, n)
+    rf = [1.0]
+    mc = [float(st.session_state.get("gp_monod_0", st.session_state.get("int_monod_constant", 0.3)))]
+    for i in range(1, n):
+        rf.append(float(st.session_state.get(f"gp_rate_{i}", 0.5)))
+        mc.append(float(st.session_state.get(f"gp_monod_{i}", 0.3)))
+    th = [float(st.session_state.get(f"gp_thresh_{i}", 0.3 / (i + 1))) for i in range(n - 1)]
+    return np.asarray(rf, dtype=float), np.asarray(mc, dtype=float), np.asarray(th, dtype=float)
+
+
+def validate_sequential_growth(rate_factors, monod_constants, thresholds):
+    """Return an error string if the diauxic phase parameters are invalid (mirrors the
+    engine's ``with_sequential_growth`` checks), else ``None``."""
+    rf, mc, th = np.asarray(rate_factors), np.asarray(monod_constants), np.asarray(thresholds)
+    if len(rf) != len(mc):
+        return "Rate factors and Monod constants must have the same number of phases."
+    if len(th) != len(rf) - 1:
+        return "Thresholds must have one fewer entry than the phases (X−1)."
+    if len(th) and (not np.all(np.diff(th) < 0) or np.any(th <= 0) or np.any(th >= 1)):
+        return "Thresholds must be strictly decreasing and lie in (0, 1)."
+    return None
+
+
 def growth_nutrient_kwargs():
     """Growth function + nutrient config for the selected growth signal.
 
@@ -1477,12 +1537,16 @@ def growth_nutrient_kwargs():
     relevant monod_constant / carrying_capacity / recycle / s_in / s_out). Works both
     for the Direct builder (split into with_growth_function + with_nutrient) and for
     BRG / StrainSet ``to_config(**extra_config_kwargs)`` (forwarded to ModelConfig).
+    For ``sequential_monod`` the three per-phase arrays are included as ModelConfig
+    fields (BRG/StrainSet forward them verbatim; the Direct build instead calls
+    ``with_sequential_growth`` — see ``build_nominal_config_from_gui``).
     """
     from pbisim import (monod_growth, logistic_growth, constant_growth, monod_logistic_growth,
-                        density_throttled_growth, gompertz_growth)
+                        density_throttled_growth, gompertz_growth, sequential_monod)
     fns = {"monod_growth": monod_growth, "logistic_growth": logistic_growth,
            "constant_growth": constant_growth, "monod_logistic_growth": monod_logistic_growth,
-           "density_throttled_growth": density_throttled_growth, "gompertz_growth": gompertz_growth}
+           "density_throttled_growth": density_throttled_growth, "gompertz_growth": gompertz_growth,
+           "sequential_monod": sequential_monod}
     name = st.session_state.get("int_growth_function", "monod_growth")
     fn = fns.get(name, monod_growth)
     nutrient_based = name in _GROWTH_NUTRIENT
@@ -1506,6 +1570,11 @@ def growth_nutrient_kwargs():
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
     if name in _GROWTH_NEEDS_KD:  # density_throttled_growth's hyperbolic throttle constant
         kw["density_growth_constant"] = st.session_state.get("int_density_growth_constant", 1e9)
+    if name == _GROWTH_SEQUENTIAL:  # diauxic per-phase arrays
+        rf, mc, th = sequential_growth_phase_params()
+        kw["growth_phase_rate_factors"] = rf
+        kw["growth_phase_monod"] = mc
+        kw["growth_phase_thresholds"] = th
     return kw
 
 
@@ -2025,9 +2094,21 @@ def build_nominal_config_from_gui():
 
         # Nutrients / growth signal
         _gk = growth_nutrient_kwargs()
-        builder = rec.call("builder", builder, "with_growth_function", _gk.pop("growth_function"))
+        _growth_fn = _gk.pop("growth_function")
+        if st.session_state.get("int_growth_function") == _GROWTH_SEQUENTIAL:
+            # Diauxic growth: with_sequential_growth sets growth_function + the three
+            # per-phase arrays; the remaining kwargs (Ks fallback, recycle, s_in/out,
+            # density flag) go through with_nutrient. Pop the phase arrays so they
+            # aren't also passed to with_nutrient (which doesn't accept them).
+            _rf = _gk.pop("growth_phase_rate_factors")
+            _mc = _gk.pop("growth_phase_monod")
+            _th = _gk.pop("growth_phase_thresholds")
+            builder = rec.call("builder", builder, "with_sequential_growth",
+                               rate_factors=_rf, monod_constants=_mc, thresholds=_th)
+        else:
+            builder = rec.call("builder", builder, "with_growth_function", _growth_fn)
         builder = rec.call("builder", builder, "with_nutrient", **_gk)
-            
+
         # Immunity
         immunity_enabled = st.session_state.get("int_immunity_enabled", False)
         if immunity_enabled:
@@ -3010,6 +3091,8 @@ __all__ = [
     'canonical_signal',
     'compat_dormancy_signal',
     'growth_nutrient_kwargs',
+    'sequential_growth_phase_params',
+    'validate_sequential_growth',
     'dormancy_signal_functions',
     'diffusion_signal_functions',
     'apply_diffusion_signal',

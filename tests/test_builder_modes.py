@@ -625,6 +625,41 @@ def test_new_growth_signals_build():
     assert len(b.error) == 0
 
 
+def test_sequential_diauxic_growth_all_modes():
+    """sequential_monod (diauxic growth) builds in all three modes, forwarding the three
+    per-phase arrays to the config; the app validation helper mirrors the engine's rules."""
+    from streamlit.testing.v1 import AppTest
+    import numpy as np
+    from pbisim_app.common import validate_sequential_growth
+
+    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
+                 "Custom Strains & Graph (StrainSet)"):
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        if not mode.startswith("Direct"):
+            a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
+        a.session_state["int_growth_function"] = "sequential_monod"
+        a.session_state["int_growth_n_phases"] = 2
+        a.session_state["gp_monod_0"] = 0.5
+        a.session_state["gp_rate_1"] = 0.4
+        a.session_state["gp_monod_1"] = 0.1
+        a.session_state["gp_thresh_0"] = 0.2
+        a.run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.growth_function.__name__ == "sequential_monod", mode
+        assert np.allclose(cfg.growth_phase_rate_factors, [1.0, 0.4]), mode
+        assert np.allclose(cfg.growth_phase_monod, [0.5, 0.1]), mode
+        assert np.allclose(cfg.growth_phase_thresholds, [0.2]), mode
+        assert len(a.error) == 0, (mode, [e.value for e in a.error])
+
+    # validation helper: strictly-decreasing thresholds in (0,1); matching lengths
+    assert validate_sequential_growth([1.0, 0.5], [0.3, 0.3], [0.2]) is None
+    assert validate_sequential_growth([1.0, 0.5], [0.3, 0.3], [1.5]) is not None   # θ ≥ 1
+    assert validate_sequential_growth([1.0, 0.5, 0.2], [0.3, 0.3, 0.3],
+                                      [0.2, 0.4]) is not None                       # not decreasing
+    assert validate_sequential_growth([1.0, 0.5], [0.3], [0.2]) is not None         # length mismatch
+
+
 def test_nutrient_dependent_od_config_all_modes():
     """Enabling nutrient-dependent OD sets od_absorptivity_function (+ asymptotes) on the
     config across all three builder modes, and get_od() stays finite."""

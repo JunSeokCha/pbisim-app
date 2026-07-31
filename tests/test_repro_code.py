@@ -52,6 +52,33 @@ def test_repro_reproduces_growth_and_death_signals():
     assert cfg.death_function.__name__ == "nutrient_dependent_death" == built.death_function.__name__
 
 
+def test_repro_reproduces_sequential_diauxic_growth():
+    """Diauxic growth (sequential_monod) must round-trip via with_sequential_growth in the
+    Direct reproduction script and match the app's build path (the three phase arrays)."""
+    import numpy as np
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    _sel(at, "Growth signal function").set_value("sequential / diauxic (Monod)")
+    at.session_state["int_growth_n_phases"] = 2
+    at.session_state["gp_monod_0"] = 0.5
+    at.session_state["gp_rate_1"] = 0.4
+    at.session_state["gp_monod_1"] = 0.1
+    at.session_state["gp_thresh_0"] = 0.2
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    built = at.session_state["simulation_config"]
+    code = at.session_state["_last_repro_code"]
+    assert "with_sequential_growth" in code
+    ns = {}
+    exec(compile(code, "<repro>", "exec"), ns)
+    cfg = ns["cfg"]
+    assert cfg.growth_function.__name__ == "sequential_monod" == built.growth_function.__name__
+    assert np.allclose(cfg.growth_phase_rate_factors, built.growth_phase_rate_factors)
+    assert np.allclose(cfg.growth_phase_monod, built.growth_phase_monod)
+    assert np.allclose(cfg.growth_phase_thresholds, built.growth_phase_thresholds)
+
+
 def test_repro_reproduces_dormancy_signals():
     """Enabling dormancy with a nutrient signal must emit the dormancy/resuscitation
     functions (not leave them at the engine default) and match the build path."""

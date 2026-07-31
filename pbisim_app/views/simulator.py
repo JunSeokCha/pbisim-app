@@ -51,7 +51,8 @@ def render_model_builder(inoculum_mode="magnitude"):
                  "nutrient = Monod S/(Ks+S);  density = logistic (1−ΣB/K);  "
                  "nutrient+density = Monod × logistic;  density-throttled = Monod × a soft "
                  "hyperbolic throttle 1/(1+ΣB/Kd) (never fully stops);  Gompertz = "
-                 "exp(−exp(−k(S−S∞))).",
+                 "exp(−exp(−k(S−S∞)));  sequential/diauxic = one nutrient pool consumed "
+                 "through ordered Monod phases (set the phases below).",
         )
     _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
     st.session_state["int_growth_function"] = _gs_fn
@@ -81,6 +82,54 @@ def render_model_builder(inoculum_mode="magnitude"):
                 value=float(st.session_state.get("int_density_growth_constant", 1e9)),
                 format="%.1e", help="Hyperbolic density throttle 1/(1+ΣB/Kd): 0.5 at ΣB=Kd, "
                                     "never fully stops (growth creeps past Kd toward the nutrient plateau).")
+
+    # Diauxic (sequential_monod) per-phase editor — a single nutrient pool consumed
+    # through X ordered phases, each with its own max-rate factor and Monod K. As S
+    # drops below each threshold θ the next phase takes over (biphasic growth curves).
+    if _gs_fn == "sequential_monod":
+        with st.expander("Diauxic growth phases", expanded=True):
+            st.caption(
+                "One nutrient pool, X ordered Monod phases. Phase 1 is the reference "
+                "(rate factor 1.0); each later phase scales the strain growth rate and "
+                "has its own Monod K. Thresholds θ (strictly decreasing, in (0,1)) set "
+                "the nutrient level at which each next phase begins.")
+            _nph = int(st.number_input(
+                "Number of phases (X)", min_value=2, max_value=4,
+                value=int(st.session_state.get("int_growth_n_phases", 2) or 2), step=1,
+                key="widget_growth_n_phases",
+                help="Biphasic (2) covers most diauxie; up to 4 supported."))
+            st.session_state["int_growth_n_phases"] = _nph
+            st.markdown("**Per-phase max-rate factor & Monod K**")
+            for _i in range(_nph):
+                _pc1, _pc2 = st.columns(2)
+                with _pc1:
+                    if _i == 0:
+                        st.number_input("Phase 1 rate factor", value=1.0, disabled=True,
+                                        key="gp_rate_0_display",
+                                        help="Phase 1 is the reference and is pinned to 1.0.")
+                    else:
+                        st.session_state[f"gp_rate_{_i}"] = st.number_input(
+                            f"Phase {_i+1} rate factor", min_value=0.0,
+                            value=float(st.session_state.get(f"gp_rate_{_i}", 0.5)),
+                            step=0.05, format="%g", key=f"widget_gp_rate_{_i}")
+                with _pc2:
+                    _mdef = 0.3 if _i else float(st.session_state.get("int_monod_constant", 0.3))
+                    st.session_state[f"gp_monod_{_i}"] = st.number_input(
+                        f"Phase {_i+1} Monod K", min_value=0.0,
+                        value=float(st.session_state.get(f"gp_monod_{_i}", _mdef)),
+                        step=0.05, format="%g", key=f"widget_gp_monod_{_i}")
+            if _nph > 1:
+                st.markdown("**Phase thresholds θ (strictly decreasing, in (0,1))**")
+                _tcols = st.columns(_nph - 1)
+                for _i in range(_nph - 1):
+                    with _tcols[_i]:
+                        st.session_state[f"gp_thresh_{_i}"] = st.number_input(
+                            f"θ{_i+1} (→ phase {_i+2})", min_value=0.0, max_value=1.0,
+                            value=float(st.session_state.get(f"gp_thresh_{_i}", 0.3 / (_i + 2))),
+                            step=0.01, format="%g", key=f"widget_gp_thresh_{_i}")
+            _seq_err = validate_sequential_growth(*sequential_growth_phase_params())
+            if _seq_err:
+                st.error(f"Diauxic phases invalid: {_seq_err}")
 
     # Death signal (model-wide) — modulates the per-strain natural death rate dB.
     _dth_cur_fn = st.session_state.get("int_death_function", "constant_death")
