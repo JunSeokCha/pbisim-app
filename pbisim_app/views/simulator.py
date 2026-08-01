@@ -58,23 +58,18 @@ def render_model_builder(inoculum_mode="magnitude"):
     st.session_state["int_growth_function"] = _gs_fn
     st.session_state["int_track_nutrients"] = _gs_track
     with _gm2:
-        # Monod Ks — also reused as the Gompertz shape parameter k.
-        if _gs_fn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"):
-            _is_gomp = _gs_fn == "gompertz_growth"
+        # Monod Ks (nutrient half-saturation for Monod-family growth).
+        if _gs_fn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth"):
             st.session_state["int_monod_constant"] = st.number_input(
-                "Gompertz shape k" if _is_gomp else "Monod constant (Ks)",
+                "Monod constant (Ks)",
                 value=float(st.session_state.get("int_monod_constant", 0.3)), step=0.05, format="%g",
-                help=("Gompertz curvature k in exp(−exp(−k(S−S∞)))." if _is_gomp
-                      else "Nutrient half-saturation for Monod growth S/(Ks+S)."))
-        # Carrying capacity K — also reused as the Gompertz inflection nutrient level S∞.
-        if _gs_fn in ("logistic_growth", "monod_logistic_growth", "gompertz_growth"):
-            _is_gomp = _gs_fn == "gompertz_growth"
+                help="Nutrient half-saturation for Monod growth S/(Ks+S).")
+        # Carrying capacity K (logistic density ceiling).
+        if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
             st.session_state["int_carrying_capacity"] = st.number_input(
-                "Gompertz inflection S∞" if _is_gomp else "Carrying capacity K (CFU·mL⁻¹)",
+                "Carrying capacity K (CFU·mL⁻¹)",
                 value=float(st.session_state.get("int_carrying_capacity", 1e9)),
-                format="%g" if _is_gomp else "%.1e",
-                help=("Gompertz inflection nutrient level S∞." if _is_gomp
-                      else "Density ceiling for logistic growth (1 − ΣB/K)."))
+                format="%.1e", help="Density ceiling for logistic growth (1 − ΣB/K).")
         # Density-throttle constant Kd (soft, hyperbolic — 0.5 at ΣB=Kd, never 0).
         if _gs_fn == "density_throttled_growth":
             st.session_state["int_density_growth_constant"] = st.number_input(
@@ -82,6 +77,19 @@ def render_model_builder(inoculum_mode="magnitude"):
                 value=float(st.session_state.get("int_density_growth_constant", 1e9)),
                 format="%.1e", help="Hyperbolic density throttle 1/(1+ΣB/Kd): 0.5 at ΣB=Kd, "
                                     "never fully stops (growth creeps past Kd toward the nutrient plateau).")
+        # Gompertz nutrient-response sigmoid exp(−exp(−k(S−S∞))). k and S∞ are on the
+        # NUTRIENT scale (S₀ default 1.0) — dedicated keys so S∞ doesn't inherit the
+        # density-scale K (~1e9), which would overflow the exponent → flat 0-growth curve.
+        if _gs_fn == "gompertz_growth":
+            st.session_state["int_gompertz_k"] = st.number_input(
+                "Gompertz shape k", min_value=0.0,
+                value=float(st.session_state.get("int_gompertz_k", 10.0)), step=0.5, format="%g",
+                help="Curvature of exp(−exp(−k(S−S∞))). Larger k = sharper nutrient response.")
+            st.session_state["int_gompertz_sinf"] = st.number_input(
+                "Gompertz inflection S∞ (nutrient units)",
+                value=float(st.session_state.get("int_gompertz_sinf", 0.5)), step=0.05, format="%g",
+                help="Nutrient level at the growth-rate inflection — on the S scale (S₀ default "
+                     "1.0), NOT the density scale. A value like 1e9 makes growth ≈ 0 (flat curve).")
 
     # Diauxic (sequential_monod) per-phase editor — a single nutrient pool consumed
     # through X ordered phases, each with its own max-rate factor and Monod K. As S

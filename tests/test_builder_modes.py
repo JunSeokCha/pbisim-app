@@ -599,13 +599,30 @@ def test_new_growth_signals_build():
                       ("gompertz_growth", "Gompertz (nutrient)")]:
         a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
         [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(label).run()
-        if fn == "gompertz_growth":
-            a.session_state["int_carrying_capacity"] = 0.3   # S∞ on a nutrient scale
-            a.run()
         [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
         cfg = a.session_state["simulation_config"]
         assert cfg.growth_function.__name__ == fn, (label, cfg.growth_function)
         assert len(a.error) == 0, (label, [e.value for e in a.error])
+
+
+def test_gompertz_uses_nutrient_scale_defaults_and_grows():
+    """Gompertz k/S∞ come from dedicated NUTRIENT-scale keys (not the density-scale
+    carrying_capacity), so with defaults the culture actually grows rather than sitting
+    at a flat 0-growth curve (the exp overflow when S∞≈1e9)."""
+    import numpy as np
+    from streamlit.testing.v1 import AppTest
+    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    # a density-scale carrying capacity must NOT leak into Gompertz S∞
+    a.session_state["int_carrying_capacity"] = 1e9
+    [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(
+        "Gompertz (nutrient)").run()
+    [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+    cfg = a.session_state["simulation_config"]
+    assert cfg.monod_constant == 10.0 and cfg.carrying_capacity == 0.5  # k, S∞ from gompertz keys
+    assert len(a.error) == 0
+    # growth actually happens (not a flat line pinned at the inoculum)
+    cfu = a.session_state["simulation_result"].sum_prefixes("B", "D")
+    assert np.max(cfu) > 2.0 * cfu[0], (cfu[0], np.max(cfu))
 
     # density-throttled forwards density_growth_constant (Kd).
     a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()

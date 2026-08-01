@@ -1079,8 +1079,10 @@ def render_model_snapshot(container=None, *, snapshot: dict | None = None):
     _section("Growth & nutrient environment", [
         ("Growth signal", gfn),
         ("Growth rates (h⁻¹)", _ga("growth_rates")),
-        ("Monod constant Ks", _ga("monod_constant")),
-        ("Carrying capacity K", _ga("carrying_capacity")),
+        ("Monod constant Ks", _ga("monod_constant") if gfn != "gompertz_growth" else None),
+        ("Carrying capacity K", _ga("carrying_capacity") if gfn not in ("gompertz_growth", "sequential_monod") else None),
+        ("Gompertz shape k", _ga("monod_constant") if gfn == "gompertz_growth" else None),
+        ("Gompertz inflection S∞", _ga("carrying_capacity") if gfn == "gompertz_growth" else None),
         ("Density throttle Kd", _ga("density_growth_constant") if gfn == "density_throttled_growth" else None),
         ("Diauxic rate factors", _ga("growth_phase_rate_factors") if gfn == "sequential_monod" else None),
         ("Diauxic Monod Kᵢ", _ga("growth_phase_monod") if gfn == "sequential_monod" else None),
@@ -1223,6 +1225,8 @@ DEMO_MODELS = [
             "int_monod_constant": 0.3,
             "int_density_growth_constant": 1e9,
             "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
+            "int_gompertz_k": 10.0,    # gompertz_growth shape k (nutrient scale)
+            "int_gompertz_sinf": 0.5,  # gompertz_growth inflection S∞ (nutrient scale)
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1269,6 +1273,8 @@ DEMO_MODELS = [
             "int_monod_constant": 0.3,
             "int_density_growth_constant": 1e9,
             "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
+            "int_gompertz_k": 10.0,    # gompertz_growth shape k (nutrient scale)
+            "int_gompertz_sinf": 0.5,  # gompertz_growth inflection S∞ (nutrient scale)
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1568,6 +1574,14 @@ def growth_nutrient_kwargs():
         kw["s_out"] = st.session_state.get("int_s_out", 0.0)
     if needs_K:
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
+    if name == "gompertz_growth":
+        # gompertz_growth = exp(−exp(−k·(S−S∞))) — a NUTRIENT-scale sigmoid. The engine
+        # reads k from monod_constant and S∞ from carrying_capacity, but those otherwise
+        # hold the Monod half-saturation and the density ceiling (~1e9). Reusing the
+        # density K as S∞ makes the exponent overflow → growth ≈ 0 (a flat curve), so
+        # Gompertz gets its OWN nutrient-scale k / S∞ keys, mapped in here.
+        kw["monod_constant"] = st.session_state.get("int_gompertz_k", 10.0)
+        kw["carrying_capacity"] = st.session_state.get("int_gompertz_sinf", 0.5)
     if name in _GROWTH_NEEDS_KD:  # density_throttled_growth's hyperbolic throttle constant
         kw["density_growth_constant"] = st.session_state.get("int_density_growth_constant", 1e9)
     if name == _GROWTH_SEQUENTIAL:  # diauxic per-phase arrays
