@@ -274,6 +274,49 @@ def test_available_targets_is_comprehensive():
     assert "fit_initial_cfu" in paths and "fit_initial_pfu" in paths
 
 
+def test_available_targets_are_growth_signal_aware():
+    """The fit-parameter catalog exposes the estimables specific to the ACTIVE growth
+    signal (Gompertz S∞, smooth-efficiency low-S K / θ / Hill, diauxic phase params) plus
+    the nutrient-environment params — and each builds a valid v2 fit spec."""
+    from pbisim import (ModelBuilder, gompertz_growth, logistic_growth)
+
+    def _paths(cfg):
+        return {p for (_l, p, *_r) in nls.available_targets(cfg, initial_cfu=1e7)}
+
+    base = lambda: ModelBuilder(n_bacteria=1, n_phages=1).with_growth_rates([1.0])
+
+    smeff = base().with_smooth_efficiency_growth(3.0).with_nutrient(monod_constant=0.2).build()
+    p = _paths(smeff)
+    assert {"monod_K_low", "monod_efficiency_theta", "monod_efficiency_hill"} <= p
+    assert {"s_in", "s_out", "infected_nutrient_consumption"} <= p   # nutrient env now estimable
+
+    gom = base().with_growth_function(gompertz_growth).with_nutrient(monod_constant=10.0, carrying_capacity=0.5).build()
+    assert "carrying_capacity" in _paths(gom)   # = Gompertz S∞
+
+    seq = base().with_sequential_growth([1.0, 0.5], [0.1, 0.5], [0.3]).with_nutrient(monod_constant=0.1).build()
+    ps = _paths(seq)
+    assert "growth_phase_monod[0]" in ps and "growth_phase_thresholds[0]" in ps
+    assert "growth_phase_rate_factors[1]" in ps and "growth_phase_rate_factors[0]" not in ps  # phase 1 pinned
+
+    log = base().with_growth_function(logistic_growth).with_nutrient(carrying_capacity=1e9, monod_constant=0.3).build()
+    assert "carrying_capacity" in _paths(log)
+
+    # a nutrient-frozen (track_nutrients=False) model must NOT offer the nutrient-env estimables
+    import dataclasses
+    con = dataclasses.replace(base().build(), track_nutrients=False)
+    assert "s_in" not in _paths(con) and "infected_nutrient_consumption" not in _paths(con)
+
+    # each new estimable builds a valid v2 fit spec
+    def _t(path, lo, hi, log_, val):
+        return {"path": path, "lo": lo, "hi": hi, "log": log_, "value": val, "free": True}
+    _, spec = nls.build_param_spec_v2(
+        smeff, [_t("monod_K_low", 0.01, 50.0, True, 3.0),
+                _t("infected_nutrient_consumption", 0.0, 5.0, False, 0.0)], [], [])
+    assert spec.n_params == 2
+    _, spec2 = nls.build_param_spec_v2(seq, [_t("growth_phase_monod[1]", 0.01, 5.0, True, 0.5)], [], [])
+    assert spec2.n_params == 1
+
+
 def test_estimable_fitness_cost_and_initial_cfu():
     """fitness_cost and fit_initial_cfu are freeable via the v2 spec and recover
     sensible values (fit_initial_cfu ≈ the control-arm B₀)."""

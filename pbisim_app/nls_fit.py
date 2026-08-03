@@ -52,6 +52,22 @@ _FAMILY = {
     "dormancy_diffusion_rate": (1e-3, 3.0, True),
     "death_rate_D": (0.0, 1.0, False),
     "dormant_od_fraction": (0.0, 1.0, False),
+    # growth-signal-specific parameters (emitted only for the active growth function)
+    "carrying_capacity": (1e6, 1e11, True),        # logistic density ceiling K
+    "gompertz_sinf": (0.01, 5.0, True),            # gompertz inflection S∞ (nutrient scale)
+    "density_growth_constant": (1e6, 1e11, True),  # density-throttle Kd
+    "monod_K_low": (0.01, 50.0, True),             # smooth-efficiency inefficient (low-S) K
+    "monod_efficiency_theta": (0.01, 0.99, False), # smooth-efficiency transition midpoint
+    "monod_efficiency_hill": (1.0, 12.0, False),   # smooth-efficiency transition sharpness
+    "growth_phase_rate_factors": (0.0, 2.0, False),  # diauxic per-phase rate factor
+    "growth_phase_monod": (0.01, 5.0, True),         # diauxic per-phase Monod K
+    "growth_phase_thresholds": (0.001, 0.999, False),# diauxic phase threshold θ
+    # nutrient environment (when nutrients are tracked)
+    "s_in": (0.0, 5.0, False),
+    "s_out": (0.0, 2.0, False),
+    "infected_nutrient_consumption": (0.0, 5.0, False),
+    "monod_constant_lysis": (0.01, 5.0, True),     # frac_lysis nutrient half-saturation
+    "dormancy_monod_constant": (0.01, 5.0, True),  # nutrient dormancy half-saturation
     # pbisim-fit-side "virtual" estimables (setattr'd on the config; the engine never
     # sees them — the fit interprets them). See _apply_fitness_cost / _resolve_ic_override.
     "fitness_cost": (0.0, 1.0, False),
@@ -101,7 +117,34 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
         add(f"Growth rate — strain {i} (h⁻¹)", f"growth_rates[{i}]", "growth_rates")
         add(f"Bacteria/resource ratio — strain {i}", f"bacteria_to_resource_ratio[{i}]", "bacteria_to_resource_ratio")
         add(f"Natural death rate — strain {i} (h⁻¹)", f"death_rate_B[{i}]", "death_rate_B")
-    add("Monod half-saturation Ks", "monod_constant", "monod_constant")
+    # ── Growth-signal parameters — depend on the active growth function (which nutrient
+    # constants it reads + any shape parameters it introduces). Curated per signal so a
+    # Gompertz / smooth-efficiency / diauxic model exposes ITS estimables, not just Ks. ──
+    _gfn = getattr(getattr(config, "growth_function", None), "__name__", "monod_growth")
+    if _gfn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth"):
+        add("Monod half-saturation Ks", "monod_constant", "monod_constant")
+    elif _gfn == "gompertz_growth":
+        add("Gompertz shape k", "monod_constant", "monod_constant")
+        add("Gompertz inflection S∞", "carrying_capacity", "gompertz_sinf")
+    elif _gfn == "smooth_efficiency_monod":
+        add("Efficient Monod K (high S)", "monod_constant", "monod_constant")
+        add("Inefficient Monod K (low S)", "monod_K_low", "monod_K_low")
+        add("Efficiency transition θ", "monod_efficiency_theta", "monod_efficiency_theta")
+        add("Efficiency transition Hill", "monod_efficiency_hill", "monod_efficiency_hill")
+    if _gfn in ("logistic_growth", "monod_logistic_growth"):
+        add("Carrying capacity K (CFU/mL)", "carrying_capacity", "carrying_capacity")
+    elif _gfn == "density_throttled_growth":
+        add("Density throttle Kd (CFU/mL)", "density_growth_constant", "density_growth_constant")
+    elif _gfn == "sequential_monod":
+        _rf = getattr(config, "growth_phase_rate_factors", None)
+        _mc = getattr(config, "growth_phase_monod", None)
+        _th = getattr(config, "growth_phase_thresholds", None)
+        for i in range(1, len(_rf) if _rf is not None else 0):  # phase 0 factor is pinned to 1.0
+            add(f"Diauxic rate factor — phase {i+1}", f"growth_phase_rate_factors[{i}]", "growth_phase_rate_factors")
+        for i in range(len(_mc) if _mc is not None else 0):
+            add(f"Diauxic Monod K — phase {i+1}", f"growth_phase_monod[{i}]", "growth_phase_monod")
+        for i in range(len(_th) if _th is not None else 0):
+            add(f"Diauxic threshold θ{i+1}", f"growth_phase_thresholds[{i}]", "growth_phase_thresholds")
     for i in range(nb):
         for j in range(npg):
             add(f"Adsorption — strain {i} × phage {j}", f"adsorption_rates[{i},{j}]", "adsorption_rates")
@@ -126,6 +169,17 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
         add("Immune kill-half (imm_kill50)", "imm_kill50", "imm_kill50")
     # nutrient recycling + (when dormancy on) depth-diffusion & dormant death & OD weight
     add("Nutrient recycle fraction", "recycle_fraction", "recycle_fraction")
+    # nutrient environment (only meaningful when nutrients are tracked)
+    if getattr(config, "track_nutrients", False):
+        add("Nutrient inflow (s_in)", "s_in", "s_in")
+        add("Nutrient washout (s_out)", "s_out", "s_out")
+        add("Infected-cell nutrient consumption (×)", "infected_nutrient_consumption",
+            "infected_nutrient_consumption")
+    # nutrient-coupled lysis / dormancy half-saturations, when those signals are active
+    if getattr(getattr(config, "lysis_progression_function", None), "__name__", "") == "frac_lysis":
+        add("Lysis Monod Ks (Ks_lysis)", "monod_constant_lysis", "monod_constant_lysis")
+    if getattr(config, "dormancy_monod_constant", None):
+        add("Dormancy Monod Ks", "dormancy_monod_constant", "dormancy_monod_constant")
     if getattr(config, "dormancy_diffusion_rate", None) is not None:
         for i in range(nb):
             add(f"Dormancy diffusion rate — strain {i}", f"dormancy_diffusion_rate[{i}]", "dormancy_diffusion_rate")
