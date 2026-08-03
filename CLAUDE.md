@@ -208,6 +208,25 @@ called early in `app.py`). It is **active only when `APP_PASSWORD` or
 Basic gate to keep the public out, NOT enterprise SSO; the AI exec sandbox is still
 research-grade, so only share the password with trusted people.
 
+**Persistent "stay logged in" (2026-08-03).** The gate used to store auth only in
+`st.session_state`, which is in-memory + tied to the WebSocket session — so every
+reconnect (laptop sleep, network blip, backgrounded tab), OOM restart, or redeploy
+bounced the user back to the password page (a tier upgrade doesn't fix this; it only
+removed free-tier spin-down). Fixed with a **signed, expiring cookie**: on sign-in a
+`pbisim_auth` cookie = `<expiry>.<hmac>` is set (via `streamlit-cookies-controller`,
+now a core dep); each fresh session reads it back **server-side** with
+`st.context.cookies` (reliable, no JS-component load flash) and restores the login.
+The HMAC secret is derived from the configured credential (rotating the password
+invalidates all cookies) or `APP_AUTH_SECRET`; lifetime is `APP_AUTH_TTL_HOURS`
+(default 168 = 7 days). Sign-out removes the cookie **and** sets `_cookie_suppressed`
+for the session (the connection's request cookies are fixed for its lifetime, so the
+stale cookie would otherwise re-login until the next reconnect). Cookie set/remove is
+queued (`_pending_cookie`/`_forget_cookie`) and applied on the next clean render so
+`st.rerun()` can't abort the component. Degrades to session-only if the component is
+absent. The cookie only proves "this browser passed the password" — not an identity
+token. Tests in `tests/test_auth.py` (token sign/verify/expiry/tamper/rotate, cookie
+restore, invalid-cookie, sign-out suppression).
+
 ---
 
 ## Known gaps / next steps
