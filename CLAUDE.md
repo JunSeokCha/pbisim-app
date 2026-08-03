@@ -226,6 +226,28 @@ research-grade, so only share the password with trusted people.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-03) — real code editor for the Scripting page
+
+- **`streamlit-code-editor` (Ace) replaces `st.text_area` in the Scripting cells** — Tab-indent,
+  auto-indent, syntax highlighting, line numbers, and a ▶ Run button bound to **Ctrl/Cmd+Enter**
+  (native `st.text_area` can do none of these: Tab moves focus, no auto-indent/highlight).
+  `views/scripting.py`: `_HAS_CODE_EDITOR` import guard; `code_editor(..., response_mode="blur",
+  buttons=_EDITOR_BUTTONS)` per cell; edits persist on blur. `_apply_editor_response(cid, resp)`
+  folds the buffer into the plain `script_src_{cid}` key and runs **once per submit `id`** (the
+  component re-emits its last value every rerun, so a bare `type=='submit'` check would re-execute
+  on unrelated reruns; empty-`type` responses never clobber the source).
+- **Graceful fallback**: absent the component, cells fall back to `st.text_area` (functional, no
+  niceties). Source is `script_src_{cid}` in both paths, so run/add/delete logic is identical.
+- **Packaging**: new `[scripting]` optional extra (`streamlit-code-editor>=0.1.20`, frontend-only,
+  lazy-imported); **Dockerfile** now `pip install -e '.[scripting]'` so the editor is present on
+  the deploy wherever scripting is enabled. Auto-deploys from `main` (Docker, `autoDeploy: true`);
+  the changed install line + app source invalidate that layer → the component installs
+  automatically (no manual cache clear; the pbisim/pbisim-fit git-ref layers stay cached).
+- Tests: `test_scripting.py` rewritten editor-agnostic (source via `script_src_{cid}` /
+  `script_cell_ids`, not `at.text_area`) + `_apply_editor_response` submit-dedup unit test +
+  text_area-fallback test. **257 passing.** Caveat: AppTest can't drive real keystrokes, so
+  Tab/auto-indent/Ctrl-Enter were verified by owner in a live browser.
+
 ## Done this session (2026-08-03) — upstream sync: new growth signal, infected-nutrient draw, AIC/BIC, prompt
 
 Reflected recent pbisim / pbisim-fit updates in the app (A→F sequence):

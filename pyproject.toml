@@ -38,6 +38,13 @@ desktop = [
     # needs a system webview lib (e.g. `apt install gir1.2-webkit2-4.1 python3-gi`).
     "pywebview>=5.0",
 ]
+scripting = [
+    # A real code editor (Ace: Tab-indent, auto-indent, syntax highlighting, line
+    # numbers, Ctrl/Cmd+Enter to run) for the opt-in Scripting page. Frontend-only
+    # component — no heavy deps. Falls back to a plain st.text_area when absent, so the
+    # base deploy is unaffected; install this only where scripting is enabled.
+    "streamlit-code-editor>=0.1.20",
+]
 
 [project.scripts]
 pbisim-app = "pbisim_app.cli:main"

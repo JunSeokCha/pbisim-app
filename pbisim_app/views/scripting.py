@@ -11,11 +11,58 @@ Cells are keyed by **stable ids** (not positional index) and all mutations run i
 ``on_click`` callbacks (never ``st.rerun`` mid-page) so that adding/deleting a cell never
 purges another cell's text — Streamlit drops the session-state key of any widget that
 isn't rendered during a run, which a mid-page rerun would trigger.
+
+The cell editor is the ``streamlit-code-editor`` Ace component when installed (the
+``[scripting]`` extra): Tab-indent, auto-indent, syntax highlighting, line numbers, and
+a ▶ Run button bound to Ctrl/Cmd+Enter. Streamlit's native ``st.text_area`` cannot do
+any of that (Tab moves focus; no auto-indent/highlighting), so when the component is
+absent the cells fall back to a plain ``st.text_area`` — functional, just without the
+editor niceties. Either way the cell source is the plain ``script_src_{cid}`` session
+key, so the run/add/delete logic is identical.
 """
 import io as _io
 
 from pbisim_app.common import *  # noqa: F401,F403
 from pbisim_app.executor import execute_code, new_namespace
+
+# Optional: a real code editor (Ace) — Tab-indent, auto-indent, syntax highlighting,
+# line numbers, and Ctrl/Cmd+Enter to run. Ships in the `[scripting]` extra; when it's
+# not installed the cells fall back to a plain st.text_area (no highlighting/indent).
+try:
+    from code_editor import code_editor as _code_editor
+    _HAS_CODE_EDITOR = True
+except Exception:  # pragma: no cover - import guard
+    _HAS_CODE_EDITOR = False
+
+# An in-editor "Run" button (bottom-right) bound to Ctrl/Cmd+Enter — both emit a
+# response with type == "submit" carrying the current buffer.
+_EDITOR_BUTTONS = [{
+    "name": "Run", "feather": "Play", "primary": True, "hasText": True, "alwaysOn": True,
+    "commands": ["submit"], "bindKey": {"win": "Ctrl-Enter", "mac": "Cmd-Enter"},
+    "style": {"bottom": "0.35rem", "right": "0.4rem"},
+}]
+
+
+def _apply_editor_response(cid, resp):
+    """Fold a ``code_editor`` response into the cell's stored source and report whether
+    the user asked to run it.
+
+    The component returns its LAST value on every rerun, so a bare ``type=='submit'``
+    check would re-execute the cell on unrelated reruns. Each real event carries a unique
+    ``id``, so we run only once per new submit id. A response with no event (empty
+    ``type`` — first render, or headless AppTest) is ignored so the stored source (which
+    a test or the seed set directly) is not clobbered."""
+    if not resp:
+        return False
+    _type = resp.get("type") or ""
+    _text = resp.get("text")
+    if _type and _text is not None:
+        st.session_state[f"script_src_{cid}"] = _text
+    _rid = resp.get("id") or ""
+    if _type == "submit" and _rid and st.session_state.get(f"script_ce_lastid_{cid}") != _rid:
+        st.session_state[f"script_ce_lastid_{cid}"] = _rid
+        return True
+    return False
 
 _PRELUDE = (
     "# The sandbox pre-loads np, plt and the pbisim API (ModelBuilder, PBIModel,\n"
@@ -59,6 +106,7 @@ def _delete_cell(cid):
         ids.remove(cid)
     st.session_state.script_outputs.pop(cid, None)
     st.session_state.pop(f"script_src_{cid}", None)
+    st.session_state.pop(f"script_ce_lastid_{cid}", None)
 
 
 def _restart_kernel():
@@ -111,17 +159,35 @@ def render():
     _t[1].button("Restart kernel", width="stretch", on_click=_restart_kernel,
                  help="Discard all variables and outputs (fresh namespace). Keeps your code.")
 
+    if _HAS_CODE_EDITOR:
+        st.caption("Run a cell with its **▶ Run** button or **Ctrl/Cmd+Enter**. Tab indents; "
+                   "edits are saved when the cell loses focus.")
+
     # ── cells (keyed by stable id) ──
     for _pos, _cid in enumerate(ids):
         st.session_state.setdefault(f"script_src_{_cid}", "")
         st.markdown(f"<div class='section-label'>CELL [{_pos + 1}]</div>", unsafe_allow_html=True)
-        st.text_area("code", key=f"script_src_{_cid}", height=180, label_visibility="collapsed")
-        _rc = st.columns([1, 1, 5])
-        _rc[0].button("Run", key=f"script_run_{_cid}", width="stretch",
-                      on_click=_run_cell, args=(_cid,))
-        _rc[1].button("Delete", key=f"script_del_{_cid}", width="stretch",
-                      on_click=_delete_cell, args=(_cid,), disabled=(len(ids) == 1),
-                      help="Remove this cell (variables stay in the kernel).")
+        if _HAS_CODE_EDITOR:
+            # A real editor. It returns the buffer on blur (edit persistence) and on
+            # submit (Run / Ctrl+Cmd-Enter); we run the cell once per new submit id.
+            _resp = _code_editor(
+                st.session_state[f"script_src_{_cid}"], lang="python",
+                key=f"script_ce_{_cid}", height=[8, 24], response_mode="blur",
+                buttons=_EDITOR_BUTTONS, options={"showLineNumbers": True, "wrap": False})
+            if _apply_editor_response(_cid, _resp):
+                _run_cell(_cid)
+            _rc = st.columns([1, 6])
+            _rc[0].button("Delete", key=f"script_del_{_cid}", width="stretch",
+                          on_click=_delete_cell, args=(_cid,), disabled=(len(ids) == 1),
+                          help="Remove this cell (variables stay in the kernel).")
+        else:
+            st.text_area("code", key=f"script_src_{_cid}", height=180, label_visibility="collapsed")
+            _rc = st.columns([1, 1, 5])
+            _rc[0].button("Run", key=f"script_run_{_cid}", width="stretch",
+                          on_click=_run_cell, args=(_cid,))
+            _rc[1].button("Delete", key=f"script_del_{_cid}", width="stretch",
+                          on_click=_delete_cell, args=(_cid,), disabled=(len(ids) == 1),
+                          help="Remove this cell (variables stay in the kernel).")
         _out = st.session_state.script_outputs.get(_cid)
         if _out:
             for _png in _out.get("pngs", []):

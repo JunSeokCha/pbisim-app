@@ -94,8 +94,9 @@ def render():
         _pages.append(
             ("Scripting",
              "A notebook-style Python scratchpad with a shared kernel (opt-in power-user page). "
-             "The execution sandbox is **research-grade, not a security boundary** — only for "
-             "trusted local/authenticated use."))
+             "Cells use a real code editor (Tab-indent, syntax highlighting, line numbers) — run a "
+             "cell with its ▶ Run button or Ctrl/Cmd+Enter. The execution sandbox is "
+             "**research-grade, not a security boundary** — only for trusted local/authenticated use."))
     for _name, _desc in _pages:
         with st.expander(_name):
             st.markdown(_desc)
