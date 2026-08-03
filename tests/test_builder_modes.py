@@ -826,3 +826,29 @@ def test_dormant_od_fraction_reaches_config_all_modes():
         cfg = at.session_state["simulation_config"]
         assert abs(float(cfg.dormant_od_fraction) - 0.3) < 1e-9, (mode, cfg.dormant_od_fraction)
         assert len(at.error) == 0, (mode, at.error)
+
+
+def test_frac_lysis_survives_under_any_nutrient_growth():
+    """Nutrient-coupled frac_lysis (and nutrient dormancy signals) must be kept under ANY
+    nutrient-tracking growth signal — not silently coerced to constant unless growth is
+    literally Monod. Regression: the check hardcoded (monod_growth, monod_logistic_growth)."""
+    from streamlit.testing.v1 import AppTest
+    for glabel, gfn in [("Gompertz (nutrient)", "gompertz_growth"),
+                        ("smooth two-efficiency Monod", "smooth_efficiency_monod"),
+                        ("density-throttled (Monod × 1/(1+ΣB/Kd))", "density_throttled_growth")]:
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+        [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(glabel).run()
+        [s for s in a.selectbox if "Lysis signal function" in (s.label or "")][0].set_value("nutrient (Monod)").run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.lysis_progression_function.__name__ == "frac_lysis", (glabel, cfg.lysis_progression_function)
+        assert len(a.error) == 0, (glabel, [e.value for e in a.error])
+
+    # a NON-nutrient growth (constant) still coerces frac_lysis away (→ engine default
+    # constant lysis, which the config represents as lysis_progression_function=None)
+    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value("constant (unlimited)").run()
+    [s for s in a.selectbox if "Lysis signal function" in (s.label or "")][0].set_value("nutrient (Monod)").run()
+    [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+    _lfn = a.session_state["simulation_config"].lysis_progression_function
+    assert _lfn is None or _lfn.__name__ != "frac_lysis"   # coerced away from frac_lysis

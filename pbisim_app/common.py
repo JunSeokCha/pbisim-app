@@ -1447,6 +1447,15 @@ _GROWTH_SEQUENTIAL = "sequential_monod"
 _GROWTH_SMOOTH_EFF = "smooth_efficiency_monod"
 
 
+def growth_tracks_nutrients() -> bool:
+    """True when the selected growth signal reads the nutrient substrate S — i.e. any
+    nutrient-tracking growth function, not just Monod. This is the correct gate for the
+    nutrient-COUPLED signals (frac_lysis, nutrient dormancy/resuscitation/diffusion): they
+    need a live S, which every function in ``_GROWTH_NUTRIENT`` provides (Monod, Monod×
+    logistic, density-throttled, Gompertz, diauxic, smooth-efficiency)."""
+    return st.session_state.get("int_growth_function", "monod_growth") in _GROWTH_NUTRIENT
+
+
 # Death-signal options → pbisim death function name. constant_death (default) is the
 # flat rate d that the app used all along; nutrient = starvation d·(1−S/(Ks+S));
 # density = crowding d·min(1, ΣB/K). (No nutrient+density death function exists.)
@@ -1485,8 +1494,7 @@ def lysis_kwargs():
     guard as the dormancy signals). Returns ``{lysis_progression_function, monod_constant_lysis,
     coerced}`` — ``coerced`` True when a nutrient signal was downgraded."""
     name = st.session_state.get("int_lysis_function", "constant_lysis")
-    track = st.session_state.get("int_growth_function", "monod_growth") in (
-        "monod_growth", "monod_logistic_growth")
+    track = growth_tracks_nutrients()   # any nutrient-tracking growth, not just Monod
     coerced = False
     if name == "frac_lysis" and not track:
         name, coerced = "constant_lysis", True
@@ -1667,7 +1675,7 @@ def set_diffusion_functions(config, sig, rec=None):
     same nutrient-tracking coercion as Direct mode). BRG / StrainSet ``to_config`` don't
     expose them, so we set the ModelConfig fields directly, post-build. When a repro
     recorder ``rec`` is given, the assignment is mirrored into the generated script."""
-    track = st.session_state.get("int_growth_function", "monod_growth") in ("monod_growth", "monod_logistic_growth")
+    track = growth_tracks_nutrients()   # any nutrient-tracking growth, not just Monod
     sig, _ = compat_dormancy_signal(canonical_signal(sig), track)
     deeper, shallower = diffusion_signal_functions(sig)
     config.dormancy_diffusion_deeper_function = deeper
@@ -1693,7 +1701,7 @@ def mode_dormancy_kwargs(dsig="nutrient", rsig="nutrient", ks=0.0, kdorm=0.0):
     Also covers the dormancy-disabled case — the coerced default is nutrient-independent
     when the growth signal freezes S, so the engine's nutrient default can't crash it.
     """
-    track = st.session_state.get("int_growth_function", "monod_growth") in ("monod_growth", "monod_logistic_growth")
+    track = growth_tracks_nutrients()   # any nutrient-tracking growth, not just Monod
     ds, _ = compat_dormancy_signal(canonical_signal(dsig), track)
     rs, _ = compat_dormancy_signal(canonical_signal(rsig), track)
     dfn, rfn = dormancy_signal_functions(ds, rs)
@@ -3149,6 +3157,7 @@ __all__ = [
     'canonical_signal',
     'compat_dormancy_signal',
     'growth_nutrient_kwargs',
+    'growth_tracks_nutrients',
     'sequential_growth_phase_params',
     'validate_sequential_growth',
     'dormancy_signal_functions',

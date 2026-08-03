@@ -192,19 +192,17 @@ def render_model_builder(inoculum_mode="magnitude"):
     st.session_state["int_lysis_function"] = _ly_fn
     with _ly2:
         if _ly_fn == "frac_lysis":
-            _ly_track = st.session_state.get("int_growth_function", "monod_growth") in (
-                "monod_growth", "monod_logistic_growth")
-            if _ly_track:
+            if growth_tracks_nutrients():   # any nutrient-tracking growth, not just Monod
                 st.session_state["int_monod_constant_lysis"] = st.number_input(
                     "Lysis Ks (Ks_lysis)",
                     value=float(st.session_state.get("int_monod_constant_lysis", 0.3)),
                     step=0.05, format="%g",
                     help="Nutrient half-saturation for phi_lysis = S/(Ks_lysis + S). "
                          "Lower = lysis more sensitive to nutrient depletion.")
-    if _ly_fn == "frac_lysis" and st.session_state.get("int_growth_function", "monod_growth") not in (
-            "monod_growth", "monod_logistic_growth"):
+    if _ly_fn == "frac_lysis" and not growth_tracks_nutrients():
         st.caption("⚠ Nutrient-coupled lysis needs a nutrient-tracking growth signal "
-                   "(Monod) — it will fall back to constant lysis until you enable one.")
+                   "(Monod, density-throttled, Gompertz, diauxic, …) — it will fall back to "
+                   "constant lysis until you choose one.")
 
     # Dormancy signal functions (model-wide) — the engine's dormancy_function /
     # dormancy_monod_constant / dormancy_carrying_capacity are SINGLE fields for the whole
@@ -1348,8 +1346,7 @@ def render():
                             "OD transition sharpness (Hill)", min_value=0.1,
                             value=float(st.session_state.get("int_od_abs_hill", 2.0)), step=0.5, format="%g",
                             help="Hill exponent of the eps(S) sigmoid.")
-                    if st.session_state.get("int_growth_function", "monod_growth") not in (
-                            "monod_growth", "monod_logistic_growth", "density_throttled_growth", "gompertz_growth"):
+                    if not growth_tracks_nutrients():
                         st.caption("⚠ Nutrient-dependent OD needs a nutrient-tracking growth signal "
                                    "(S must vary) — otherwise eps(S) is constant.")
 
