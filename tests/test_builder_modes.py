@@ -642,6 +642,53 @@ def test_gompertz_uses_nutrient_scale_defaults_and_grows():
     assert len(b.error) == 0
 
 
+def test_infected_nutrient_consumption_all_modes():
+    """infected_nutrient_consumption (latent-I nutrient draw) reaches the config across all
+    three builder modes when set, and defaults to 0 (legacy off). A value >0 changes the
+    nutrient-limited dynamics vs off in Direct mode."""
+    import numpy as np
+    from streamlit.testing.v1 import AppTest
+    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
+                 "Custom Strains & Graph (StrainSet)"):
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        if not mode.startswith("Direct"):
+            a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
+        a.session_state["int_infected_nutrient_consumption"] = 3.0
+        a.run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.infected_nutrient_consumption == 3.0, mode
+        assert len(a.error) == 0, (mode, [e.value for e in a.error])
+
+    # default is off (0.0) — legacy, backward-compatible
+    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert a.session_state["simulation_config"].infected_nutrient_consumption == 0.0
+
+
+def test_smooth_efficiency_monod_all_modes():
+    """smooth_efficiency_monod builds in all three modes, forwarding the efficient K
+    (monod_constant), the inefficient low-S K, and the θ/hill transition to the config."""
+    from streamlit.testing.v1 import AppTest
+    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
+                 "Custom Strains & Graph (StrainSet)"):
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        if not mode.startswith("Direct"):
+            a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
+        a.session_state["int_growth_function"] = "smooth_efficiency_monod"
+        a.session_state["int_monod_constant"] = 0.2       # efficient (high-S) K
+        a.session_state["int_monod_K_low"] = 5.0          # inefficient (low-S) K
+        a.session_state["int_monod_efficiency_theta"] = 0.4
+        a.session_state["int_monod_efficiency_hill"] = 3.0
+        a.run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.growth_function.__name__ == "smooth_efficiency_monod", mode
+        assert cfg.monod_constant == 0.2 and cfg.monod_K_low == 5.0, mode
+        assert cfg.monod_efficiency_theta == 0.4 and cfg.monod_efficiency_hill == 3.0, mode
+        assert len(a.error) == 0, (mode, [e.value for e in a.error])
+
+
 def test_sequential_diauxic_growth_all_modes():
     """sequential_monod (diauxic growth) builds in all three modes, forwarding the three
     per-phase arrays to the config; the app validation helper mirrors the engine's rules."""

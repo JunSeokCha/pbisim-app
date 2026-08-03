@@ -528,3 +528,18 @@ def test_categorical_growth_signal_sweep_runs():
     assert any("Categorical (signal-function) sweep" in v for v in _codes)
     assert not any(("np.linspace" in v or "np.logspace" in v) and "apply_sweep_parameter" in v
                    for v in _codes)
+
+
+def test_infected_nutrient_consumption_is_sweepable():
+    """infected_nutrient_consumption is exposed as a scalar sweep parameter under the
+    Nutrient & environment category and applies to the config."""
+    import numpy as np
+    from pbisim import ModelBuilder
+    from pbisim_app.sweep_helper import get_sweep_parameters, apply_sweep_parameter, sweep_category
+    cfg = ModelBuilder(n_bacteria=1, n_phages=1).build()
+    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}], phages=[{"name": "P0"}])
+    lbl = "Infected-cell nutrient consumption (×)"
+    assert lbl in p and p[lbl]["field"] == "infected_nutrient_consumption"
+    assert sweep_category(lbl, p[lbl]) == "Nutrient & environment"
+    c, *_ = apply_sweep_parameter(2.5, p[lbl], cfg, np.array([1e7]), np.array([1e6]), 1.0, {})
+    assert c.infected_nutrient_consumption == 2.5

@@ -52,6 +52,31 @@ def test_repro_reproduces_growth_and_death_signals():
     assert cfg.death_function.__name__ == "nutrient_dependent_death" == built.death_function.__name__
 
 
+def test_repro_reproduces_smooth_efficiency_growth():
+    """smooth_efficiency_monod round-trips via with_smooth_efficiency_growth in the Direct
+    reproduction script and matches the app's build (efficient K + low-S K + θ/hill)."""
+    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at.run()
+    _sel(at, "Growth signal function").set_value("smooth two-efficiency Monod")
+    at.session_state["int_monod_constant"] = 0.2
+    at.session_state["int_monod_K_low"] = 5.0
+    at.session_state["int_monod_efficiency_theta"] = 0.4
+    at.session_state["int_monod_efficiency_hill"] = 3.0
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    built = at.session_state["simulation_config"]
+    code = at.session_state["_last_repro_code"]
+    assert "with_smooth_efficiency_growth" in code
+    ns = {}
+    exec(compile(code, "<repro>", "exec"), ns)
+    cfg = ns["cfg"]
+    assert cfg.growth_function.__name__ == "smooth_efficiency_monod" == built.growth_function.__name__
+    assert cfg.monod_K_low == built.monod_K_low == 5.0
+    assert cfg.monod_efficiency_theta == built.monod_efficiency_theta == 0.4
+    assert cfg.monod_efficiency_hill == built.monod_efficiency_hill == 3.0
+
+
 def test_repro_reproduces_sequential_diauxic_growth():
     """Diauxic growth (sequential_monod) must round-trip via with_sequential_growth in the
     Direct reproduction script and match the app's build path (the three phase arrays)."""

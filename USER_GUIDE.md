@@ -278,10 +278,22 @@ Parameters: stimulation rate, kill rate, kill50 (half-saturation), decay rate.
 
 Toggle **Track nutrients** to enable nutrient-limited growth (recommended for most
 simulations). Parameters: Monod constant (K_s), nutrient inflow (s_in), washout rate
-(s_out), initial nutrient (S₀).
+(s_out), initial nutrient (S₀), and **infected-cell nutrient consumption** (a multiple of
+the uninfected per-capita uptake by which latent-infected cells draw down the substrate
+while building phage; 0 = off).
 
 > Leaving **Track nutrients** off gives unbounded exponential growth regardless of CFU —
 > only appropriate for very short simulations or model-fitting contexts.
+
+**Growth signal function** (set under *Strains & Phages → Growth model*)
+
+Choose how the per-strain growth rate is modulated: constant, Monod (nutrient), logistic
+(density), Monod×logistic, density-throttled, Gompertz (a nutrient-scale sigmoid), or two
+approaches to *biphasic / diauxic* growth — **sequential (diauxic) Monod** (ordered phases
+over one nutrient pool) and **smooth two-efficiency Monod** (a differentiable diauxie whose
+Monod K blends from efficient at high nutrient to inefficient at low nutrient — the
+better-conditioned choice when fitting growth curves). Any of these can be swept
+categorically on the Parameter Sweeps page.
 
 **Dose Schedule**
 
@@ -477,6 +489,13 @@ selector (live draft or a frozen Model).
    optionally add custom **θ** and priors, then **Run NLS fit**. The fit runs in a background
    thread; the fitted curves overlay automatically. **Apply** writes the fitted values back into
    the model, and you can **save the calibrated configuration** as a Scenario.
+7. **Compare models (AIC / BIC).** Under the overlay, the **Compare models** panel snapshots the
+   current model's pooled residuals plus its free-parameter count *k*, and ranks the candidates
+   by AIC/BIC with ΔAIC/ΔBIC. Because a larger model always fits the training data at least as
+   well (lower RSS), the information criteria add a per-parameter penalty so a richer model — say
+   diauxic vs plain Monod growth — must *earn* its complexity. Only compare candidates overlaid on
+   the **same** data (the panel warns otherwise). ΔAIC < 2 ≈ comparable support; > 10 ≈ decisively
+   worse.
 
 ### Observables & the `od_to_cfu` factor
 

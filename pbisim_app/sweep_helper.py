@@ -37,6 +37,10 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         "type": "scalar",
         "field": "s_out",
     }
+    params["Infected-cell nutrient consumption (×)"] = {
+        "type": "scalar",
+        "field": "infected_nutrient_consumption",
+    }
     params["Immune Decay Rate"] = {
         "type": "scalar",
         "field": "imm_decay_rate",
@@ -409,6 +413,7 @@ def sweep_category(label: str, meta: dict) -> str:
     if field.startswith("imm_") or "Immune" in label:
         return "Immune"
     if field in ("monod_constant", "carrying_capacity", "recycle_fraction", "s_in", "s_out",
+                 "infected_nutrient_consumption",
                  "monod_constant_lysis", "dormancy_monod_constant", "dormancy_carrying_capacity"):
         return "Nutrient & environment"
     if field in ("od_to_cfu_conversion_factor", "debris_kdis", "debris_u", "debris_v"):

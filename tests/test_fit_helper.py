@@ -196,3 +196,55 @@ def test_build_fit_spec_maps_to_pbisim_fit():
     assert spec["dataset"]["metadata"]["od_to_cfu"] == 8e8
     assert "warm_start" in spec
     json.dumps(spec)   # must be serializable (no NaN/ndarray)
+
+
+def test_model_information_criteria_and_compare():
+    """AIC/BIC/AICc helpers delegate to pbisim-fit and rank a better-fitting (lower-RSS)
+    model ahead of a worse one, penalising extra parameters via ΔAIC."""
+    from pbisim_app.fit_helper import model_information_criteria, compare_fit_models
+    rng = np.random.default_rng(0)
+    tight = rng.normal(0, 0.1, size=60)   # small residuals — good fit
+    loose = rng.normal(0, 0.5, size=60)   # large residuals — poor fit
+
+    ic = model_information_criteria(tight, 3)
+    assert set(ic) >= {"rss", "n_data", "n_params", "aic", "bic", "aicc"}
+    assert ic["n_data"] == 60 and ic["n_params"] == 3
+
+    ranked = compare_fit_models({"good": (tight, 3), "bad": (loose, 3)})
+    assert ranked[0]["name"] == "good"          # lower RSS → lower AIC → ranked first
+    assert ranked[0]["delta_aic"] == 0.0
+    assert ranked[1]["delta_aic"] > 0.0
+
+    # matches pbisim-fit directly when it is installed with the criteria module
+    try:
+        from pbisim_fit import compare_models
+        ref = compare_models({"good": (tight, 3), "bad": (loose, 3)})
+        assert ref[0]["name"] == ranked[0]["name"]
+        assert np.isclose(ref[0]["aic"], ranked[0]["aic"])
+    except Exception:
+        pass
+
+
+def test_compare_penalises_extra_free_parameters():
+    """Given an identical residual fit, the model with MORE free parameters gets a worse
+    AIC — the parsimony guardrail the panel exists to provide."""
+    from pbisim_app.fit_helper import compare_fit_models
+    resid = np.full(50, 0.2)
+    ranked = compare_fit_models({"parsimonious": (resid, 2), "overfit": (resid, 8)})
+    assert ranked[0]["name"] == "parsimonious"
+    assert ranked[1]["name"] == "overfit" and ranked[1]["delta_aic"] > 0.0
+
+
+def test_normalize_mixed_type_arm_column_is_stringified():
+    """A numeric/text/NaN arm column must normalise to uniformly str arms so the
+    Calibration page's sorted(unique()) never hits a float-vs-str TypeError."""
+    from pbisim_app.fit_helper import normalize_fit_dataframe
+    df = pd.DataFrame({
+        "TIME": [0, 1, 0, 1], "DV": [1e7, 1e6, 1e7, 1e6],
+        "ARM": [1001, "1001", "control", np.nan],   # object dtype, mixed + NaN
+        "OBS": ["cfu"] * 4,
+    })
+    out, conds = normalize_fit_dataframe(df, "TIME", "DV", "OBS", ["ARM"])
+    assert all(isinstance(a, str) for a in out["arm"].unique())
+    sorted(out["arm"].unique())                      # must not raise
+    assert all(isinstance(k, str) for k in conds)

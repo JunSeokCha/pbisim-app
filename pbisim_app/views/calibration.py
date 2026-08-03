@@ -249,6 +249,8 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
     return {
         "panels": _panel_list, "metrics": _metrics,
         "combined": float(np.sqrt(np.mean(_all ** 2))) if _all.size else float("nan"),
+        # Pooled log10 residual vector (the AIC/BIC model-comparison input) + its size.
+        "residuals": _all.tolist(), "n_resid": int(_all.size),
         "stat_label": _stat_label,
         "title": ctx.get("title") or (f"Model vs observations ({_stat_label}"
                  + (f" + {ctx['band_choice']} band)" if ctx["band"] else ")")),
@@ -279,7 +281,7 @@ def render():
                       "fit_load", "fit_save_scenario", "fit_run_nls", "fit_apply_map",
                       "fit_model_sel", "fit_job", "fit_stop", "fit_tbl_reset",
                       "fit_spec_from_tables", "fit_spec_to_tables", "fit_spec_rev",
-                      "fit_share_go"}
+                      "fit_share_go", "fit_cmp_add", "fit_cmp_clear"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk in _FIT_NOPERSIST:
@@ -433,8 +435,10 @@ def render():
                        f"{len(_arm_doses)} arm(s) — these override the matching manual fields.")
 
         if _long is not None and len(_long):
-            _arms = sorted(_long["arm"].unique())
-            _obs_keys = sorted(_long["observable"].unique())
+            # key=str guards the sort even if a stale/exotic dtype slips a non-str in
+            # (normalize now coerces arm/observable to str, but be defensive).
+            _arms = sorted(_long["arm"].astype(str).unique(), key=str)
+            _obs_keys = sorted(_long["observable"].astype(str).unique(), key=str)
 
             # Per-arm covariate values (for covariate-link fitting): numeric grouping
             # columns (constant within an arm) plus the dose-derived MOI. Available names
@@ -705,6 +709,13 @@ def render():
                             st.session_state["int_s_out"] = st.number_input(
                                 "Nutrient washout (s_out)", value=float(st.session_state.get("int_s_out", 0.0)),
                                 format="%g", key="fit_edit_s_out")
+                        st.session_state["int_infected_nutrient_consumption"] = st.number_input(
+                            "Infected-cell nutrient consumption (×)", min_value=0.0,
+                            value=float(st.session_state.get("int_infected_nutrient_consumption", 0.0)),
+                            format="%g", key="fit_edit_infected_nut",
+                            help="Latent-infected (I) cells' substrate draw, × the uninfected per-capita "
+                                 "uptake (0 = off). Lowers the resistant regrowth ceiling in an "
+                                 "MOI-graded way — a mechanistic alternative to a fitness cost.")
                     else:
                         st.caption("Nutrient tracking is off (constant/logistic growth) — S₀/recycle/inflow/"
                                    "washout are inactive. Choose a nutrient growth signal in the builder to fit them.")
@@ -849,6 +860,64 @@ def render():
                            "(minimise the combined objective). Edits update the live model directly "
                            "and can be saved as Parts in the Library.")
 
+                # ── Model comparison (AIC / BIC) ─────────────────────────────
+                # RSS alone always favours the bigger model; AIC/BIC penalise parameters.
+                # Snapshot the current overlay (its pooled log10 residuals + a free-param
+                # count) under a name, then rank candidates via pbisim-fit's compare_models.
+                _resid = _ovr.get("residuals") or []
+                with st.expander("Compare models (AIC / BIC)", expanded=False):
+                    st.caption("Snapshot each candidate model (a growth form, a resistance "
+                               "mechanism, …) after overlaying it, then compare. AIC/BIC "
+                               "penalise extra parameters so a richer model must *earn* its "
+                               "complexity. **Only valid across models overlaid on the same "
+                               "data** (same points).")
+                    _cmp = st.session_state.setdefault("fit_model_comparison", [])
+                    _cc1, _cc2, _cc3 = st.columns([2, 1, 1])
+                    with _cc1:
+                        _cmp_name = st.text_input("Candidate name", key="fit_cmp_name",
+                                                  placeholder=f"model {len(_cmp) + 1}")
+                    with _cc2:
+                        _cmp_k = int(st.number_input("Free params (k)", min_value=1, step=1,
+                                                     value=int(st.session_state.get("fit_cmp_k", 3)),
+                                                     key="fit_cmp_k",
+                                                     help="Number of estimated parameters for THIS "
+                                                          "candidate — the AIC/BIC complexity penalty."))
+                    with _cc3:
+                        st.markdown("<div style='height:1.8em'></div>", unsafe_allow_html=True)
+                        _add = st.button("Add current model", key="fit_cmp_add", width="stretch",
+                                         disabled=not _resid)
+                    if _add and _resid:
+                        _cmp.append({"name": _cmp_name.strip() or f"model {len(_cmp) + 1}",
+                                     "residuals": list(_resid), "k": _cmp_k,
+                                     "n": int(_ovr.get("n_resid", len(_resid)))})
+                        st.session_state["fit_model_comparison"] = _cmp
+                        st.rerun()
+                    if not _resid:
+                        st.info("Overlay a model first — a snapshot needs residuals.")
+                    if _cmp:
+                        _ns = {c["n"] for c in _cmp}
+                        if len(_ns) > 1:
+                            st.warning(f"Candidates were overlaid on different numbers of data "
+                                       f"points ({sorted(_ns)}) — AIC/BIC are only comparable on "
+                                       "identical data. Re-snapshot with the same group/observable "
+                                       "selection.")
+                        _ranked = compare_fit_models(
+                            {c["name"]: (c["residuals"], c["k"]) for c in _cmp})
+                        _rows = [{"model": r["name"], "k": r["n_params"], "n": r["n_data"],
+                                  "RSS (log₁₀)": r["rss"], "AIC": r["aic"], "BIC": r["bic"],
+                                  "AICc": r["aicc"], "ΔAIC": r["delta_aic"], "ΔBIC": r["delta_bic"]}
+                                 for r in _ranked]
+                        st.dataframe(
+                            pd.DataFrame(_rows).style.format({
+                                "RSS (log₁₀)": "{:.3f}", "AIC": "{:.1f}", "BIC": "{:.1f}",
+                                "AICc": "{:.1f}", "ΔAIC": "{:.2f}", "ΔBIC": "{:.2f}"}),
+                            width="stretch", hide_index=True)
+                        st.caption("Lower is better; ΔAIC = 0 is the best-supported model. "
+                                   "ΔAIC < 2 ≈ comparable support; > 10 ≈ decisively worse.")
+                        if st.button("Clear comparison", key="fit_cmp_clear"):
+                            st.session_state.pop("fit_model_comparison", None)
+                            st.rerun()
+
             # ── 5b · Export fit specification (pbisim-fit hand-off) ───────────
             st.markdown("### 5b · Export fit specification")
             st.caption("Bundle the data (long format), per-arm conditions (growth phase / B₀ / MOI), "
@@ -874,7 +943,10 @@ def render():
             st.markdown("### 5c · Run NLS fit (pbisim-fit)")
             st.caption("Fit the selected parameters to the selected arms/observables with "
                        "pbisim-fit's non-linear least squares (`refine_nls`) — the same engine "
-                       "the export spec feeds. Runs locally; needs `pbisim-fit` installed.")
+                       "the export spec feeds. Runs locally; needs `pbisim-fit` installed. "
+                       "Fits use the **BDF** stiff solver with Jacobian variable-scaling "
+                       "(`x_scale='jac'`) — pbisim-fit's defaults; LSODA can silently stall on "
+                       "these stiff phage–bacteria / sequential-growth ODEs.")
             try:
                 from pbisim_app import nls_fit as _nls
                 # Fit runs against a CHOSEN Model, not the live builder — a frozen

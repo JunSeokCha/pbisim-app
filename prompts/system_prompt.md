@@ -250,8 +250,28 @@ builder.with_mutations(
 builder.with_nutrient(
     carrying_capacity=1e9,   # max supportable bacteria (CFU/mL)
     monod_constant=0.1,      # half-saturation constant (dimensionless S units)
+    s_in=0.0, s_out=0.0,     # continuous inflow / washout (chemostat); 0 = batch
+    infected_nutrient_consumption=0.0,  # latent-I cells' substrate draw, ×uninfected
+                                        # per-capita uptake. 0 = off (default). >1 =
+                                        # a hijacked cell consumes more (lowers the
+                                        # resistant regrowth ceiling, MOI-graded).
 )
 ```
+
+### Growth signal functions (how growth is modulated)
+Default growth is Monod (`monod_growth`) via `with_nutrient`. To use another form, set
+`with_growth_function(fn)` (import `fn` from `pbisim`), or use a dedicated helper:
+```python
+from pbisim import monod_growth, logistic_growth, constant_growth, monod_logistic_growth, \
+    density_throttled_growth, gompertz_growth, sequential_monod, smooth_efficiency_monod
+builder.with_growth_function(logistic_growth)          # density (logistic), needs carrying_capacity
+builder.with_sequential_growth(rate_factors=[1.0, 0.5],  # diauxic: X phases, one nutrient pool
+                               monod_constants=[0.1, 0.5], thresholds=[0.3])  # thresholds len X-1, ↓ in (0,1)
+builder.with_smooth_efficiency_growth(monod_K_low=3.0, theta=0.5, hill=4.0)  # smooth diauxie — better-
+    # conditioned FIT. Monod K blends from efficient monod_constant (high S) to monod_K_low (low S).
+```
+`gompertz_growth` is a **nutrient**-response sigmoid `exp(-exp(-k(S-S∞)))` reading `monod_constant`
+as `k` and `carrying_capacity` as `S∞` — both on the nutrient scale (S~0–1), NOT the density scale.
 
 ### `.with_antibiotic(name, *, k_elim, Vc=1.0, emax, ec50, hill=1.0, ...)`
 ```python

@@ -360,6 +360,31 @@ def test_multi_observable_overlay_small_multiples():
     assert set(ms.value) == {"cfu", "od"}
 
 
+def test_overlay_exposes_residuals_and_model_comparison():
+    """The overlay result carries the pooled residual vector, and the AIC/BIC panel
+    snapshots candidate models and ranks them."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _multi_observable_dataset(), "time": "TIME", "value": "DV",
+        "observable": "OBS", "arm_cols": ["PHAGE"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    [b for b in at.button if b.key == "fit_overlay"][0].click().run()
+    ovr = at.session_state["calib_overlay_result"]
+    assert ovr["residuals"] and ovr["n_resid"] == len(ovr["residuals"])  # pooled residuals surfaced
+
+    # snapshot two candidates (different free-param counts) and rank them
+    at.session_state["fit_cmp_k"] = 3
+    [b for b in at.button if b.key == "fit_cmp_add"][0].click().run()
+    at.session_state["fit_cmp_k"] = 6
+    [b for b in at.button if b.key == "fit_cmp_add"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    cmp = at.session_state["fit_model_comparison"]
+    assert len(cmp) == 2 and {c["k"] for c in cmp} == {3, 6}
+
+
 def _two_arm_cfu_dataset():
     """Two CFU arms (no phage) so a per-arm pre-run is the only thing that differs."""
     rows = []

@@ -84,7 +84,7 @@ pbisim-app/
 | Dose-Response Sweeps | Log/Lin dose range per agent, MOI scaling, vector padding warnings, color-coded trajectories. |
 | Parameter Sweeps | 1D/2D sweeps over any ModelConfig field. Contour maps for 2D. n_depth resizing guard. |
 | Clinical Trials & Cohorts | Full ClinicalTrial API integration: IIV, PretreatmentPhase, parallel arms, KM plots, metric distributions, CSV/NLME export. |
-| Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → **filter rows**, **regroup** by chosen variables, aggregate replicates (**raw / mean / median + percentile band**) → overlay the current model vs observations (group multiselect) with live RMSE. Extensible observable registry (CFU/PFU/OD/luminescence). Phase A of the pbisim-fit integration. |
+| Calibration | Upload experimental CSV → normalize to pbisim-fit long format (auto-detect + Monolix column-map) → **filter rows**, **regroup** by chosen variables, aggregate replicates (**raw / mean / median + percentile band**) → overlay the current model vs observations (group multiselect) with live RMSE; run the pbisim-fit NLS fit; **compare candidate models by AIC/BIC** (ΔAIC/ΔBIC parsimony panel). Extensible observable registry (CFU/PFU/OD/luminescence). |
 | AI Assistant | Natural-language → pbisim code. Self-healing loop (up to 3 retries with history rollback). Dynamic model listing from `/v1/models`. |
 | Library | Two sections: **💾 Scenarios** (save/load full-config snapshots) and **🧬 Parts** (composable bacteria/phages/antibiotics — save a current entity, load into config, host-tagged phages); each export/import as versioned JSON. (Tutorial presets + `presets.py`/`test_presets.py` removed 2026-07-10 — they tracked the pbisim tutorials, which change independently.) |
 | Help | Curated in-app orientation (quick start, per-page guide, key concepts, troubleshooting) + the bundled `USER_GUIDE.md` rendered from disk at runtime (single source of truth). `views/help.py`; imported as `help_view` in the dispatch to avoid shadowing the builtin. |
@@ -225,6 +225,33 @@ research-grade, so only share the password with trusted people.
   current and re-run `tests/test_system_prompt_sync.py` after any pbisim upgrade.
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
+
+## Done this session (2026-08-03) — upstream sync: new growth signal, infected-nutrient draw, AIC/BIC, prompt
+
+Reflected recent pbisim / pbisim-fit updates in the app (A→F sequence):
+- **A — `smooth_efficiency_monod`** growth signal (Monod K blends efficient→inefficient via a Hill
+  of S; a differentiable, better-conditioned diauxie). `GROWTH_SIGNALS` + `_GROWTH_NUTRIENT`;
+  `growth_nutrient_kwargs` emits `monod_K_low`/`θ`/`hill`; Direct build → `with_smooth_efficiency_growth`
+  (recorded), BRG/StrainSet via `to_config`; dedicated UI inputs; snapshot rows; auto in the categorical
+  sweep. `_GROWTH_SMOOTH_EFF` const.
+- **B — `infected_nutrient_consumption`** (latent-I cells draw down substrate; default 0 = legacy).
+  UI input in the nutrient-environment section; forwarded via `growth_nutrient_kwargs` → `with_nutrient`
+  (Direct) / `to_config` (BRG/StrainSet); snapshot row.
+- **C — AIC/BIC model comparison on Calibration.** `_compute_overlay` now returns the pooled log10
+  `residuals` (+ `n_resid`); `fit_helper.model_information_criteria` / `compare_fit_models` delegate to
+  pbisim-fit's `information_criteria`/`compare_models` (local fallback for older installs). New
+  **"Compare models (AIC / BIC)"** expander: snapshot a candidate (residuals + free-param count k) →
+  ranked table with ΔAIC/ΔBIC; warns when candidates were overlaid on different n. Buttons in
+  `_FIT_NOPERSIST`; store `fit_model_comparison`.
+- **D — NLS solver default.** Confirmed the app builds `NLSConfig(...)` WITHOUT `fit_method`/`x_scale`,
+  so it inherits pbisim-fit's new BDF + `x_scale='jac'` defaults automatically; added a caption on the
+  §5c fit control.
+- **E — AI prompt sync.** Added `infected_nutrient_consumption` + a growth-signal-functions block
+  (`with_growth_function`/`with_sequential_growth`/`with_smooth_efficiency_growth`, Gompertz nutrient
+  note) to `prompts/system_prompt.md`; extended `test_system_prompt_sync.py` method guard.
+- **F — docs/memory:** Help key-concepts + Calibration row; this note; memory `upstream-sync-2026-08`.
+- Tests: +A (build+repro), +B (all-modes+default-off), +C (helpers + overlay residuals + panel e2e),
+  +E (guard). Full suite green (run before commit).
 
 ## Done this session (2026-07-27) — EventTable dose-parser migration + model-config snapshot
 

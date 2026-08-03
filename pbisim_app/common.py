@@ -55,6 +55,8 @@ from pbisim_app.fit_helper import (
     aggregate_observations,
     fit_residual,
     residual_vector_log10,
+    model_information_criteria,
+    compare_fit_models,
     build_fit_spec,
     config_param_snapshot,
 )
@@ -1083,6 +1085,9 @@ def render_model_snapshot(container=None, *, snapshot: dict | None = None):
         ("Carrying capacity K", _ga("carrying_capacity") if gfn not in ("gompertz_growth", "sequential_monod") else None),
         ("Gompertz shape k", _ga("monod_constant") if gfn == "gompertz_growth" else None),
         ("Gompertz inflection S∞", _ga("carrying_capacity") if gfn == "gompertz_growth" else None),
+        ("Inefficient Monod K (low S)", _ga("monod_K_low") if gfn == "smooth_efficiency_monod" else None),
+        ("Efficiency transition θ", _ga("monod_efficiency_theta") if gfn == "smooth_efficiency_monod" else None),
+        ("Efficiency transition Hill", _ga("monod_efficiency_hill") if gfn == "smooth_efficiency_monod" else None),
         ("Density throttle Kd", _ga("density_growth_constant") if gfn == "density_throttled_growth" else None),
         ("Diauxic rate factors", _ga("growth_phase_rate_factors") if gfn == "sequential_monod" else None),
         ("Diauxic Monod Kᵢ", _ga("growth_phase_monod") if gfn == "sequential_monod" else None),
@@ -1093,6 +1098,7 @@ def render_model_snapshot(container=None, *, snapshot: dict | None = None):
         ("Recycle fraction", _ga("recycle_fraction")),
         ("Nutrient inflow s_in", _ga("s_in")),
         ("Nutrient washout s_out", _ga("s_out")),
+        ("Infected-cell nutrient draw (×)", _ga("infected_nutrient_consumption") or None),
     ])
     _section("Death & dormancy", [
         ("Natural death dB (h⁻¹)", _ga("death_rate_B")),
@@ -1227,6 +1233,10 @@ DEMO_MODELS = [
             "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
             "int_gompertz_k": 10.0,    # gompertz_growth shape k (nutrient scale)
             "int_gompertz_sinf": 0.5,  # gompertz_growth inflection S∞ (nutrient scale)
+            "int_monod_K_low": 3.0,            # smooth_efficiency_monod: inefficient low-S K
+            "int_monod_efficiency_theta": 0.5, # smooth_efficiency_monod: transition midpoint θ
+            "int_monod_efficiency_hill": 4.0,  # smooth_efficiency_monod: transition sharpness
+            "int_infected_nutrient_consumption": 0.0,  # infected-cell nutrient draw (B, task B)
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1275,6 +1285,10 @@ DEMO_MODELS = [
             "int_growth_n_phases": 2,  # diauxic (sequential_monod) phase count
             "int_gompertz_k": 10.0,    # gompertz_growth shape k (nutrient scale)
             "int_gompertz_sinf": 0.5,  # gompertz_growth inflection S∞ (nutrient scale)
+            "int_monod_K_low": 3.0,            # smooth_efficiency_monod: inefficient low-S K
+            "int_monod_efficiency_theta": 0.5, # smooth_efficiency_monod: transition midpoint θ
+            "int_monod_efficiency_hill": 4.0,  # smooth_efficiency_monod: transition sharpness
+            "int_infected_nutrient_consumption": 0.0,  # infected-cell nutrient draw (B, task B)
             "int_recycle_fraction": 0.5,
             "int_initial_S": 1.0,
             "int_od_to_cfu_conversion_factor": 2e8,
@@ -1416,17 +1430,21 @@ GROWTH_SIGNALS = {
     "density-throttled (Monod × 1/(1+ΣB/Kd))": ("density_throttled_growth", True),
     "Gompertz (nutrient)":         ("gompertz_growth", True),
     "sequential / diauxic (Monod)": ("sequential_monod", True),
+    "smooth two-efficiency Monod": ("smooth_efficiency_monod", True),
 }
 
 # Growth functions that read nutrient S (need track_nutrients) and that need a carrying
 # capacity / S∞. gompertz_growth REUSES monod_constant as its shape k and carrying_capacity
 # as its inflection S∞ (a pbisim convention), so it appears in both sets.
 _GROWTH_NUTRIENT = {"monod_growth", "monod_logistic_growth", "density_throttled_growth",
-                    "gompertz_growth", "sequential_monod"}
+                    "gompertz_growth", "sequential_monod", "smooth_efficiency_monod"}
 _GROWTH_NEEDS_K = {"logistic_growth", "monod_logistic_growth", "gompertz_growth"}
 _GROWTH_NEEDS_KD = {"density_throttled_growth"}
 # sequential_monod (diauxic) needs the per-phase arrays instead of a single Monod K.
 _GROWTH_SEQUENTIAL = "sequential_monod"
+# smooth_efficiency_monod: efficient Monod K at high S blends to an inefficient K_low
+# at low S (Hill of S). Uses monod_constant as the high-S K plus its own low-S K + θ + hill.
+_GROWTH_SMOOTH_EFF = "smooth_efficiency_monod"
 
 
 # Death-signal options → pbisim death function name. constant_death (default) is the
@@ -1548,11 +1566,12 @@ def growth_nutrient_kwargs():
     ``with_sequential_growth`` — see ``build_nominal_config_from_gui``).
     """
     from pbisim import (monod_growth, logistic_growth, constant_growth, monod_logistic_growth,
-                        density_throttled_growth, gompertz_growth, sequential_monod)
+                        density_throttled_growth, gompertz_growth, sequential_monod,
+                        smooth_efficiency_monod)
     fns = {"monod_growth": monod_growth, "logistic_growth": logistic_growth,
            "constant_growth": constant_growth, "monod_logistic_growth": monod_logistic_growth,
            "density_throttled_growth": density_throttled_growth, "gompertz_growth": gompertz_growth,
-           "sequential_monod": sequential_monod}
+           "sequential_monod": sequential_monod, "smooth_efficiency_monod": smooth_efficiency_monod}
     name = st.session_state.get("int_growth_function", "monod_growth")
     fn = fns.get(name, monod_growth)
     nutrient_based = name in _GROWTH_NUTRIENT
@@ -1572,6 +1591,12 @@ def growth_nutrient_kwargs():
     if nutrient_based:
         kw["s_in"] = st.session_state.get("int_s_in", 0.0)
         kw["s_out"] = st.session_state.get("int_s_out", 0.0)
+        # Infected (latent I) cells draw down the shared substrate while building phage,
+        # at this multiple of the uninfected per-capita uptake (0 = legacy, off). >1 is
+        # biologically motivated (a hijacked cell often consumes more) and depletes the
+        # nutrient enough to lower the resistant regrowth ceiling in an MOI-graded way.
+        kw["infected_nutrient_consumption"] = st.session_state.get(
+            "int_infected_nutrient_consumption", 0.0)
     if needs_K:
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
     if name == "gompertz_growth":
@@ -1584,6 +1609,12 @@ def growth_nutrient_kwargs():
         kw["carrying_capacity"] = st.session_state.get("int_gompertz_sinf", 0.5)
     if name in _GROWTH_NEEDS_KD:  # density_throttled_growth's hyperbolic throttle constant
         kw["density_growth_constant"] = st.session_state.get("int_density_growth_constant", 1e9)
+    if name == _GROWTH_SMOOTH_EFF:  # smooth two-efficiency Monod: low-S K + Hill transition
+        # monod_constant (above) is the efficient high-S K; add the inefficient low-S K
+        # and the S-transition (θ midpoint, hill sharpness).
+        kw["monod_K_low"] = st.session_state.get("int_monod_K_low", 3.0)
+        kw["monod_efficiency_theta"] = st.session_state.get("int_monod_efficiency_theta", 0.5)
+        kw["monod_efficiency_hill"] = st.session_state.get("int_monod_efficiency_hill", 4.0)
     if name == _GROWTH_SEQUENTIAL:  # diauxic per-phase arrays
         rf, mc, th = sequential_growth_phase_params()
         kw["growth_phase_rate_factors"] = rf
@@ -2109,7 +2140,8 @@ def build_nominal_config_from_gui():
         # Nutrients / growth signal
         _gk = growth_nutrient_kwargs()
         _growth_fn = _gk.pop("growth_function")
-        if st.session_state.get("int_growth_function") == _GROWTH_SEQUENTIAL:
+        _gfn_name = st.session_state.get("int_growth_function")
+        if _gfn_name == _GROWTH_SEQUENTIAL:
             # Diauxic growth: with_sequential_growth sets growth_function + the three
             # per-phase arrays; the remaining kwargs (Ks fallback, recycle, s_in/out,
             # density flag) go through with_nutrient. Pop the phase arrays so they
@@ -2119,6 +2151,16 @@ def build_nominal_config_from_gui():
             _th = _gk.pop("growth_phase_thresholds")
             builder = rec.call("builder", builder, "with_sequential_growth",
                                rate_factors=_rf, monod_constants=_mc, thresholds=_th)
+        elif _gfn_name == _GROWTH_SMOOTH_EFF:
+            # Smooth two-efficiency Monod: with_smooth_efficiency_growth sets
+            # growth_function + monod_K_low/θ/hill; the high-S K (monod_constant) and
+            # the rest go through with_nutrient. Pop the smooth-eff fields (with_nutrient
+            # doesn't accept them).
+            _klow = _gk.pop("monod_K_low")
+            _theta = _gk.pop("monod_efficiency_theta")
+            _hill = _gk.pop("monod_efficiency_hill")
+            builder = rec.call("builder", builder, "with_smooth_efficiency_growth",
+                               _klow, theta=_theta, hill=_hill)
         else:
             builder = rec.call("builder", builder, "with_growth_function", _growth_fn)
         builder = rec.call("builder", builder, "with_nutrient", **_gk)
@@ -3030,6 +3072,8 @@ __all__ = [
     'aggregate_observations',
     'fit_residual',
     'residual_vector_log10',
+    'model_information_criteria',
+    'compare_fit_models',
     'build_fit_spec',
     'config_param_snapshot',
     'IIV_PARAMETERS',

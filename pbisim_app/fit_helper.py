@@ -76,13 +76,22 @@ def predicted_observable(result, obs_key, link_value=None, use_model_od=False, p
     return qty / lv if op == "div" else qty * lv
 
 
+def _str_col(s):
+    """Stringify a column NaN-safely. ``Series.astype(str)`` on an OBJECT-dtype column
+    leaves ``np.nan`` as a float (a pandas quirk), so a mixed numeric/text/NaN arm column
+    yields mixed float/str values that later blow up ``sorted(...)`` with a TypeError.
+    Map every cell through ``str`` (missing → the literal ``"nan"``) so the result is
+    uniformly ``str``."""
+    return s.map(lambda v: "nan" if pd.isna(v) else str(v))
+
+
 def _join_columns(df, cols):
-    """Vectorised ' | '-join of the string form of *cols* (fast; avoids row-wise agg)."""
+    """' | '-join of the (NaN-safe) string form of *cols*."""
     if not cols:
         return pd.Series(["all"] * len(df), index=df.index)
-    series = df[cols[0]].astype(str)
+    series = _str_col(df[cols[0]])
     for c in cols[1:]:
-        series = series + " | " + df[c].astype(str)
+        series = series + " | " + _str_col(df[c])
     return series
 
 
@@ -99,7 +108,7 @@ def normalize_fit_dataframe(df, time_col, value_col, observable, arm_cols, moi_c
         "value": pd.to_numeric(df[value_col], errors="coerce"),
         "arm": arm.values,
         "observable": (observable if observable in OBSERVABLES
-                       else df[observable].astype(str).str.lower().values),
+                       else _str_col(df[observable]).str.lower().values),
     })
     out = out.dropna(subset=["time", "value"]).reset_index(drop=True)
 
@@ -275,6 +284,62 @@ def residual_vector_log10(model_time, model_signal, data_time, data_value, floor
     obs = np.log10(np.maximum(obs, floor))
     diff = pred - obs
     return diff[np.isfinite(diff)]
+
+
+def _local_information_criteria(residuals, n_params):
+    """AIC/BIC/AICc from a residual vector (Gaussian-error least squares) — a local copy
+    of pbisim-fit's formula, used only as a fallback when the installed pbisim-fit predates
+    ``information_criteria``. Kept byte-consistent with pbisim_fit/model_selection/criteria.py."""
+    r = np.asarray(residuals, dtype=float).ravel()
+    r = r[np.isfinite(r)]
+    n = int(r.size)
+    if n == 0:
+        raise ValueError("no finite residuals")
+    rss = max(float(np.sum(r ** 2)), 1e-300)
+    logL = -0.5 * n * (np.log(2.0 * np.pi) + np.log(rss / n) + 1.0)
+    k = int(n_params)
+    aic = 2 * k - 2 * logL
+    bic = k * np.log(n) - 2 * logL
+    denom = n - k - 1
+    aicc = aic + (2 * k * (k + 1) / denom) if denom > 0 else float("inf")
+    return {"rss": rss, "n_data": n, "n_params": k, "logL": logL,
+            "aic": aic, "bic": bic, "aicc": aicc}
+
+
+def model_information_criteria(residuals, n_params):
+    """AIC / BIC / AICc for a model's (pooled log10) residual vector. Delegates to
+    pbisim-fit's ``information_criteria`` when available so the app and the fitter agree,
+    falling back to a local copy on an older pbisim-fit."""
+    try:
+        from pbisim_fit import information_criteria
+        return information_criteria(residuals, int(n_params))
+    except Exception:
+        return _local_information_criteria(residuals, int(n_params))
+
+
+def compare_fit_models(models):
+    """Rank candidate models by AIC with ΔAIC / ΔBIC vs the best.
+
+    ``models`` is ``{name: (residuals, n_params)}``. Returns a list of dicts (one per
+    model, sorted by AIC ascending) — the pbisim-fit ``compare_models`` output, or a
+    local equivalent when pbisim-fit is too old. **Only meaningful across models fit to
+    the SAME data** (same ``n_data``); the caller should guard on that."""
+    try:
+        from pbisim_fit import compare_models
+        return compare_models(models)
+    except Exception:
+        rows = []
+        for name, (resid, k) in models.items():
+            ic = _local_information_criteria(resid, k)
+            ic["name"] = name
+            rows.append(ic)
+        rows.sort(key=lambda d: d["aic"])
+        best_aic = rows[0]["aic"]
+        best_bic = min(d["bic"] for d in rows)
+        for d in rows:
+            d["delta_aic"] = d["aic"] - best_aic
+            d["delta_bic"] = d["bic"] - best_bic
+        return rows
 
 
 def config_param_snapshot(config):

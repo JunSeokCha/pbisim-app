@@ -55,6 +55,9 @@ def test_modelbuilder_constructor_signature():
         "with_mutations",
         "with_nutrient",
         "with_antibiotic",
+        "with_growth_function",
+        "with_sequential_growth",
+        "with_smooth_efficiency_growth",
         "build",
     ],
 )

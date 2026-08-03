@@ -52,18 +52,24 @@ def render_model_builder(inoculum_mode="magnitude"):
                  "nutrient+density = Monod × logistic;  density-throttled = Monod × a soft "
                  "hyperbolic throttle 1/(1+ΣB/Kd) (never fully stops);  Gompertz = "
                  "exp(−exp(−k(S−S∞)));  sequential/diauxic = one nutrient pool consumed "
-                 "through ordered Monod phases (set the phases below).",
+                 "through ordered Monod phases (set the phases below);  smooth two-efficiency "
+                 "Monod = K blends from efficient (high S) to inefficient (low S) — a smooth, "
+                 "better-fitting diauxie.",
         )
     _gs_fn, _gs_track = GROWTH_SIGNALS[_gs_choice]
     st.session_state["int_growth_function"] = _gs_fn
     st.session_state["int_track_nutrients"] = _gs_track
     with _gm2:
-        # Monod Ks (nutrient half-saturation for Monod-family growth).
-        if _gs_fn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth"):
+        # Monod Ks (nutrient half-saturation). For smooth_efficiency_monod this is the
+        # EFFICIENT (high-S) K; the low-S K + transition are set in the block below.
+        if _gs_fn in ("monod_growth", "monod_logistic_growth", "density_throttled_growth",
+                      "smooth_efficiency_monod"):
+            _is_smeff = _gs_fn == "smooth_efficiency_monod"
             st.session_state["int_monod_constant"] = st.number_input(
-                "Monod constant (Ks)",
+                "Efficient Monod K (high S)" if _is_smeff else "Monod constant (Ks)",
                 value=float(st.session_state.get("int_monod_constant", 0.3)), step=0.05, format="%g",
-                help="Nutrient half-saturation for Monod growth S/(Ks+S).")
+                help=("High-substrate (efficient) Monod K — the small-K end." if _is_smeff
+                      else "Nutrient half-saturation for Monod growth S/(Ks+S)."))
         # Carrying capacity K (logistic density ceiling).
         if _gs_fn in ("logistic_growth", "monod_logistic_growth"):
             st.session_state["int_carrying_capacity"] = st.number_input(
@@ -90,6 +96,25 @@ def render_model_builder(inoculum_mode="magnitude"):
                 value=float(st.session_state.get("int_gompertz_sinf", 0.5)), step=0.05, format="%g",
                 help="Nutrient level at the growth-rate inflection — on the S scale (S₀ default "
                      "1.0), NOT the density scale. A value like 1e9 makes growth ≈ 0 (flat curve).")
+        # Smooth two-efficiency Monod: K blends from the efficient high-S K (above) to an
+        # inefficient low-S K, via a Hill of S — a differentiable diauxie (better-conditioned
+        # fit). K_low should be LARGER than the efficient K (poorer uptake when starved).
+        if _gs_fn == "smooth_efficiency_monod":
+            st.session_state["int_monod_K_low"] = st.number_input(
+                "Inefficient Monod K (low S)", min_value=0.0,
+                value=float(st.session_state.get("int_monod_K_low", 3.0)), step=0.5, format="%g",
+                help="Low-substrate (inefficient) Monod K — typically larger than the efficient "
+                     "K, so growth decelerates into a slow non-saturating creep as S depletes.")
+            st.session_state["int_monod_efficiency_theta"] = st.number_input(
+                "Efficiency transition θ (nutrient units)", min_value=0.0, max_value=1.0,
+                value=float(st.session_state.get("int_monod_efficiency_theta", 0.5)),
+                step=0.05, format="%g",
+                help="Nutrient level where K is halfway between the efficient and inefficient "
+                     "values (on the S scale, in (0,1)).")
+            st.session_state["int_monod_efficiency_hill"] = st.number_input(
+                "Efficiency transition sharpness (Hill)", min_value=1.0,
+                value=float(st.session_state.get("int_monod_efficiency_hill", 4.0)),
+                step=1.0, format="%g", help="Hill exponent for the K(S) transition; ≥ 1, larger = sharper.")
 
     # Diauxic (sequential_monod) per-phase editor — a single nutrient pool consumed
     # through X ordered phases, each with its own max-rate factor and Monod K. As S
@@ -1244,6 +1269,15 @@ def render():
                     "Continuous Washout dilution (s_out)",
                     value=float(st.session_state.get("int_s_out", 0.0)), step=0.05,
                 )
+                st.session_state["int_infected_nutrient_consumption"] = st.number_input(
+                    "Infected-cell nutrient consumption (×)",
+                    value=float(st.session_state.get("int_infected_nutrient_consumption", 0.0)),
+                    min_value=0.0, step=0.25, format="%g",
+                    help="Latent-infected (I) cells consume the shared substrate at this multiple "
+                         "of the uninfected per-capita uptake while building phage. 0 = off "
+                         "(legacy). >1 (a hijacked cell often consumes more) depletes nutrient and "
+                         "lowers the resistant regrowth ceiling in an MOI-graded way — a mechanistic "
+                         "alternative to a fitness cost.")
             else:
                 st.info("The selected growth signal is nutrient-independent (constant / density), "
                         "so nutrient substrate dynamics are inactive.")

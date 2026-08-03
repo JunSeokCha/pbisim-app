@@ -78,7 +78,9 @@ def render():
          "Fit the model to your data. Upload a CSV of CFU / PFU / OD / luminescence, map the "
          "columns (auto-detect + Monolix/NONMEM support), filter / regroup / aggregate replicates, "
          "overlay the current model vs observations with live RMSE, then run the pbisim-fit NLS "
-         "fit (role-based parameter table: Fixed / Free / Derived, MAP priors, per-arm covariates)."),
+         "fit (role-based parameter table: Fixed / Free / Derived, MAP priors, per-arm covariates). "
+         "A **Compare models (AIC / BIC)** panel ranks candidate models with a parsimony penalty, so "
+         "a richer model must earn its extra parameters."),
         ("AI Assistant",
          "Describe a simulation in plain language; Claude writes and runs the pbisim code and "
          "explains the result (with a self-healing retry loop). Needs an Anthropic API key "
@@ -125,8 +127,10 @@ def render():
             "Several processes are modulated by a selectable **signal function** (set model-wide in "
             "the topmost builder panel):\n\n"
             "- **Growth** — constant, Monod (nutrient), logistic (density), Monod×logistic, "
-            "density-throttled, Gompertz, or **sequential / diauxic** (one nutrient pool consumed "
-            "through ordered Monod phases — useful for biphasic growth curves).\n"
+            "density-throttled, Gompertz, **sequential / diauxic** (one nutrient pool consumed "
+            "through ordered Monod phases), or **smooth two-efficiency Monod** (a differentiable "
+            "diauxie — the Monod K blends from efficient at high nutrient to inefficient at low "
+            "nutrient; the better-conditioned choice for fitting growth curves).\n"
             "- **Death** — constant, nutrient (starvation), density (crowding), or nutrient+density.\n"
             "- **Lysis progression** — constant, or nutrient-coupled (`frac_lysis`).\n"
             "- **Dormancy / resuscitation / depth-diffusion** — constant, nutrient, density, or "
