@@ -530,16 +530,19 @@ def test_categorical_growth_signal_sweep_runs():
                    for v in _codes)
 
 
-def test_infected_nutrient_consumption_is_sweepable():
-    """infected_nutrient_consumption is exposed as a scalar sweep parameter under the
-    Nutrient & environment category and applies to the config."""
+def test_infected_nutrient_consumption_is_sweepable_per_phage():
+    """infected_nutrient_consumption is now a PER-PHAGE property: when the config carries the
+    (n_phages,) array, the sweep offers a per-phage entry (Phage category) + an ALL-phages
+    broadcast, and applying one changes only that phage's rate."""
     import numpy as np
     from pbisim import ModelBuilder
     from pbisim_app.sweep_helper import get_sweep_parameters, apply_sweep_parameter, sweep_category
-    cfg = ModelBuilder(n_bacteria=1, n_phages=1).build()
-    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}], phages=[{"name": "P0"}])
-    lbl = "Infected-cell nutrient consumption (×)"
-    assert lbl in p and p[lbl]["field"] == "infected_nutrient_consumption"
-    assert sweep_category(lbl, p[lbl]) == "Nutrient & environment"
-    c, *_ = apply_sweep_parameter(2.5, p[lbl], cfg, np.array([1e7]), np.array([1e6]), 1.0, {})
-    assert c.infected_nutrient_consumption == 2.5
+    cfg = ModelBuilder(n_bacteria=1, n_phages=2).with_growth_rates([1.0]).with_nutrient(
+        infected_nutrient_consumption=np.array([0.0, 0.0])).build()
+    p = get_sweep_parameters(cfg, strains=[{"name": "WT"}], phages=[{"name": "P0"}, {"name": "P1"}])
+    lbl = "Infected-cell nutrient consumption - Phage 0 (P0)"
+    assert lbl in p and p[lbl]["type"] == "array1d" and p[lbl]["field"] == "infected_nutrient_consumption"
+    assert sweep_category(lbl, p[lbl]) == "Phage"
+    assert "Infected-cell nutrient consumption (ALL phages)" in p
+    c, *_ = apply_sweep_parameter(2.5, p[lbl], cfg, np.array([1e7]), np.array([1e6, 1e6]), 1.0, {})
+    assert c.infected_nutrient_consumption[0] == 2.5 and c.infected_nutrient_consumption[1] == 0.0

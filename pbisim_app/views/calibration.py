@@ -709,13 +709,8 @@ def render():
                             st.session_state["int_s_out"] = st.number_input(
                                 "Nutrient washout (s_out)", value=float(st.session_state.get("int_s_out", 0.0)),
                                 format="%g", key="fit_edit_s_out")
-                        st.session_state["int_infected_nutrient_consumption"] = st.number_input(
-                            "Infected-cell nutrient consumption (×)", min_value=0.0,
-                            value=float(st.session_state.get("int_infected_nutrient_consumption", 0.0)),
-                            format="%g", key="fit_edit_infected_nut",
-                            help="Latent-infected (I) cells' substrate draw, × the uninfected per-capita "
-                                 "uptake (0 = off). Lowers the resistant regrowth ceiling in an "
-                                 "MOI-graded way — a mechanistic alternative to a fitness cost.")
+                        st.caption("Infected-cell nutrient consumption is now **per-phage** — edit it "
+                                   "on each phage in the model builder below.")
                     else:
                         st.caption("Nutrient tracking is off (constant/logistic growth) — S₀/recycle/inflow/"
                                    "washout are inactive. Choose a nutrient growth signal in the builder to fit them.")

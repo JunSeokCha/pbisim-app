@@ -505,6 +505,14 @@ def render_model_builder(inoculum_mode="magnitude"):
                             "depth layer). 0 = phage penetrates all dormant layers equally."
                         ),
                     )
+                    phages[i]["infected_nutrient_consumption"] = st.number_input(
+                        "Infected-cell nutrient consumption (×)",
+                        value=float(phages[i].get("infected_nutrient_consumption", 0.0)),
+                        min_value=0.0, step=0.25, format="%g", key=f"phg_infnut_{i}",
+                        help="Substrate drawn by cells infected by THIS phage, × the uninfected "
+                             "per-capita uptake, while building phage. 0 = off (legacy); >1 = a "
+                             "hijacked cell consumes more. Per-phage (a phage×host property) — "
+                             "matters in cocktails; needs a nutrient-tracking growth signal.")
 
                     st.markdown("**Pseudolysogeny & Hibernation**")
                     phages[i]["hibernation_rate_s"] = st.number_input("Susceptible I->H rate", value=float(phages[i].get("hibernation_rate_s", 0.0)), step=0.05, key=f"phg_hib_s_{i}")
@@ -667,6 +675,13 @@ def render_model_builder(inoculum_mode="magnitude"):
                         min_value=0.0, step=0.1, key=f"brg_phg_atten_{idx}",
                         help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
                     )
+                    phages[idx]["infected_nutrient_consumption"] = st.number_input(
+                        "Infected-cell nutrient consumption (×)",
+                        value=float(phages[idx].get("infected_nutrient_consumption", 0.0)),
+                        min_value=0.0, step=0.25, format="%g", key=f"brg_phg_infnut_{idx}",
+                        help="Substrate drawn by cells infected by THIS phage, × the uninfected "
+                             "per-capita uptake (0 = off; >1 = a hijacked cell consumes more). "
+                             "Per-phage; needs a nutrient-tracking growth signal.")
 
                     st.markdown("**Advanced Phage Kinetics**")
                     phages[idx]["phage_decay_Km"] = st.number_input(
@@ -881,6 +896,13 @@ def render_model_builder(inoculum_mode="magnitude"):
                         min_value=0.0, step=0.1, key=f"ss_phg_atten_{idx}",
                         help="Exponential decay of dormant-cell adsorption with dormancy depth (0 = none).",
                     )
+                    phages[idx]["infected_nutrient_consumption"] = st.number_input(
+                        "Infected-cell nutrient consumption (×)",
+                        value=float(phages[idx].get("infected_nutrient_consumption", 0.0)),
+                        min_value=0.0, step=0.25, format="%g", key=f"ss_phg_infnut_{idx}",
+                        help="Substrate drawn by cells infected by THIS phage, × the uninfected "
+                             "per-capita uptake (0 = off; >1 = a hijacked cell consumes more). "
+                             "Per-phage; needs a nutrient-tracking growth signal.")
 
                     st.markdown("**Advanced Phage Kinetics**")
                     phages[idx]["phage_decay_Km"] = st.number_input(
@@ -1267,15 +1289,9 @@ def render():
                     "Continuous Washout dilution (s_out)",
                     value=float(st.session_state.get("int_s_out", 0.0)), step=0.05,
                 )
-                st.session_state["int_infected_nutrient_consumption"] = st.number_input(
-                    "Infected-cell nutrient consumption (×)",
-                    value=float(st.session_state.get("int_infected_nutrient_consumption", 0.0)),
-                    min_value=0.0, step=0.25, format="%g",
-                    help="Latent-infected (I) cells consume the shared substrate at this multiple "
-                         "of the uninfected per-capita uptake while building phage. 0 = off "
-                         "(legacy). >1 (a hijacked cell often consumes more) depletes nutrient and "
-                         "lowers the resistant regrowth ceiling in an MOI-graded way — a mechanistic "
-                         "alternative to a fitness cost.")
+                st.caption("**Infected-cell nutrient consumption** is now a per-phage property "
+                           "(a phage×host interaction) — set it on each phage, under *Strains & "
+                           "Phages → Phage → Dormant adsorption attenuation*.")
             else:
                 st.info("The selected growth signal is nutrient-independent (constant / density), "
                         "so nutrient substrate dynamics are inactive.")

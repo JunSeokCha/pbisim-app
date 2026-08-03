@@ -150,8 +150,12 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
             add(f"Adsorption — strain {i} × phage {j}", f"adsorption_rates[{i},{j}]", "adsorption_rates")
             add(f"Burst size — strain {i} × phage {j}", f"burst_sizes[{i},{j}]", "burst_sizes")
             add(f"Latent period — strain {i} × phage {j} (h)", f"latent_periods[{i},{j}]", "latent_periods")
+    _inc_per_phage = np.ndim(getattr(config, "infected_nutrient_consumption", 0.0)) > 0
     for j in range(npg):
         add(f"Phage decay rate — phage {j} (h⁻¹)", f"phage_decay_rates[{j}]", "phage_decay_rates")
+        if _inc_per_phage:   # per-phage infected-cell nutrient draw (nutrient-tracking models)
+            add(f"Infected-cell nutrient consumption — phage {j} (×)",
+                f"infected_nutrient_consumption[{j}]", "infected_nutrient_consumption")
     # mutation network (off-diagonal transitions only)
     if getattr(config, "mutation_rates", None) is not None:
         for i in range(nb):
@@ -170,11 +174,10 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
     # nutrient recycling + (when dormancy on) depth-diffusion & dormant death & OD weight
     add("Nutrient recycle fraction", "recycle_fraction", "recycle_fraction")
     # nutrient environment (only meaningful when nutrients are tracked)
+    # infected_nutrient_consumption is emitted PER PHAGE in the phage loop above.
     if getattr(config, "track_nutrients", False):
         add("Nutrient inflow (s_in)", "s_in", "s_in")
         add("Nutrient washout (s_out)", "s_out", "s_out")
-        add("Infected-cell nutrient consumption (×)", "infected_nutrient_consumption",
-            "infected_nutrient_consumption")
     # nutrient-coupled lysis / dormancy half-saturations, when those signals are active
     if getattr(getattr(config, "lysis_progression_function", None), "__name__", "") == "frac_lysis":
         add("Lysis Monod Ks (Ks_lysis)", "monod_constant_lysis", "monod_constant_lysis")

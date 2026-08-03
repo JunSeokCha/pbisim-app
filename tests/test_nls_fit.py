@@ -285,10 +285,12 @@ def test_available_targets_are_growth_signal_aware():
 
     base = lambda: ModelBuilder(n_bacteria=1, n_phages=1).with_growth_rates([1.0])
 
-    smeff = base().with_smooth_efficiency_growth(3.0).with_nutrient(monod_constant=0.2).build()
+    smeff = base().with_smooth_efficiency_growth(3.0).with_nutrient(
+        monod_constant=0.2, infected_nutrient_consumption=np.array([0.0])).build()
     p = _paths(smeff)
     assert {"monod_K_low", "monod_efficiency_theta", "monod_efficiency_hill"} <= p
-    assert {"s_in", "s_out", "infected_nutrient_consumption"} <= p   # nutrient env now estimable
+    assert {"s_in", "s_out"} <= p                          # nutrient env now estimable
+    assert "infected_nutrient_consumption[0]" in p         # per-phage (phage×host) estimable
 
     gom = base().with_growth_function(gompertz_growth).with_nutrient(monod_constant=10.0, carrying_capacity=0.5).build()
     assert "carrying_capacity" in _paths(gom)   # = Gompertz S∞
@@ -304,14 +306,14 @@ def test_available_targets_are_growth_signal_aware():
     # a nutrient-frozen (track_nutrients=False) model must NOT offer the nutrient-env estimables
     import dataclasses
     con = dataclasses.replace(base().build(), track_nutrients=False)
-    assert "s_in" not in _paths(con) and "infected_nutrient_consumption" not in _paths(con)
+    assert "s_in" not in _paths(con)
 
-    # each new estimable builds a valid v2 fit spec
+    # each new estimable builds a valid v2 fit spec (incl. the per-phage indexed path)
     def _t(path, lo, hi, log_, val):
         return {"path": path, "lo": lo, "hi": hi, "log": log_, "value": val, "free": True}
     _, spec = nls.build_param_spec_v2(
         smeff, [_t("monod_K_low", 0.01, 50.0, True, 3.0),
-                _t("infected_nutrient_consumption", 0.0, 5.0, False, 0.0)], [], [])
+                _t("infected_nutrient_consumption[0]", 0.0, 5.0, False, 0.0)], [], [])
     assert spec.n_params == 2
     _, spec2 = nls.build_param_spec_v2(seq, [_t("growth_phase_monod[1]", 0.01, 5.0, True, 0.5)], [], [])
     assert spec2.n_params == 1

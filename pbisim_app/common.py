@@ -589,6 +589,7 @@ def load_preset_to_state(params: dict):
                 "burst_sizes": p.get("burst_sizes", 50.0),
                 "latent_periods": p.get("latent_periods", 0.5),
                 "phage_decay_rates": p.get("phage_decay_rates", 0.1),
+                "infected_nutrient_consumption": p.get("infected_nutrient_consumption", 0.0),
                 "pk_mode": p.get("pk_mode", "None"),
                 "Vc": p.get("Vc", 5000.0),
                 "k_elim": p.get("k_elim", 0.2),
@@ -1098,7 +1099,8 @@ def render_model_snapshot(container=None, *, snapshot: dict | None = None):
         ("Recycle fraction", _ga("recycle_fraction")),
         ("Nutrient inflow s_in", _ga("s_in")),
         ("Nutrient washout s_out", _ga("s_out")),
-        ("Infected-cell nutrient draw (×)", _ga("infected_nutrient_consumption") or None),
+        ("Infected-cell nutrient draw (× per phage)",
+         _ga("infected_nutrient_consumption") if np.any(_ga("infected_nutrient_consumption")) else None),
     ])
     _section("Death & dormancy", [
         ("Natural death dB (h⁻¹)", _ga("death_rate_B")),
@@ -1599,12 +1601,19 @@ def growth_nutrient_kwargs():
     if nutrient_based:
         kw["s_in"] = st.session_state.get("int_s_in", 0.0)
         kw["s_out"] = st.session_state.get("int_s_out", 0.0)
-        # Infected (latent I) cells draw down the shared substrate while building phage,
-        # at this multiple of the uninfected per-capita uptake (0 = legacy, off). >1 is
-        # biologically motivated (a hijacked cell often consumes more) and depletes the
-        # nutrient enough to lower the resistant regrowth ceiling in an MOI-graded way.
-        kw["infected_nutrient_consumption"] = st.session_state.get(
-            "int_infected_nutrient_consumption", 0.0)
+        # Infected (latent I) cells draw down the shared substrate while building phage, at
+        # a multiple of the uninfected per-capita uptake (0 = legacy off; >1 = a hijacked
+        # cell consumes more). It's a PER-PHAGE (phage×host) property in the engine, so
+        # assemble the (n_phages,) array from the phage dicts. Always an array when phages
+        # exist so config.infected_nutrient_consumption is sweepable per phage; a legacy
+        # scalar (int_infected_nutrient_consumption) seeds any phage that hasn't set its own.
+        _phages = st.session_state.get("int_phages", [])
+        _legacy = float(st.session_state.get("int_infected_nutrient_consumption", 0.0) or 0.0)
+        if _phages:
+            kw["infected_nutrient_consumption"] = np.array(
+                [float(p.get("infected_nutrient_consumption", _legacy)) for p in _phages])
+        else:
+            kw["infected_nutrient_consumption"] = _legacy
     if needs_K:
         kw["carrying_capacity"] = st.session_state.get("int_carrying_capacity", 1e9)
     if name == "gompertz_growth":

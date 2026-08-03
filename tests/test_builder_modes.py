@@ -642,28 +642,30 @@ def test_gompertz_uses_nutrient_scale_defaults_and_grows():
     assert len(b.error) == 0
 
 
-def test_infected_nutrient_consumption_all_modes():
-    """infected_nutrient_consumption (latent-I nutrient draw) reaches the config across all
-    three builder modes when set, and defaults to 0 (legacy off). A value >0 changes the
-    nutrient-limited dynamics vs off in Direct mode."""
+def test_infected_nutrient_consumption_is_per_phage():
+    """infected_nutrient_consumption is now a PER-PHAGE (phage×host) property: a per-phage
+    input reaches the config as a (n_phages,) array in all three builder modes."""
     import numpy as np
     from streamlit.testing.v1 import AppTest
-    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
-                 "Custom Strains & Graph (StrainSet)"):
+    for mode, key in [("Direct (ModelBuilder)", "phg_infnut_0"),
+                      ("Binary Genotypes (BRG)", "brg_phg_infnut_0"),
+                      ("Custom Strains & Graph (StrainSet)", "ss_phg_infnut_0")]:
         a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
-        a.session_state["int_infected_nutrient_consumption"] = 3.0
-        a.run()
+        _w = [n for n in a.number_input if n.key == key]
+        assert _w, (mode, f"per-phage input {key} missing")
+        _w[0].set_value(2.0).run()
         [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
         cfg = a.session_state["simulation_config"]
-        assert cfg.infected_nutrient_consumption == 3.0, mode
+        inc = np.atleast_1d(np.asarray(cfg.infected_nutrient_consumption, dtype=float))
+        assert inc.shape == (1,) and inc[0] == 2.0, (mode, inc)   # per-phage array on the config
         assert len(a.error) == 0, (mode, [e.value for e in a.error])
 
-    # default is off (0.0) — legacy, backward-compatible
+    # default is off — a zero per-phage array (or scalar 0), backward-compatible
     a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
-    assert a.session_state["simulation_config"].infected_nutrient_consumption == 0.0
+    assert not np.any(a.session_state["simulation_config"].infected_nutrient_consumption)
 
 
 def test_smooth_efficiency_monod_all_modes():

@@ -37,10 +37,6 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         "type": "scalar",
         "field": "s_out",
     }
-    params["Infected-cell nutrient consumption (×)"] = {
-        "type": "scalar",
-        "field": "infected_nutrient_consumption",
-    }
     params["Immune Decay Rate"] = {
         "type": "scalar",
         "field": "imm_decay_rate",
@@ -190,6 +186,13 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         if getattr(config, "phage_decay_Km", None) is not None:
             params[f"Phage Decay Km (MM saturation) - {phage_name}"] = {
                 "type": "array1d", "field": "phage_decay_Km", "index": j,
+            }
+        # infected_nutrient_consumption is per-phage (an array on the config); only
+        # sweepable per-phage when the model actually tracks nutrients (else it's a scalar).
+        _inc = getattr(config, "infected_nutrient_consumption", 0.0)
+        if np.ndim(_inc) > 0 and j < np.size(_inc):
+            params[f"Infected-cell nutrient consumption - {phage_name}"] = {
+                "type": "array1d", "field": "infected_nutrient_consumption", "index": j,
             }
 
         # 2D arrays: adsorption, burst, latent (bacteria x phage)
@@ -341,6 +344,9 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
         params["Phage Decay Rate (ALL phages)"] = {"type": "array1d_broadcast", "field": "phage_decay_rates"}
         if getattr(config, "phage_decay_Km", None) is not None:
             params["Phage Decay Km (ALL phages)"] = {"type": "array1d_broadcast", "field": "phage_decay_Km"}
+        if np.ndim(getattr(config, "infected_nutrient_consumption", 0.0)) > 0:
+            params["Infected-cell nutrient consumption (ALL phages)"] = {
+                "type": "array1d_broadcast", "field": "infected_nutrient_consumption"}
 
     # Strain × phage matrix params — one value across every strain AND phage.
     if config.n_phages >= 1 and config.n_bacteria * config.n_phages > 1:
@@ -413,7 +419,6 @@ def sweep_category(label: str, meta: dict) -> str:
     if field.startswith("imm_") or "Immune" in label:
         return "Immune"
     if field in ("monod_constant", "carrying_capacity", "recycle_fraction", "s_in", "s_out",
-                 "infected_nutrient_consumption",
                  "monod_constant_lysis", "dormancy_monod_constant", "dormancy_carrying_capacity"):
         return "Nutrient & environment"
     if field in ("od_to_cfu_conversion_factor", "debris_kdis", "debris_u", "debris_v"):
@@ -423,7 +428,7 @@ def sweep_category(label: str, meta: dict) -> str:
         return "Bacterial"
     if field in ("phage_decay_rates", "phage_decay_Km", "adsorption_rates", "adsorption_rates_dormant",
                  "burst_sizes", "latent_periods", "latent_periods_dormant", "attenuation_rate",
-                 "hibernation_rate", "lytic_resumption_rate"):
+                 "hibernation_rate", "lytic_resumption_rate", "infected_nutrient_consumption"):
         return "Phage"
     if t in ("pk_array1d", "pd_array2d", "pd_array2d_broadcast") \
             or field in ("k_elim", "Vc", "abx_emax", "abx_ec50", "abx_hill"):

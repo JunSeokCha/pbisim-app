@@ -245,6 +245,25 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-03) — infected_nutrient_consumption is now per-phage
+
+pbisim `196d1d8` made `infected_nutrient_consumption` a **per-phage** `(n_phages,)` array
+(a phage×host property) instead of a system-wide scalar (scalar still broadcasts). App
+updated to match:
+- **UI:** per-phage input in each phage card (Direct/BRG/StrainSet, keys `phg_infnut_{i}` /
+  `brg_phg_infnut_{idx}` / `ss_phg_infnut_{idx}`), next to the dormant-adsorption attenuation.
+  Removed the old single nutrient-env scalar input (simulator + calibration compact block →
+  captions pointing to the phage cards).
+- **Build:** `growth_nutrient_kwargs` assembles the `(n_phages,)` array from the phage dicts
+  and passes it to `with_nutrient` (Direct) / `to_config` (BRG/StrainSet); ALWAYS an array
+  when phages exist (so `config.infected_nutrient_consumption` is per-phage-sweepable). Legacy
+  `int_infected_nutrient_consumption` scalar still seeds any phage without its own value.
+- **Sweep:** per-phage `array1d` entries + an ALL-phages broadcast, recategorized to **Phage**.
+- **Fit table:** per-phage `infected_nutrient_consumption[j]` targets (was one scalar), gated on
+  the config field being an array. Snapshot row relabeled "× per phage". Scenario/preset phage
+  seeding carries the field.
+- Tests updated: per-phage build (all modes), per-phage sweep, per-phage fit target. 262 passing.
+
 ## Done this session (2026-08-03) — real code editor for the Scripting page
 
 - **`streamlit-code-editor` (Ace) replaces `st.text_area` in the Scripting cells** — Tab-indent,
