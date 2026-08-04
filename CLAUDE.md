@@ -245,6 +245,19 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-04) — lysis floor φ_min (residual efficacy)
+
+pbisim `45e389c` added `config.lysis_floor` (φ_min ∈ [0,1], default 0) + `with_lysis_function(
+…, phi_min=)`: the lysis signal is rescaled `φ = φ_min + (1−φ_min)·signal`, so frac_lysis keeps
+some phage efficacy as nutrients deplete (φ→φ_min at S→0) instead of vanishing at stationary
+phase. φ_min=0 = legacy; 1 = constant lysis; no-op for constant lysis. App:
+- `lysis_kwargs()` returns `lysis_floor` (read from `int_lysis_floor`, only when frac_lysis).
+- Direct build → `with_lysis_function(fn, Ks_lysis=, phi_min=)`; BRG/StrainSet → `extra_kwargs
+  ["lysis_floor"]` (to_config). UI: "Lysis floor (φ_min)" input next to Ks_lysis (shown for
+  frac_lysis + nutrient-tracking growth). Defaults + preset/scenario load + snapshot(n/a — lysis
+  not shown). Sweep: scalar "Lysis Floor (φ_min)" (Nutrient & environment). Fit table: estimable
+  "Lysis floor (φ_min)" when frac_lysis (`_FAMILY` (0,1)). Test: floor reaches config all modes.
+
 ## Done this session (2026-08-03) — infected_nutrient_consumption is now per-phage
 
 pbisim `196d1d8` made `infected_nutrient_consumption` a **per-phage** `(n_phages,)` array

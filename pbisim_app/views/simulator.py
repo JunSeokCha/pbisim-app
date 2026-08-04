@@ -199,6 +199,15 @@ def render_model_builder(inoculum_mode="magnitude"):
                     step=0.05, format="%g",
                     help="Nutrient half-saturation for phi_lysis = S/(Ks_lysis + S). "
                          "Lower = lysis more sensitive to nutrient depletion.")
+                st.session_state["int_lysis_floor"] = st.number_input(
+                    "Lysis floor (φ_min)", min_value=0.0, max_value=1.0,
+                    value=float(st.session_state.get("int_lysis_floor", 0.0) or 0.0),
+                    step=0.05, format="%g",
+                    help="Residual lysis efficacy retained as nutrients vanish: the signal is "
+                         "rescaled φ = φ_min + (1−φ_min)·signal, so φ→1 at full growth and "
+                         "φ→φ_min as S→0. 0 = efficacy vanishes at stationary phase (legacy); "
+                         ">0 keeps adsorbed phage lysing slow/stationary cells at a reduced rate; "
+                         "1 = constant lysis.")
     if _ly_fn == "frac_lysis" and not growth_tracks_nutrients():
         st.caption("⚠ Nutrient-coupled lysis needs a nutrient-tracking growth signal "
                    "(Monod, density-throttled, Gompertz, diauxic, …) — it will fall back to "

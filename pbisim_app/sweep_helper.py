@@ -80,6 +80,9 @@ def get_sweep_parameters(config, strains=None, phages=None, antibiotics=None) ->
     params["Lysis Monod Constant (Ks_lysis)"] = {
         "type": "scalar", "field": "monod_constant_lysis", "default": 0.3,
     }
+    params["Lysis Floor (φ_min)"] = {
+        "type": "scalar", "field": "lysis_floor", "default": 0.0,
+    }
     if getattr(config, "debris_u", None) is not None:
         params["Debris Yield · deaths (u)"] = {"type": "scalar", "field": "debris_u"}
     if getattr(config, "debris_v", None) is not None:
@@ -419,7 +422,8 @@ def sweep_category(label: str, meta: dict) -> str:
     if field.startswith("imm_") or "Immune" in label:
         return "Immune"
     if field in ("monod_constant", "carrying_capacity", "recycle_fraction", "s_in", "s_out",
-                 "monod_constant_lysis", "dormancy_monod_constant", "dormancy_carrying_capacity"):
+                 "monod_constant_lysis", "lysis_floor",
+                 "dormancy_monod_constant", "dormancy_carrying_capacity"):
         return "Nutrient & environment"
     if field in ("od_to_cfu_conversion_factor", "debris_kdis", "debris_u", "debris_v"):
         return "OD & debris"

@@ -67,6 +67,7 @@ _FAMILY = {
     "s_out": (0.0, 2.0, False),
     "infected_nutrient_consumption": (0.0, 5.0, False),
     "monod_constant_lysis": (0.01, 5.0, True),     # frac_lysis nutrient half-saturation
+    "lysis_floor": (0.0, 1.0, False),              # frac_lysis residual efficacy (phi_min)
     "dormancy_monod_constant": (0.01, 5.0, True),  # nutrient dormancy half-saturation
     # pbisim-fit-side "virtual" estimables (setattr'd on the config; the engine never
     # sees them — the fit interprets them). See _apply_fitness_cost / _resolve_ic_override.
@@ -181,6 +182,7 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
     # nutrient-coupled lysis / dormancy half-saturations, when those signals are active
     if getattr(getattr(config, "lysis_progression_function", None), "__name__", "") == "frac_lysis":
         add("Lysis Monod Ks (Ks_lysis)", "monod_constant_lysis", "monod_constant_lysis")
+        add("Lysis floor (φ_min)", "lysis_floor", "lysis_floor")
     if getattr(config, "dormancy_monod_constant", None):
         add("Dormancy Monod Ks", "dormancy_monod_constant", "dormancy_monod_constant")
     if getattr(config, "dormancy_diffusion_rate", None) is not None:

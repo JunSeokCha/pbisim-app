@@ -502,6 +502,7 @@ def load_preset_to_state(params: dict):
     # Lysis signal: frac_lysis (nutrient-coupled) vs constant_lysis (default).
     st.session_state["int_lysis_function"] = params.get("lysis_function_name", "constant_lysis")
     st.session_state["int_monod_constant_lysis"] = params.get("monod_constant_lysis", 0.3) or 0.3
+    st.session_state["int_lysis_floor"] = float(params.get("lysis_floor", 0.0) or 0.0)
     st.session_state["int_density_total_cells"] = params.get("density_signal_uses_total_cells", False)
     st.session_state["int_superinfection"] = params.get("allow_superinfection", False)
     st.session_state["int_t_prerun"] = params.get("t_prerun", 0.0)
@@ -1225,6 +1226,7 @@ DEMO_MODELS = [
             "int_growth_function": "monod_growth",
             "int_lysis_function": "constant_lysis",
             "int_monod_constant_lysis": 0.3,
+            "int_lysis_floor": 0.0,  # phi_min: residual lysis efficacy at stationary phase
             "int_dormancy_signal": "nutrient",
             "int_resuscitation_signal": "nutrient",
             "int_diffusion_signal": "constant",
@@ -1277,6 +1279,7 @@ DEMO_MODELS = [
             "int_growth_function": "monod_growth",
             "int_lysis_function": "constant_lysis",
             "int_monod_constant_lysis": 0.3,
+            "int_lysis_floor": 0.0,  # phi_min: residual lysis efficacy at stationary phase
             "int_dormancy_signal": "nutrient",
             "int_resuscitation_signal": "nutrient",
             "int_diffusion_signal": "constant",
@@ -1491,10 +1494,12 @@ def lysis_signal_function(name):
 
 def lysis_kwargs():
     """Lysis-progression config for the selected lysis signal, as ModelConfig fields
-    (``lysis_progression_function`` + ``monod_constant_lysis``). frac_lysis is
-    nutrient-coupled, so it is coerced to constant when nutrients aren't tracked (same
-    guard as the dormancy signals). Returns ``{lysis_progression_function, monod_constant_lysis,
-    coerced}`` — ``coerced`` True when a nutrient signal was downgraded."""
+    (``lysis_progression_function`` + ``monod_constant_lysis`` + ``lysis_floor``). frac_lysis
+    is nutrient-coupled, so it is coerced to constant when nutrients aren't tracked (same
+    guard as the dormancy signals). ``lysis_floor`` (phi_min ∈ [0,1]) rescales the signal
+    ``phi = floor + (1-floor)*signal`` so phage keep some efficacy at stationary phase; only
+    meaningful for frac_lysis (a no-op for constant lysis, whose signal is already 1).
+    Returns ``{lysis_progression_function, monod_constant_lysis, lysis_floor, coerced}``."""
     name = st.session_state.get("int_lysis_function", "constant_lysis")
     track = growth_tracks_nutrients()   # any nutrient-tracking growth, not just Monod
     coerced = False
@@ -1502,7 +1507,9 @@ def lysis_kwargs():
         name, coerced = "constant_lysis", True
     fn = lysis_signal_function(name)
     ks = st.session_state.get("int_monod_constant_lysis", 0.3) if name == "frac_lysis" else None
-    return {"lysis_progression_function": fn, "monod_constant_lysis": ks, "coerced": coerced}
+    floor = float(st.session_state.get("int_lysis_floor", 0.0) or 0.0) if name == "frac_lysis" else 0.0
+    return {"lysis_progression_function": fn, "monod_constant_lysis": ks,
+            "lysis_floor": floor, "coerced": coerced}
 
 
 def canonical_signal(v):
@@ -2007,7 +2014,8 @@ def build_nominal_config_from_gui():
         if _lyk["lysis_progression_function"] is not None:
             builder = rec.call(
                 "builder", builder, "with_lysis_function",
-                _lyk["lysis_progression_function"], Ks_lysis=_lyk["monod_constant_lysis"])
+                _lyk["lysis_progression_function"], Ks_lysis=_lyk["monod_constant_lysis"],
+                phi_min=_lyk["lysis_floor"])
 
         # Dormancy
         any_dormancy = any(s.get("dormancy_enabled", False) for s in strains)
@@ -2356,6 +2364,7 @@ def build_nominal_config_from_gui():
         extra_kwargs["lysis_progression_function"] = _lyk["lysis_progression_function"]
         if _lyk["monod_constant_lysis"] is not None:
             extra_kwargs["monod_constant_lysis"] = _lyk["monod_constant_lysis"]
+        extra_kwargs["lysis_floor"] = _lyk["lysis_floor"]  # phi_min (no-op for constant lysis)
 
         # Dose schedule
         if schedule:
@@ -2551,6 +2560,7 @@ def build_nominal_config_from_gui():
         extra_kwargs["lysis_progression_function"] = _lyk["lysis_progression_function"]
         if _lyk["monod_constant_lysis"] is not None:
             extra_kwargs["monod_constant_lysis"] = _lyk["monod_constant_lysis"]
+        extra_kwargs["lysis_floor"] = _lyk["lysis_floor"]  # phi_min (no-op for constant lysis)
 
         # Dose schedule
         if schedule:

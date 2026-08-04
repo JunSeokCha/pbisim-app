@@ -589,6 +589,30 @@ def test_lysis_signal_function_selector():
         assert len(b.error) == 0, mode
 
 
+def test_lysis_floor_reaches_config_all_modes():
+    """The lysis floor φ_min (residual phage efficacy as nutrients deplete) reaches the
+    config as ``lysis_floor`` under frac_lysis in all three builder modes; default is 0."""
+    from streamlit.testing.v1 import AppTest
+    for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
+                 "Custom Strains & Graph (StrainSet)"):
+        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        if not mode.startswith("Direct"):
+            a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
+        a.session_state["int_lysis_function"] = "frac_lysis"
+        a.session_state["int_lysis_floor"] = 0.3
+        a.run()
+        [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+        cfg = a.session_state["simulation_config"]
+        assert cfg.lysis_progression_function.__name__ == "frac_lysis", mode
+        assert cfg.lysis_floor == 0.3, (mode, cfg.lysis_floor)
+        assert len(a.error) == 0, (mode, [e.value for e in a.error])
+
+    # default (constant lysis) leaves the floor at 0
+    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert a.session_state["simulation_config"].lysis_floor == 0.0
+
+
 def test_new_growth_signals_build():
     """density_throttled_growth and gompertz_growth (new pbisim growth functions) build and
     reach the config; density-throttled forwards its Kd; gompertz reuses monod_constant/K."""
