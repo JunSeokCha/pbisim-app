@@ -258,15 +258,25 @@ across navigation → on return that block could raise before reaching the poll 
 hiding the banner and leaving a *completed* fit un-harvested until 5c rendered cleanly.
 Fix: **decoupled the monitor from 5c.** New module-level `_monitor_fit_job()` (calibration.py)
 runs at the TOP of `render()` (right after the fit-config re-seed, before the dataset
-gate): shows the running banner + **Stop**, and harvests done/error into
-`calib_fit_result`/`calib_fitted_config`/`calib_overlay_result`. The per-second poll
-(`sleep`+`rerun`) moved to the very END of `render()` so the whole page still renders
-each cycle. Section 5c now only renders the Run button (disabled while running) + the
-result table; its old poll/harvest block (~70 lines) deleted. Banner copy updated to say
-the fit keeps running if you leave the page. Tests: `test_calibration.py` +2
+gate): harvests done/error into `calib_fit_result`/`calib_fitted_config`/`calib_overlay_result`,
+and while a fit is **running** renders ONLY the banner + **Stop** and self-polls
+(`sleep(1)`+`rerun`) FROM THE TOP — it does NOT fall through to rebuild the rest of the
+(heavy) page each cycle. Section 5c now only renders the Run button (disabled while
+running) + the result table; its old poll/harvest block (~70 lines) deleted.
+
+Why top-poll (not a bottom-of-page poll): the page below the banner is static stored
+data during a fit, so re-rendering it every second buys nothing and is the main
+per-cycle cost — rebuilding the fit table (`available_targets`, `build_config_from_model`).
+`AppTest.run()` measures a single wall-clock `timeout` across the WHOLE rerun chain of
+one `.run()`, so a fit's many 1-s poll cycles × a full-page rebuild on a slow 2-core CI
+runner blew that budget → **the CI test suite failed (deploy gate) even though it passed
+locally.** Rendering only the banner per cycle makes each poll cheap and keeps CI under
+budget. It's also strictly more race-safe than a bottom poll: the running branch reruns
+unconditionally each cycle, so the instant the thread flips status the next top pass
+harvests it (a completed fit can't be stranded). Tests: `test_calibration.py` +2
 (`test_background_fit_result_harvested_by_top_monitor` injects a stub `status='done'`
 job with **no dataset loaded** → harvested + `fit_job` cleared;
-`test_background_fit_error_surfaced_by_top_monitor`). Full suite green.
+`test_background_fit_error_surfaced_by_top_monitor`). Full suite 265 green.
 
 Caveat (separate issue): a full **WebSocket reconnect / OOM restart / redeploy** starts a
 *new* session (or a new process), so the in-memory `fit_job`/thread genuinely can't be

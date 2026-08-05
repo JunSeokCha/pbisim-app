@@ -274,7 +274,10 @@ def _monitor_fit_job():
     rendered cleanly again (the fit was never killed, only its status stopped being
     shown). Running this monitor at the top of ``render()`` — outside that ``try`` —
     makes the banner un-hideable and picks up a fit that finished while the user was
-    on another page the moment they return. Returns ``True`` while a fit is running.
+    on another page the moment they return. While a fit is running it renders the
+    banner + Stop and reruns from here (~1 s cadence) instead of falling through to
+    the rest of the page, so a slow multi-cycle fit doesn't rebuild the heavy page —
+    or blow AppTest/CI's wall-clock timeout — on every poll.
     """
     _job = st.session_state.get("fit_job")
     if _job is None:
@@ -347,7 +350,16 @@ def _monitor_fit_job():
             st.session_state["fit_job"] = None
             st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
             st.rerun()
-        return True
+        # Poll from the TOP: while a fit runs we render ONLY this banner + Stop and
+        # rerun, WITHOUT rebuilding the rest of the (heavy) page each second — the
+        # dataset/overlay/fit-table below are static stored data during a fit, so
+        # re-rendering them every cycle buys nothing and is the main per-cycle cost
+        # (it also blew AppTest/CI's wall-clock timeout, which spans the whole rerun
+        # chain). The solver has no per-iteration callback, so a ~1 s cadence just
+        # keeps the elapsed-time banner ticking. Reruns until the thread flips the
+        # status, at which point the done/error branch above harvests it.
+        _time.sleep(1.0)
+        st.rerun()
 
     return False
 
@@ -390,9 +402,10 @@ def render():
 
     # Background-fit monitor — rendered FIRST, before the (fragile, non-persisted)
     # section-5c code, so a running fit's progress and a finished fit's result are
-    # always shown/harvested regardless of the rest of the page's state. The actual
-    # per-second poll (sleep + rerun) is at the very END of render() so the whole
-    # page still renders each cycle while a fit runs.
+    # always shown/harvested regardless of the rest of the page's state. While a fit
+    # runs this shows only the banner + Stop and reruns (~1 s) from here — it does NOT
+    # fall through to render the rest of the page each cycle (that's expensive and is
+    # static stored data during a fit). It harvests a finished/failed fit on return.
     _monitor_fit_job()
 
     # ── 1. Upload + column mapping ───────────────────────────────────────────
@@ -1493,22 +1506,6 @@ def render():
                 and not _wk.startswith("fit_shr_")       # (removed) sharing-builder widgets
                 and not _wk.startswith("fit_der_")):     # (removed) derived-link builder widgets
             st.session_state.fit_config[_wk] = st.session_state[_wk]
-
-    # Poll the background fit LAST — so the whole Calibration page renders each cycle
-    # while the daemon-thread fit runs (the top monitor harvests it on completion).
-    # The solver has no per-iteration callback, so we can't stream MSE; a ~1 s cadence
-    # keeps the elapsed-time banner ticking without flickering the page.
-    #
-    # Rerun for ANY pending job (not just "running"): the thread can flip
-    # running→done/error AFTER the top monitor already checked this cycle, so we must
-    # loop back to let the top harvest it — otherwise the page settles with a finished
-    # result sitting un-harvested until the next unrelated interaction. The loop ends
-    # naturally because the harvest clears fit_job to None.
-    _pj = st.session_state.get("fit_job")
-    if _pj is not None:
-        if _pj.get("status") == "running":
-            _time.sleep(1.0)
-        st.rerun()
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────
