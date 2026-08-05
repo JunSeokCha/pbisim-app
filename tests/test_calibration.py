@@ -430,3 +430,53 @@ def test_export_fit_spec_available_after_data():
     assert any("Export fit specification" in (m.value or "") for m in at.markdown)
     # the spec built successfully (not the "select a group first" error fallback)
     assert not any("Select at least one group" in (m.value or "") for m in at.markdown)
+
+
+def test_background_fit_result_harvested_by_top_monitor():
+    """A completed background fit is harvested by _monitor_fit_job() at the TOP of
+    the page — NOT by section 5c — so navigating away and back never loses the
+    result. Simulate a finished daemon-thread job (status='done') sitting in
+    session_state and assert that a plain rerun of the Calibration page picks it up
+    (calib_fit_result populated, fit_job cleared) with no exception, even with no
+    dataset loaded (so section 5c isn't even rendered)."""
+
+    class _StubFP:
+        def map(self):
+            return {"free0": 1.23}
+
+        def credible_interval(self, q):
+            return {"free0": (1.0, 1.5)}
+
+        def to_config(self):
+            return object()  # no fit_initial_cfu/pfu attrs → overlay step is a no-op
+
+    at = AppTest.from_file(APP, default_timeout=150)
+    at.run()
+    at.session_state["current_page_radio"] = "Calibration"
+    at.session_state["fit_job"] = {
+        "status": "done", "fp": _StubFP(),
+        "mappings": [], "path_label": {"growth_rates[0]": "growth"},
+        "targets": [{"free": True, "path": "growth_rates[0]"}], "thetas": [],
+        "fit_model": "Working draft (live)",
+        "fB": np.array([1e7]), "fP": np.array([1e6]), "fS": None, "fmk": {},
+        "ovl_ctx": {"arm_cond": {}, "link_vals": {}}, "od_link": None,
+    }
+    at.run()  # top monitor should harvest before section 5c is reached
+    assert len(at.exception) == 0, at.exception
+    assert at.session_state["fit_job"] is None            # job consumed
+    fr = at.session_state["calib_fit_result"]
+    assert fr["map"]["free0"] == 1.23                     # MAP captured
+    assert fr["params"][0]["label"] == "growth"
+
+
+def test_background_fit_error_surfaced_by_top_monitor():
+    """A failed background fit surfaces its error via the top monitor and clears the
+    job, regardless of section 5c."""
+    at = AppTest.from_file(APP, default_timeout=150)
+    at.run()
+    at.session_state["current_page_radio"] = "Calibration"
+    at.session_state["fit_job"] = {"status": "error", "error": "ValueError: boom"}
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    assert at.session_state["fit_job"] is None
+    assert any("boom" in (e.value or "") for e in at.error)

@@ -257,6 +257,101 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
     }
 
 
+def _monitor_fit_job():
+    """Observe the background NLS fit at the TOP of the page — decoupled from
+    section 5c's parameter-table code.
+
+    The fit runs in a ``daemon`` thread (``_fit_worker``) that writes only into the
+    ``fit_job`` holder, a plain ``session_state`` dict; it therefore keeps running
+    across page navigation (it does not depend on the Calibration page rendering).
+    This function is only what DISPLAYS and HARVESTS that job.
+
+    Previously the running banner and the done→result harvest lived deep inside
+    section 5c's ``try`` block, which rebuilds from parameter-table / arm-selection
+    state that is deliberately *not* persisted across navigation. So on returning to
+    the page that block could raise before reaching the poll code — hiding the
+    progress banner and leaving a *completed* fit un-harvested until the section
+    rendered cleanly again (the fit was never killed, only its status stopped being
+    shown). Running this monitor at the top of ``render()`` — outside that ``try`` —
+    makes the banner un-hideable and picks up a fit that finished while the user was
+    on another page the moment they return. Returns ``True`` while a fit is running.
+    """
+    _job = st.session_state.get("fit_job")
+    if _job is None:
+        return False
+    _status = _job.get("status")
+
+    if _status == "error":
+        st.error(f"Fit failed: {_job.get('error')}")
+        st.session_state["fit_job"] = None
+        return False
+
+    if _status == "done":
+        _fp = _job["fp"]
+        try:
+            _map = _fp.map()
+            try:
+                _ci = _fp.credible_interval(0.95)
+            except Exception:
+                _ci = {}
+            _mapped = {m["path"] for m in _job["mappings"]}
+            _pl = _job["path_label"]
+            _pmeta = [{"label": _pl.get(t["path"], t["path"]), "key": f"free{k}"}
+                      for k, t in enumerate(_job["targets"])
+                      if t["free"] and t["path"] not in _mapped]
+            _pmeta += [{"label": f"θ {th['name']}", "key": th["name"]}
+                       for th in _job["thetas"]]
+            st.session_state["calib_fit_result"] = {
+                "map": {k: float(v) for k, v in _map.items()},
+                "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
+                "params": _pmeta, "model": _job["fit_model"],
+            }
+            _fcfg = _fp.to_config()
+            st.session_state["calib_fitted_config"] = _fcfg
+            try:
+                # If B₀ / initial phage were estimated (fit_initial_cfu/pfu), reflect
+                # them in the overlay's inoculum so the fitted curve matches the data.
+                _fB2, _fP2 = _job["fB"], _job["fP"]
+                _fovl = dict(_job["ovl_ctx"])
+                _ic = getattr(_fcfg, "fit_initial_cfu", None)
+                if _ic is not None and np.isfinite(_ic) and _ic > 0:
+                    if float(np.sum(_fB2)) > 0:
+                        _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
+                    _fovl["arm_cond"] = {a: {**c, "b0": float(_ic)}
+                                         for a, c in _job["ovl_ctx"]["arm_cond"].items()}
+                _ip = getattr(_fcfg, "fit_initial_pfu", None)
+                if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
+                    _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
+                _fovl["title"] = "Fitted model vs observations (NLS MAP)"
+                if _job["od_link"]:
+                    _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
+                st.session_state["calib_overlay_result"] = _compute_overlay(
+                    _fcfg, _fB2, _fP2, _job["fS"], _job["fmk"], _fovl)
+            except Exception:
+                pass
+        finally:
+            st.session_state["fit_job"] = None
+        st.rerun()
+
+    if _status == "running":
+        _el = _time.time() - _job.get("t0", _time.time())
+        _pnames = ", ".join(_job.get("param_preview", []))
+        st.info(
+            f"⏳ Fitting **{len(_job.get('param_preview', []))} parameter(s)** — "
+            f"~{_el:0.0f}s elapsed. The fit runs in a background thread and **keeps "
+            f"running if you leave this page** — come back any time and the result "
+            f"will be waiting. Press **Stop** to abandon it."
+            + (f"  \nEstimating: {_pnames}" if _pnames else ""))
+        if st.button("Stop fit", key="fit_stop"):
+            _job["status"] = "cancelled"
+            st.session_state["fit_job"] = None
+            st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
+            st.rerun()
+        return True
+
+    return False
+
+
 def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
     st.title("Calibration — data overlay")
@@ -292,6 +387,13 @@ def render():
                 st.session_state[_wk] = _wv
             except Exception:
                 pass  # widget type refuses assignment (e.g. a button) — skip it
+
+    # Background-fit monitor — rendered FIRST, before the (fragile, non-persisted)
+    # section-5c code, so a running fit's progress and a finished fit's result are
+    # always shown/harvested regardless of the rest of the page's state. The actual
+    # per-second poll (sleep + rerun) is at the very END of render() so the whole
+    # page still renders each cycle while a fit runs.
+    _monitor_fit_job()
 
     # ── 1. Upload + column mapping ───────────────────────────────────────────
     st.markdown("### 1 · Upload data")
@@ -1291,77 +1393,10 @@ def render():
                         except Exception as _fe:
                             st.error(f"Could not start fit: {_fe}")
 
-                # Poll / render the background fit.
-                _job = st.session_state.get("fit_job")
-                if _job is not None and _job.get("status") == "running":
-                    _el = _time.time() - _job.get("t0", _time.time())
-                    _pnames = ", ".join(_job.get("param_preview", []))
-                    st.info(f"⏳ Fitting **{len(_job.get('param_preview', []))} parameter(s)** — "
-                            f"~{_el:0.0f}s elapsed. The app stays responsive; press **Stop** to abandon."
-                            + (f"  \nEstimating: {_pnames}" if _pnames else ""))
-                    if st.button("Stop fit", key="fit_stop"):
-                        _job["status"] = "cancelled"
-                        st.session_state["fit_job"] = None
-                        st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
-                        st.rerun()
-                    # Poll every ~1 s (the solver has no per-iteration callback, so we
-                    # can't stream MSE) — a slower cadence keeps the page from flickering.
-                    _time.sleep(1.0)
-                    st.rerun()
-                elif _job is not None and _job.get("status") == "done":
-                    _fp = _job["fp"]
-                    try:
-                        _map = _fp.map()
-                        try:
-                            _ci = _fp.credible_interval(0.95)
-                        except Exception:
-                            _ci = {}
-                        _mapped = {m["path"] for m in _job["mappings"]}
-                        _pl = _job["path_label"]
-                        _pmeta = [{"label": _pl.get(t["path"], t["path"]), "key": f"free{k}"}
-                                  for k, t in enumerate(_job["targets"])
-                                  if t["free"] and t["path"] not in _mapped]
-                        _pmeta += [{"label": f"θ {th['name']}", "key": th["name"]}
-                                   for th in _job["thetas"]]
-                        st.session_state["calib_fit_result"] = {
-                            "map": {k: float(v) for k, v in _map.items()},
-                            "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
-                            "params": _pmeta, "model": _job["fit_model"],
-                        }
-                        _fcfg = _fp.to_config()
-                        st.session_state["calib_fitted_config"] = _fcfg
-                        try:
-                            # If B₀ / initial phage were estimated (fit_initial_cfu/pfu),
-                            # reflect them in the overlay's inoculum so the fitted curve
-                            # matches the data (the fit used them as the ICs). NOTE: the
-                            # per-arm condition editor sets arm_cond["b0"], which overrides
-                            # the nominal B₀ inside _compute_overlay — so the estimate must
-                            # be written into arm_cond, not just the iB vector.
-                            _fB2, _fP2 = _job["fB"], _job["fP"]
-                            _fovl = dict(_job["ovl_ctx"])
-                            _ic = getattr(_fcfg, "fit_initial_cfu", None)
-                            if _ic is not None and np.isfinite(_ic) and _ic > 0:
-                                if float(np.sum(_fB2)) > 0:
-                                    _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
-                                _fovl["arm_cond"] = {a: {**c, "b0": float(_ic)}
-                                                     for a, c in _job["ovl_ctx"]["arm_cond"].items()}
-                            _ip = getattr(_fcfg, "fit_initial_pfu", None)
-                            if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
-                                _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
-                            _fovl["title"] = "Fitted model vs observations (NLS MAP)"
-                            if _job["od_link"]:
-                                _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
-                            st.session_state["calib_overlay_result"] = _compute_overlay(
-                                _fcfg, _fB2, _fP2, _job["fS"], _job["fmk"], _fovl)
-                        except Exception:
-                            pass
-                    finally:
-                        st.session_state["fit_job"] = None
-                    st.rerun()
-                elif _job is not None and _job.get("status") == "error":
-                    st.error(f"Fit failed: {_job.get('error')}")
-                    st.session_state["fit_job"] = None
-
+                # The running banner, the Stop button, and the done→result harvest
+                # are handled by _monitor_fit_job() at the TOP of render() (so they
+                # survive navigation and can't be hidden by an error in this section).
+                # Here we only surface the result table once it's ready.
                 _fr = st.session_state.get("calib_fit_result")
                 if _fr:
                     _rows = []
@@ -1458,6 +1493,22 @@ def render():
                 and not _wk.startswith("fit_shr_")       # (removed) sharing-builder widgets
                 and not _wk.startswith("fit_der_")):     # (removed) derived-link builder widgets
             st.session_state.fit_config[_wk] = st.session_state[_wk]
+
+    # Poll the background fit LAST — so the whole Calibration page renders each cycle
+    # while the daemon-thread fit runs (the top monitor harvests it on completion).
+    # The solver has no per-iteration callback, so we can't stream MSE; a ~1 s cadence
+    # keeps the elapsed-time banner ticking without flickering the page.
+    #
+    # Rerun for ANY pending job (not just "running"): the thread can flip
+    # running→done/error AFTER the top monitor already checked this cycle, so we must
+    # loop back to let the top harvest it — otherwise the page settles with a finished
+    # result sitting un-harvested until the next unrelated interaction. The loop ends
+    # naturally because the harvest clears fit_job to None.
+    _pj = st.session_state.get("fit_job")
+    if _pj is not None:
+        if _pj.get("status") == "running":
+            _time.sleep(1.0)
+        st.rerun()
 
 
 # ── AI Simulation Assistant Page ──────────────────────────────────────────────

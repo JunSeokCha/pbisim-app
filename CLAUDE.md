@@ -245,6 +245,34 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-05) — Calibration fit-monitor survives navigation
+
+Bug: run an NLS fit, navigate away from Calibration and back → the progress banner
+and the **Run NLS fit** button vanish; the fit *looks* dead. Diagnosis: the fit was
+**never killed** — it runs in a `daemon` thread (`_fit_worker`) writing only into the
+`fit_job` holder (a plain `session_state` dict), so it keeps running across navigation
+(and its completion lands in the holder). But the running banner **and** the
+done→result harvest lived deep inside section 5c's parameter-table `try` block, which
+rebuilds from arm-selection / `fit_targets*` state that is deliberately *not* persisted
+across navigation → on return that block could raise before reaching the poll code,
+hiding the banner and leaving a *completed* fit un-harvested until 5c rendered cleanly.
+Fix: **decoupled the monitor from 5c.** New module-level `_monitor_fit_job()` (calibration.py)
+runs at the TOP of `render()` (right after the fit-config re-seed, before the dataset
+gate): shows the running banner + **Stop**, and harvests done/error into
+`calib_fit_result`/`calib_fitted_config`/`calib_overlay_result`. The per-second poll
+(`sleep`+`rerun`) moved to the very END of `render()` so the whole page still renders
+each cycle. Section 5c now only renders the Run button (disabled while running) + the
+result table; its old poll/harvest block (~70 lines) deleted. Banner copy updated to say
+the fit keeps running if you leave the page. Tests: `test_calibration.py` +2
+(`test_background_fit_result_harvested_by_top_monitor` injects a stub `status='done'`
+job with **no dataset loaded** → harvested + `fit_job` cleared;
+`test_background_fit_error_surfaced_by_top_monitor`). Full suite green.
+
+Caveat (separate issue): a full **WebSocket reconnect / OOM restart / redeploy** starts a
+*new* session (or a new process), so the in-memory `fit_job`/thread genuinely can't be
+recovered there — that's the cookie-auth/disconnect class of problem (2026-08-03), not
+this navigation fix.
+
 ## Done this session (2026-08-04) — lysis floor φ_min (residual efficacy)
 
 pbisim `45e389c` added `config.lysis_floor` (φ_min ∈ [0,1], default 0) + `with_lysis_function(
