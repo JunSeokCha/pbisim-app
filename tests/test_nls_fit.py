@@ -259,19 +259,36 @@ def test_covariate_fit_runs_and_estimates_beta():
     assert getattr(fc, "covariate_effects", None)          # structure survives to_config
 
 
-def test_available_targets_is_comprehensive():
-    """The target catalog includes mutation, debris, and the fit-side virtuals
-    (fitness cost, initial CFU/PFU, resistant fraction) the user flagged."""
+def test_available_targets_reflects_builder_mode():
+    """The catalog is model-aware so there is one control per quantity: mutation/debris/
+    monod are always estimable, B₀ is NEVER a table row (it's the per-arm B₀-source
+    control), and the resistant-genotype parameterization depends on the builder mode —
+    BRG exposes fitness cost / resistant fraction and HIDES the derived resistant growth
+    rate; Direct/StrainSet exposes independent growth rates and HIDES those virtuals."""
     from pbisim_fit.synthetic import reference_config
     cfg = reference_config()   # 2-strain, debris on, mutation matrix present
-    paths = {p for (_l, p, *_r) in nls.available_targets(cfg)}
-    assert "growth_rates[0]" in paths and "growth_rates[1]" in paths
-    assert "mutation_rates[1,0]" in paths          # mutation now estimable
-    assert {"debris_u", "debris_v", "debris_kdis"} <= paths   # debris now estimable
-    assert "monod_constant" in paths
-    # fit-side virtuals (items 1 & 7)
-    assert "fitness_cost" in paths and "init_resistant_fraction" in paths
-    assert "fit_initial_cfu" in paths and "fit_initial_pfu" in paths
+
+    def paths(mode):
+        return {p for (_l, p, *_r) in nls.available_targets(cfg, builder_mode=mode)}
+
+    direct = paths("Direct (ModelBuilder)")
+    assert "growth_rates[0]" in direct
+    assert "mutation_rates[1,0]" in direct                    # mutation estimable
+    assert {"debris_u", "debris_v", "debris_kdis"} <= direct  # debris estimable
+    assert "monod_constant" in direct
+    assert "fit_initial_pfu" in direct                        # phage titre still estimable
+    assert "fit_initial_cfu" not in direct                    # B₀ is the per-arm B₀-source control
+    # Direct/StrainSet: independent resistant growth, no BRG selection virtuals
+    assert "growth_rates[1]" in direct
+    assert "fitness_cost" not in direct and "init_resistant_fraction" not in direct
+    ss = paths("Custom Strains & Graph (StrainSet)")
+    assert "growth_rates[1]" in ss and "fitness_cost" not in ss
+
+    # BRG: resistant growth = fitness cost; the raw resistant growth rate is hidden
+    brg = paths("Binary Genotypes (BRG)")
+    assert "fitness_cost" in brg and "init_resistant_fraction" in brg
+    assert "growth_rates[0]" in brg and "growth_rates[1]" not in brg
+    assert "fit_initial_cfu" not in brg
 
 
 def test_available_targets_are_growth_signal_aware():

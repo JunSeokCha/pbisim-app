@@ -95,14 +95,29 @@ def _get_path(config, path):
     return float(arr[int(i)] if j is None else arr[int(i), int(j)])
 
 
-def available_targets(config, initial_cfu=None, initial_pfu=None):
+def available_targets(config, initial_cfu=None, initial_pfu=None, builder_mode=None):
     """Comprehensive list of estimable model parameters for this config:
     [(label, path, current_value, lo, hi, log)]. Only families present in the config
     are emitted (mutation only off-diagonal, debris/immune only when enabled, etc.).
     ``initial_cfu``/``initial_pfu`` seed the start values for the estimable initial
-    conditions (else fall back to placeholders)."""
+    conditions (else fall back to placeholders).
+
+    ``builder_mode`` makes the catalog **model-aware** so there is exactly ONE control per
+    quantity (no two rows that touch the same thing with invisible precedence):
+    - **Binary Genotypes (BRG):** the resistant genotypes' growth is derived from WT via
+      the fitness cost (``growth_rates[1:] = growth_rates[0]·(1−fitness_cost)``), so this
+      exposes only WT ``growth_rates[0]`` + ``fitness_cost``/``init_resistant_fraction`` —
+      not a redundant, silently-overridden per-genotype resistant growth rate.
+    - **Direct / StrainSet:** strains are independent, so each ``growth_rates[i]`` is
+      exposed and the BRG selection virtuals (``fitness_cost``/``init_resistant_fraction``)
+      are omitted (they would be a confusing second control that overwrites growth).
+    B₀ estimation is NOT a table row at all — it is the per-arm "B₀ source" control (whose
+    "Estimate" option frees B₀ via ``free_initial_conditions``), so B₀ has one knob and no
+    table row can silently override the chosen source. (``builder_mode=None`` ⇒ treated as
+    non-BRG.)"""
     nb = int(getattr(config, "n_bacteria", 1))
     npg = int(getattr(config, "n_phages", 0))
+    _is_brg = (builder_mode == "Binary Genotypes (BRG)")
     out = []
 
     def add(label, path, family, value=None):
@@ -115,7 +130,10 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
         out.append((label, path, float(value), lo, hi, bool(log)))
 
     for i in range(nb):
-        add(f"Growth rate — strain {i} (h⁻¹)", f"growth_rates[{i}]", "growth_rates")
+        # BRG: resistant genotypes (i≥1) grow at growth_rates[0]·(1−fitness_cost); the
+        # fitness cost below is their single knob, so don't also offer their raw growth rate.
+        if not (_is_brg and i >= 1):
+            add(f"Growth rate — strain {i} (h⁻¹)", f"growth_rates[{i}]", "growth_rates")
         add(f"Bacteria/resource ratio — strain {i}", f"bacteria_to_resource_ratio[{i}]", "bacteria_to_resource_ratio")
         add(f"Natural death rate — strain {i} (h⁻¹)", f"death_rate_B[{i}]", "death_rate_B")
     # ── Growth-signal parameters — depend on the active growth function (which nutrient
@@ -191,14 +209,18 @@ def available_targets(config, initial_cfu=None, initial_pfu=None):
             add(f"Dormant death rate — strain {i}", f"death_rate_D[{i}]", "death_rate_D")
     if getattr(config, "debris_u", None) is not None:
         add("Dormant OD contribution fraction", "dormant_od_fraction", "dormant_od_fraction")
-    # ── Estimable initial conditions & selection parameters (pbisim-fit-side) ──
-    # These are set BY the fit (setattr on the config); the engine never reads them.
-    add("Initial bacterial density (B₀, CFU/mL)", "fit_initial_cfu", "fit_initial_cfu",
-        value=(float(initial_cfu) if initial_cfu else 1e7))
+    # ── Estimable selection parameters (pbisim-fit-side reparameterizations; setattr on
+    # the config, the engine never reads them). B₀ estimation is intentionally NOT here —
+    # it is the per-arm "B₀ source" control ("Estimate" frees B₀ via free_initial_conditions),
+    # so B₀ has exactly one knob and no table row can silently override the chosen source.
+    # Only the phage co-inoculation titre (which has no per-arm analog) stays.
     if npg >= 1:
         add("Co-inoculated phage titre (PFU/mL)", "fit_initial_pfu", "fit_initial_pfu",
             value=(float(initial_pfu) if initial_pfu else 1e6))
-    if nb >= 2:
+    # Fitness cost / resistant fraction ARE the BRG parameterization of the resistant
+    # genotype — offered only in BRG (see the docstring). In Direct/StrainSet the strains'
+    # growth and inocula are independent, so these would be a confusing overriding control.
+    if _is_brg and nb >= 2:
         add("Fitness cost (resistant vs WT growth)", "fitness_cost", "fitness_cost", value=0.0)
         add("Initial resistant fraction", "init_resistant_fraction", "init_resistant_fraction", value=0.0)
     return out

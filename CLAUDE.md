@@ -245,6 +245,34 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-06) — model-aware fit-parameter table (one knob per quantity)
+
+Owner flagged real internal inconsistencies in the Calibration fit table: it exposed BOTH
+coupled/redundant controls with invisible precedence — e.g. `growth_rates[1]` AND `fitness_cost`
+(a BRG model derives the resistant growth from the cost), and `fit_initial_cfu` in the table AND
+the per-arm B₀-source radio. Confirmed precedence in pbisim-fit: `_apply_fitness_cost` sets
+`growth_rates[1:] = growth_rates[0]·(1−fitness_cost)` at solve time **only when fitness_cost is
+freed**, OVERWRITING a freed `growth_rates[1]` (fitness_cost wins; a fixed fitness_cost value is
+ignored). A freed `fit_initial_cfu` overrides the "First observation" B₀ source. Nothing was
+broken, but which control wins was invisible → confusing.
+
+Fix (owner chose "model-aware, one knob each" via AskUserQuestion): `available_targets` gained a
+`builder_mode` arg (calibration passes the CHOSEN model's `int_builder_mode`):
+- **B₀ is never a table row** — dropped `fit_initial_cfu`. B₀ is the per-arm **B₀-source** radio
+  whose "Estimate (shared/per-arm)" options ARE how you free it (`free_initial_conditions`).
+  (`fit_initial_pfu` stays — phage-titre estimate has no per-arm analog.)
+- **BRG:** exposes WT `growth_rates[0]` + `fitness_cost`/`init_resistant_fraction`; HIDES the
+  derived per-genotype `growth_rates[i≥1]` (its knob is the fitness cost).
+- **Direct/StrainSet:** exposes each independent `growth_rates[i]`; HIDES the BRG-only
+  `fitness_cost`/`init_resistant_fraction` (they'd be a second, overwriting control).
+UI caption under the fit table states which model's params are shown + that B₀ is the §4 control.
+Note: mappings/DSL still bind any path (a mapped path is applied regardless of table membership),
+so advanced reparameterization is unaffected in Direct/StrainSet; in BRG the resistant growth is
+intentionally the fitness cost (independent resistant growth ⇒ use Direct/StrainSet). Tests:
+`test_available_targets_reflects_builder_mode` (per-mode catalog); the two B₀ tests now use the
+"Estimate (shared)" radio instead of freeing a table row. Full suite 267 green. **NOT committed**
+— held for owner local testing (standing calibration-UI rule).
+
 ## Done this session (2026-08-06) — CI test-suite fix (absolute AppTest paths for Streamlit ≥1.59)
 
 The GitHub Actions **test-and-deploy** workflow (`.github/workflows/deploy.yml`) has been

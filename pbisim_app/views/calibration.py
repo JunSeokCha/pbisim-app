@@ -721,10 +721,12 @@ def render():
                           if _dose_unit == "pfu" else
                           "MOI seeds the phage inoculum as MOI × B₀ for that arm.")
             with st.expander(f"Per-arm conditions (B₀ · growth phase · {_dose_lbl})", expanded=False):
-                # B₀ source. Under pbisim-fit's additive model the inoculum is a
-                # DoseRecord(target="bacteria") — a *known* dose, exactly like the phage
-                # dose — not the (noisy) first observation. Estimation is separate: free
-                # `fit_initial_cfu` in the parameter table (it adds an estimated offset).
+                # B₀ source — the SINGLE control for the initial bacterial density (there is
+                # deliberately no fit_initial_cfu row in the parameter table that could
+                # silently override it). Under pbisim-fit's additive model a known inoculum is
+                # a DoseRecord(target="bacteria"), exactly like the phage dose — not the (noisy)
+                # first observation. The "Estimate (shared/per-arm)" options ARE how you free B₀
+                # (they wire free_initial_conditions); the others fix it.
                 _b0_mode = st.radio(
                     "Initial bacterial density B₀",
                     ["First observation", "Shared value", "Per-arm values",
@@ -1105,10 +1107,17 @@ def render():
                          "current builder state.")
                 _fit_snap = resolve_model_snapshot(_fit_model)
                 _fit_cfg, _fB, _fP, _fS, _fmk = build_config_from_model(_fit_snap)
+                # Builder mode of the CHOSEN model (frozen snapshot, or the live draft) —
+                # makes the parameter catalog model-aware (BRG → fitness cost, not raw
+                # resistant growth; Direct/StrainSet → raw growth, no selection virtuals).
+                _fit_mode = ((_fit_snap or {}).get("int_builder_mode")
+                             if _fit_snap is not None
+                             else st.session_state.get("int_builder_mode", "Direct (ModelBuilder)"))
                 # ── Comprehensive parameter table: fix / free each model parameter ─
                 _targets_cat = _nls.available_targets(
                     _fit_cfg, initial_cfu=float(np.sum(_fB)) if _fB is not None else None,
-                    initial_pfu=(float(_fP[0]) if _fP is not None and len(_fP) else None))
+                    initial_pfu=(float(_fP[0]) if _fP is not None and len(_fP) else None),
+                    builder_mode=_fit_mode)
                 _path_label = {p: lab for (lab, p, *_r) in _targets_cat}
                 _label_to_path = {lab: p for (lab, p, *_r) in _targets_cat}
                 def _bound(s, log, is_lower):
@@ -1149,6 +1158,17 @@ def render():
                            "draws its value/bounds/prior from its \u03b8 (those cells blank out \u2014 set them "
                            "on the \u03b8 below). **Sharing** = set several rows to *Derived* with the same "
                            "\u03b8 (use the **Share** helper). It's all in this one table \u2014 no separate sections.")
+                _mode_note = (
+                    "This table shows the **" + str(_fit_mode) + "** model's own parameters, so each "
+                    "quantity has exactly one control. "
+                    + ("**BRG:** the resistant genotype's growth is the **Fitness cost** "
+                       "(growth\u00b7(1\u2212cost)), so its raw growth rate isn't listed separately. "
+                       if _fit_mode == "Binary Genotypes (BRG)"
+                       else "Strains are independent here, so each growth rate is listed and the "
+                            "BRG-only *fitness cost* / *resistant fraction* aren't. ")
+                    + "**Initial bacterial density (B\u2080)** is not in this table \u2014 it's set by the "
+                      "**B\u2080 source** control in \u00a74 (its *Estimate* option is how you free B\u2080).")
+                st.caption(_mode_note)
                 _tg_ed = st.data_editor(
                     st.session_state["fit_targets_df"], key=f"fit_targets_editor_{_sig}_{_rev}",
                     hide_index=True, width="stretch",

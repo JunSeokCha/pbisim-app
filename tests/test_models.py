@@ -274,8 +274,9 @@ def test_apply_writes_estimated_initial_cfu():
     at.session_state["fit_model_sel"] = "Growth calibration (Monod)"
     at.session_state["fit_arms"] = ["control"]
     at.session_state["fit_obs_sel"] = ["cfu"]
+    at.session_state["fit_b0_mode"] = "Estimate (shared)"   # B₀ is the per-arm B₀-source control
     at.run()
-    _free_targets(at, {"growth_rates[0]", "fit_initial_cfu"})
+    _free_targets(at, {"growth_rates[0]"})
     at.session_state["fit_nls_restarts"] = 1
     at.session_state["fit_nls_maxnfev"] = 150
     at.run()
@@ -304,15 +305,13 @@ def test_fitted_overlay_uses_estimated_initial_cfu():
     at.session_state["fit_arms"] = ["control"]
     at.session_state["fit_obs_sel"] = ["cfu"]
     at.session_state["int_strains"][0]["initial_B"] = 1e9   # deliberately wrong (data ~5e6)
+    at.session_state["fit_b0_mode"] = "Estimate (shared)"   # B₀ is the per-arm B₀-source control
     at.run()
     tdf = at.session_state["fit_targets_df"].copy()
     for i, r in tdf.iterrows():
-        if r["path"] in ("growth_rates[0]", "fit_initial_cfu"):
+        if r["path"] == "growth_rates[0]":
             tdf.at[i, "role"] = "Free"
-            if r["path"] == "fit_initial_cfu":
-                tdf.at[i, "lower"] = "1e3"; tdf.at[i, "upper"] = "1e11"
-            else:
-                tdf.at[i, "lower"] = "0.1"; tdf.at[i, "upper"] = "3.0"
+            tdf.at[i, "lower"] = "0.1"; tdf.at[i, "upper"] = "3.0"
     at.session_state["fit_targets_df"] = tdf
     at.session_state["fit_nls_restarts"] = 1
     at.session_state["fit_nls_maxnfev"] = 200
