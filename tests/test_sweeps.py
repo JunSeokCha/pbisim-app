@@ -298,6 +298,55 @@ def test_coupled_sweep_runs_and_persists():
     assert at.session_state["ps_sweep_type"] == "Coupled (linked)"
 
 
+def test_coupled_sweep_mixes_categorical_and_continuous():
+    """A coupled (linked) sweep can pair a CATEGORICAL signal-function parameter (Lysis
+    signal function) with a CONTINUOUS one (Initial Phage Density). The categorical param
+    uses one dropdown PER STEP so an option can REPEAT — e.g. constant×3 then nutrient×3
+    paired with (0, 1e3, 1e5, 0, 1e3, 1e5) = the full 2×3 factorial. Each step selects the
+    option, rebuilds the model, applies the continuous value; the session key is restored."""
+    at = AppTest.from_file(APP, default_timeout=240)
+    at.run()
+    at.session_state["current_page_radio"] = "Parameter Sweeps"
+    at.run()
+    at.session_state["ps_sweep_type"] = "Coupled (linked)"
+    at.run()
+    opts = [m for m in at.multiselect if m.key == "pc_labels"][0].options
+    lys = "Lysis signal function"
+    assert lys in opts, "categorical lysis param should be selectable in the coupled sweep"
+    p0 = [o for o in opts if o.startswith("Initial Density (P0) - ")][0]
+    _saved_lys = (at.session_state["int_lysis_function"]
+                  if "int_lysis_function" in at.session_state else None)
+    at.session_state["pc_labels"] = [lys, p0]
+    at.run()
+    # 6 steps → 6 per-step lysis dropdowns (default to the first option, 'constant')
+    at.session_state["pc_catn_0"] = 6
+    at.run()
+    # set the last three steps to 'nutrient (Monod)' (first three stay 'constant')
+    for _j in (3, 4, 5):
+        at.session_state[f"pc_catopt_0_{_j}"] = "nutrient (Monod)"
+    at.session_state["pc_series_1"] = "0, 1e3, 1e5, 0, 1e3, 1e5"
+    at.run()
+    [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    res = at.session_state["param_sweep_result"]
+    assert res["type"] == "coupled" and len(res["summary"]) == 6
+    # the categorical column repeats the option across steps (constant×3, nutrient×3)
+    assert [row[lys] for row in res["summary"]] == (
+        ["constant"] * 3 + ["nutrient (Monod)"] * 3)
+    # the continuous column holds the paired phage densities
+    assert [row[p0] for row in res["summary"]] == [0.0, 1e3, 1e5, 0.0, 1e3, 1e5]
+    # the swept categorical key left no residue on the live model
+    _now_lys = (at.session_state["int_lysis_function"]
+                if "int_lysis_function" in at.session_state else None)
+    assert _now_lys == _saved_lys
+
+    # a length mismatch (6 categorical steps vs 3 continuous values) is rejected
+    at.session_state["pc_series_1"] = "1e6, 1e7, 1e8"
+    at.run()
+    [b for b in at.button if "Run Coupled" in (b.label or "")][0].click().run()
+    assert any("same number of points" in e.value for e in at.error)
+
+
 def test_parameter_sweep_shows_od_trajectories_when_enabled():
     """The parameter sweep (1D + coupled) plots OD trajectories when the OD/debris
     module is enabled, and omits them otherwise."""

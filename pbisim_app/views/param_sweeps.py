@@ -2,6 +2,24 @@
 from pbisim_app.common import *  # noqa: F401,F403
 
 
+_SWEEP_MISSING = object()  # sentinel: session key absent before the sweep set it
+
+
+def _short_sweep_label(label):
+    """Compact a sweep-parameter label for trajectory legends (strip the ' - strain'
+    suffix and any parenthetical)."""
+    return label.rsplit(" - ", 1)[0].split("(")[0].strip()
+
+
+def _fmt_sweep_value(v):
+    """Format a coupled-sweep step value: numeric → 2 sig-figs, categorical → verbatim."""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{v:.2g}"
+    return str(v)
+
+
 def render():
     theme_mode = st.session_state.get("theme_mode", "Light")
     st.title("Model Parameter Sweeps")
@@ -186,7 +204,18 @@ def _render_body(theme_mode):
                 steps2 = st.number_input("P2 Steps", min_value=2, max_value=10, value=3, key="p2_steps")
             spacing2 = st.selectbox("P2 Spacing", ["Linear", "Logarithmic"], key="p2_spacing")
 
-            run_sweep = st.button("Run 2D Sweep", width="stretch", type="primary")
+            # 2D axes are both NUMERIC (heatmap grid). A signal-function parameter can't
+            # be a 2D axis — steer the user to the modes that do support it.
+            _2d_cat = [l for l, m in ((param1_label, meta1), (param2_label, meta2))
+                       if m.get("type") == "categorical"]
+            if _2d_cat:
+                st.warning(
+                    "2D sweeps vary two **numeric** parameters (the heatmap axes). Signal-"
+                    "function parameter(s) — " + ", ".join(_2d_cat) + " — can't be a 2D axis. "
+                    "Use a **1D** sweep to compare signal-function options, or a **Coupled "
+                    "(linked)** sweep to pair a signal function with a continuous parameter.")
+            run_sweep = st.button("Run 2D Sweep", width="stretch", type="primary",
+                                  disabled=bool(_2d_cat))
 
         else:  # Coupled (linked) sweep
             st.caption(
@@ -196,14 +225,44 @@ def _render_body(theme_mode):
                 "across strains. Example — (dormancy rate, resuscitation rate) = "
                 "(0, 1), (0.5, 0.5), (1, 0)."
             )
+            st.caption(
+                "You can mix a **categorical** signal-function parameter (e.g. Lysis "
+                "signal function) with **continuous** ones (e.g. Initial Phage Density): "
+                "**choose the categorical options from a dropdown** (each = one step, in the "
+                "order picked; the run rebuilds the model per step) and give the continuous "
+                "parameter(s) an equal-length value list. Example — (Lysis signal function, "
+                "Initial Phage Density) = (constant, 1e6), (nutrient, 1e8)."
+            )
             coupled_labels = st.multiselect("Parameters to sweep together (grouped by category)", _cat_ordered, key="pc_labels")
             for _ci, _lbl in enumerate(coupled_labels):
                 _meta = sweep_params[_lbl]
-                st.text_input(
-                    f"Values for '{_lbl}' (comma-separated)",
-                    key=f"pc_series_{_ci}",
-                    placeholder="e.g. 0, 0.5, 1",
-                )
+                if _meta.get("type") == "categorical":
+                    # One dropdown PER STEP (not a single multiselect) so an option can be
+                    # REPEATED across steps — e.g. constant, constant, constant, nutrient,
+                    # nutrient, nutrient to pair with 0, 1e3, 1e5, 0, 1e3, 1e5. The step
+                    # count sets how many dropdowns render.
+                    _opt_names = list(_meta["options"].keys())
+                    _n = int(st.number_input(
+                        f"'{_lbl}' — number of steps", min_value=1, max_value=25,
+                        value=int(st.session_state.get(f"pc_catn_{_ci}", 3)), step=1,
+                        key=f"pc_catn_{_ci}"))
+                    st.caption("Choose an option per step (repeats allowed). Give the "
+                               f"continuous parameter(s) **{_n}** value(s) to match.")
+                    _sbcols = st.columns(min(_n, 4))
+                    for _j in range(_n):
+                        _sk = f"pc_catopt_{_ci}_{_j}"
+                        # Sanitize a stale/invalid persisted value (option set changed) so
+                        # the keyed selectbox doesn't raise.
+                        if st.session_state.get(_sk) not in _opt_names:
+                            st.session_state.pop(_sk, None)
+                        _sbcols[_j % len(_sbcols)].selectbox(
+                            f"Step {_j + 1}", _opt_names, key=_sk)
+                else:
+                    st.text_input(
+                        f"Values for '{_lbl}' (comma-separated)",
+                        key=f"pc_series_{_ci}",
+                        placeholder="e.g. 0, 0.5, 1",
+                    )
             run_sweep = st.button("Run Coupled Sweep", width="stretch", type="primary")
 
     with col_run:
@@ -397,17 +456,40 @@ def _render_body(theme_mode):
                 if not labels:
                     st.error("Select at least one parameter to sweep together.")
                     st.stop()
+                # Categorical (signal-function) params resolve at BUILD time (session key
+                # + *_kwargs helpers), so those steps set the key and REBUILD the config;
+                # continuous params mutate the built config via apply_sweep_parameter.
+                _cat_labels = [l for l in labels if sweep_params[l].get("type") == "categorical"]
+                _cont_labels = [l for l in labels if l not in _cat_labels]
                 series = {}
                 for _ci, lbl in enumerate(labels):
-                    vals = parse_comma_separated_series(st.session_state.get(f"pc_series_{_ci}", ""))
-                    if not vals:
-                        st.error(f"Provide a value series for '{lbl}'.")
-                        st.stop()
-                    series[lbl] = vals
+                    if lbl in _cat_labels:
+                        # Options come from the per-step dropdowns (pc_catopt_{ci}_{j}),
+                        # in step order, repeats allowed.
+                        _opts = sweep_params[lbl]["options"]
+                        _n = int(st.session_state.get(f"pc_catn_{_ci}", 0))
+                        seq = [st.session_state.get(f"pc_catopt_{_ci}_{_j}") for _j in range(_n)]
+                        seq = [o for o in seq if o in _opts]
+                        if not seq:
+                            st.error(f"Choose at least one option for '{lbl}' from its dropdowns.")
+                            st.stop()
+                        series[lbl] = seq                # canonical option-label strings
+                    else:
+                        vals = parse_comma_separated_series(st.session_state.get(f"pc_series_{_ci}", ""))
+                        if not vals:
+                            st.error(f"Provide a value series for '{lbl}'.")
+                            st.stop()
+                        series[lbl] = vals
                 M = len(next(iter(series.values())))
                 if any(len(v) != M for v in series.values()):
                     st.error("All value series must have the same number of points.")
                     st.stop()
+
+                # Categorical steps rebuild from GUI, mutating their session keys — save
+                # them so the sweep leaves no residue on the model.
+                _saved_cat = {sweep_params[l]["session_key"]:
+                              st.session_state.get(sweep_params[l]["session_key"], _SWEEP_MISSING)
+                              for l in _cat_labels}
 
                 runs_outcomes = []
                 trajectories = []               # culturable CFU (B+D)
@@ -416,50 +498,67 @@ def _render_body(theme_mode):
                 phage_trajectories = []  # (time, total_free_phage, label)
                 od_trajectories = []
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
-                for k in range(M):
-                    status_text.text(f"Running simulation {k+1} of {M}...")
-                    c_k, ib_k, ip_k, is_k, mk_k = nominal_config, initial_B, initial_P, initial_S, model_kwargs
-                    for lbl in labels:
-                        c_k, ib_k, ip_k, is_k, mk_k = apply_sweep_parameter(
-                            series[lbl][k], sweep_params[lbl], c_k, ib_k, ip_k, is_k, mk_k)
-                    t_prerun = mk_k.pop("_t_prerun_override", None)
-                    if t_prerun is None:
-                        t_prerun = st.session_state.get("int_t_prerun", 0.0)
-                    if t_prerun > 0:
-                        ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, initial_S=is_k)
-                        ib_k = ic.B
-                        is_k = max(float(ic.S), 0.0)
-                        if ic.D is not None:
-                            mk_k["initial_D"] = ic.D
-                        if ic.Imm is not None:
-                            mk_k["initial_Imm"] = ic.Imm
-                        _carry_prerun_debris(ic, mk_k)
-                    model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
-                    result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
-                    _cfu = result.sum_prefixes("B", "D")
-                    _total_incl = result.sum_prefixes("B", "D", "I", "H")
-                    _active = result.sum_prefixes("B")
-                    total_bacteria = _cfu
-                    _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-                    t_clear = time_to_clearance(result, threshold=st.session_state.get("int_extinction_threshold", 1.0))
-                    _row = {lbl: series[lbl][k] for lbl in labels}
-                    _row.update({
-                        "Nadir (cells/mL)": np.min(total_bacteria),
-                        "AUC (cells·h/mL)": _trapz(total_bacteria, result.time),
-                        "Clearance Time (h)": t_clear if t_clear is not None else np.nan,
-                        "2-Log Red Time (h)": time_to_log_reduction(result, n_logs=2.0) or np.nan,
-                    })
-                    runs_outcomes.append(_row)
-                    _lbl_txt = ", ".join(f"{s.rsplit(' - ',1)[0].split('(')[0].strip()}={series[s][k]:.2g}" for s in labels)
-                    _lbl = f"Step {k+1}: {_lbl_txt}"
-                    trajectories.append((result.time, _cfu, _lbl))
-                    total_incl_trajectories.append((result.time, _total_incl, _lbl))
-                    active_trajectories.append((result.time, _active, _lbl))
-                    phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
-                    if _od_enabled:
-                        _od = (_safe_od(result, total_bacteria))
-                        od_trajectories.append((result.time, _od, _lbl))
-                    progress_bar.progress((k + 1) / M)
+                try:
+                    for k in range(M):
+                        status_text.text(f"Running simulation {k+1} of {M}...")
+                        if _cat_labels:
+                            # Select each categorical option for this step, then REBUILD
+                            # the config from GUI so the signal-function choice takes effect.
+                            for lbl in _cat_labels:
+                                _cm = sweep_params[lbl]
+                                st.session_state[_cm["session_key"]] = _cm["options"][series[lbl][k]]
+                            c_k, ib_k, ip_k, is_k, mk_k = build_nominal_config_from_gui()
+                        else:
+                            c_k, ib_k, ip_k, is_k, mk_k = nominal_config, initial_B, initial_P, initial_S, model_kwargs
+                        # Continuous params mutate the (possibly rebuilt) config.
+                        for lbl in _cont_labels:
+                            c_k, ib_k, ip_k, is_k, mk_k = apply_sweep_parameter(
+                                series[lbl][k], sweep_params[lbl], c_k, ib_k, ip_k, is_k, mk_k)
+                        t_prerun = mk_k.pop("_t_prerun_override", None)
+                        if t_prerun is None:
+                            t_prerun = st.session_state.get("int_t_prerun", 0.0)
+                        if t_prerun > 0:
+                            ic = stationary_phase_ic(c_k, t_prerun=t_prerun, B0=ib_k, initial_S=is_k)
+                            ib_k = ic.B
+                            is_k = max(float(ic.S), 0.0)
+                            if ic.D is not None:
+                                mk_k["initial_D"] = ic.D
+                            if ic.Imm is not None:
+                                mk_k["initial_Imm"] = ic.Imm
+                            _carry_prerun_debris(ic, mk_k)
+                        model = PBIModel(c_k, initial_B=ib_k, initial_P=ip_k, initial_S=is_k, **mk_k)
+                        result = solve_ode(model, t_end=st.session_state.get("int_t_end", 48.0), dt=st.session_state.get("int_dt", 0.25), method=st.session_state.get("int_solver_method", "BDF"), extinction_threshold=st.session_state.get("int_extinction_threshold", 1.0) or None, extinction_check_interval=st.session_state.get("int_extinction_check_interval", 0.0) or None)
+                        _cfu = result.sum_prefixes("B", "D")
+                        _total_incl = result.sum_prefixes("B", "D", "I", "H")
+                        _active = result.sum_prefixes("B")
+                        total_bacteria = _cfu
+                        _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+                        t_clear = time_to_clearance(result, threshold=st.session_state.get("int_extinction_threshold", 1.0))
+                        _row = {lbl: series[lbl][k] for lbl in labels}
+                        _row.update({
+                            "Nadir (cells/mL)": np.min(total_bacteria),
+                            "AUC (cells·h/mL)": _trapz(total_bacteria, result.time),
+                            "Clearance Time (h)": t_clear if t_clear is not None else np.nan,
+                            "2-Log Red Time (h)": time_to_log_reduction(result, n_logs=2.0) or np.nan,
+                        })
+                        runs_outcomes.append(_row)
+                        _lbl_txt = ", ".join(f"{_short_sweep_label(s)}={_fmt_sweep_value(series[s][k])}" for s in labels)
+                        _lbl = f"Step {k+1}: {_lbl_txt}"
+                        trajectories.append((result.time, _cfu, _lbl))
+                        total_incl_trajectories.append((result.time, _total_incl, _lbl))
+                        active_trajectories.append((result.time, _active, _lbl))
+                        phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
+                        if _od_enabled:
+                            _od = (_safe_od(result, total_bacteria))
+                            od_trajectories.append((result.time, _od, _lbl))
+                        progress_bar.progress((k + 1) / M)
+                finally:
+                    # Restore any categorical session keys the rebuild mutated.
+                    for _sk, _sv in _saved_cat.items():
+                        if _sv is _SWEEP_MISSING:
+                            st.session_state.pop(_sk, None)
+                        else:
+                            st.session_state[_sk] = _sv
 
                 status_text.text("Sweep completed!")
                 st.session_state.param_sweep_result = {
@@ -595,7 +694,9 @@ def _render_body(theme_mode):
                 df_summary = pd.DataFrame(_ps["summary"])
                 _sweep_summary_tiles(df_summary)
                 st.markdown("#### Summary of Runs (linked parameters)")
-                _fmt = {c: "{:.2e}" for c in _labels}
+                # Only numeric columns get the scientific format — a categorical
+                # (signal-function) linked param holds option-name strings.
+                _fmt = {c: "{:.2e}" for c in _labels if pd.api.types.is_numeric_dtype(df_summary[c])}
                 _fmt.update({"Nadir (cells/mL)": "{:.2e}", "AUC (cells·h/mL)": "{:.2e}",
                              "Clearance Time (h)": "{:.1f}", "2-Log Red Time (h)": "{:.1f}"})
                 st.dataframe(df_summary.style.format(_fmt), width="stretch")
