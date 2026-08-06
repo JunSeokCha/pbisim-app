@@ -11,6 +11,8 @@ Core guarantees:
 
 from __future__ import annotations
 
+import time as _time
+
 import pandas as pd
 import pytest
 
@@ -19,6 +21,22 @@ from streamlit.testing.v1 import AppTest
 from pbisim_app.common import _is_model_data_key, DEMO_MODELS, WORKING_DRAFT_LABEL
 
 APP = "pbisim_app/app.py"
+
+
+def _settle_fit(at, tries=300):
+    """Drive a background NLS fit to completion. The running-fit banner is now an
+    ``st.fragment(run_every=...)`` (so the live app stays responsive / navigable), and
+    AppTest does NOT advance that fragment's timer — so a single ``.run()`` after
+    clicking 'Run NLS fit' returns while the fit thread is still running. Re-run the
+    full app (each pass the top-level monitor harvests a finished job) until ``fit_job``
+    clears."""
+    for _ in range(tries):
+        job = at.session_state["fit_job"] if "fit_job" in at.session_state else None
+        if job is None:
+            return
+        _time.sleep(0.1)
+        at.run()
+    raise AssertionError("background fit did not settle within the allotted time")
 
 
 def _free_targets(at, paths):
@@ -149,6 +167,7 @@ def test_estimate_b0_mode_runs_end_to_end():
     at.session_state["fit_nls_maxnfev"] = 120
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert len(at.exception) == 0
     fc = at.session_state["calib_fitted_config"]
     _ic = getattr(fc, "fit_initial_cfu", None)
@@ -176,6 +195,7 @@ def test_fit_draws_fitted_overlay_and_apply_persists():
     at.session_state["fit_nls_maxnfev"] = 200
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     # (a) the overlay is the fitted one
     ovr = at.session_state["calib_overlay_result"]
     assert ovr and "Fitted model" in ovr["title"]
@@ -216,6 +236,7 @@ def test_reparameterization_theta_mapping():
     at.session_state["fit_nls_maxnfev"] = 250
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert len(at.exception) == 0
     keys = {p["key"] for p in at.session_state["calib_fit_result"]["params"]}
     assert "theta1" in keys and "theta2" in keys
@@ -258,6 +279,7 @@ def test_apply_writes_estimated_initial_cfu():
     at.session_state["fit_nls_maxnfev"] = 150
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     est_b0 = at.session_state["calib_fitted_config"].fit_initial_cfu
     assert est_b0 and est_b0 > 0
     [b for b in at.button if b.key == "fit_apply_map"][0].click().run()
@@ -295,6 +317,7 @@ def test_fitted_overlay_uses_estimated_initial_cfu():
     at.session_state["fit_nls_maxnfev"] = 200
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     est = at.session_state["calib_fitted_config"].fit_initial_cfu
     b0_used = [m["B₀"] for m in at.session_state["calib_overlay_result"]["metrics"]]
     assert all(abs(b - est) / est < 1e-6 for b in b0_used)     # overlay used the estimate
@@ -331,6 +354,7 @@ def test_fit_spec_text_applies_to_tables_and_fits():
     at.session_state["fit_nls_maxnfev"] = 150
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert len(at.exception) == 0
     assert "g" in {p["key"] for p in at.session_state["calib_fit_result"]["params"]}
 
@@ -400,6 +424,7 @@ def test_unbounded_params_run_single_start():
     at.session_state["fit_nls_maxnfev"] = 200
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert len(at.exception) == 0
     m = at.session_state["calib_fit_result"]["map"]
     assert 0.9 < m["free0"] < 1.5              # unbounded growth recovered from its start
@@ -427,6 +452,7 @@ def test_invalid_theta_range_blocks_fit():
     _derive_targets(at, {"growth_rates[0]": "g"})
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert "calib_fit_result" not in at.session_state or at.session_state["calib_fit_result"] is None
     assert any("lower ≥ upper" in (m.value or "") for m in at.error)
 
@@ -453,6 +479,7 @@ def test_frozen_model_fit_ignores_contaminated_builder():
     at.session_state["fit_nls_maxnfev"] = 200
     at.run()
     [b for b in at.button if b.key == "fit_run_nls"][0].click().run()
+    _settle_fit(at)
     assert len(at.exception) == 0
     m = at.session_state["calib_fit_result"]["map"]
     assert 0.9 < m["free0"] < 1.5           # freed growth recovered despite bad builder

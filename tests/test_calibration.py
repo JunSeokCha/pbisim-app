@@ -433,35 +433,32 @@ def test_export_fit_spec_available_after_data():
 
 
 def test_background_fit_result_harvested_by_top_monitor():
-    """A completed background fit is harvested by _monitor_fit_job() at the TOP of
-    the page — NOT by section 5c — so navigating away and back never loses the
-    result. Simulate a finished daemon-thread job (status='done') sitting in
-    session_state and assert that a plain rerun of the Calibration page picks it up
-    (calib_fit_result populated, fit_job cleared) with no exception, even with no
-    dataset loaded (so section 5c isn't even rendered)."""
+    """A completed background fit is harvested by _monitor_fit_job() at the TOP of the
+    page — NOT by section 5c — so navigating away and back never loses the result. The
+    fit runs in a separate process and returns its result on a queue; simulate that with
+    a plain (deterministic) queue holding a finished result, and assert a rerun of the
+    Calibration page picks it up (calib_fit_result populated, fit_job cleared) with no
+    exception, even with no dataset loaded (so section 5c isn't even rendered)."""
+    import queue as _queue
 
-    class _StubFP:
-        def map(self):
-            return {"free0": 1.23}
+    class _StubCfg:  # no fit_initial_cfu/pfu attrs → overlay step is a harmless no-op
+        pass
 
-        def credible_interval(self, q):
-            return {"free0": (1.0, 1.5)}
-
-        def to_config(self):
-            return object()  # no fit_initial_cfu/pfu attrs → overlay step is a no-op
-
+    q = _queue.Queue()
+    q.put(("done", {"map": {"free0": 1.23}, "ci": {"free0": [1.0, 1.5]},
+                    "fitted_config": _StubCfg()}))
     at = AppTest.from_file(APP, default_timeout=150)
     at.run()
     at.session_state["current_page_radio"] = "Calibration"
     at.session_state["fit_job"] = {
-        "status": "done", "fp": _StubFP(),
+        "status": "running", "queue": q, "proc": None, "result": None,
         "mappings": [], "path_label": {"growth_rates[0]": "growth"},
         "targets": [{"free": True, "path": "growth_rates[0]"}], "thetas": [],
         "fit_model": "Working draft (live)",
         "fB": np.array([1e7]), "fP": np.array([1e6]), "fS": None, "fmk": {},
         "ovl_ctx": {"arm_cond": {}, "link_vals": {}}, "od_link": None,
     }
-    at.run()  # top monitor should harvest before section 5c is reached
+    at.run()  # top monitor should read the queue + harvest before section 5c is reached
     assert len(at.exception) == 0, at.exception
     assert at.session_state["fit_job"] is None            # job consumed
     fr = at.session_state["calib_fit_result"]
@@ -470,13 +467,48 @@ def test_background_fit_result_harvested_by_top_monitor():
 
 
 def test_background_fit_error_surfaced_by_top_monitor():
-    """A failed background fit surfaces its error via the top monitor and clears the
-    job, regardless of section 5c."""
+    """A failed background fit (error tuple on the queue) surfaces its error via the top
+    monitor and clears the job, regardless of section 5c."""
+    import queue as _queue
+    q = _queue.Queue()
+    q.put(("error", "ValueError: boom"))
     at = AppTest.from_file(APP, default_timeout=150)
     at.run()
     at.session_state["current_page_radio"] = "Calibration"
-    at.session_state["fit_job"] = {"status": "error", "error": "ValueError: boom"}
+    at.session_state["fit_job"] = {"status": "running", "queue": q, "proc": None}
     at.run()
     assert len(at.exception) == 0, at.exception
     assert at.session_state["fit_job"] is None
     assert any("boom" in (e.value or "") for e in at.error)
+
+
+def test_running_fit_does_not_freeze_page_or_navigation():
+    """A RUNNING fit shows a STATIC progress banner (+ manual Refresh) but must NOT enter
+    any auto-rerun loop: the rest of the Calibration page still renders, and the user can
+    navigate away. (No sleep+rerun loop and no run_every fragment — both starved nav /
+    froze the app — so navigation is a plain rerun.)"""
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.run()
+    at.session_state["current_page_radio"] = "Calibration"
+    # Simulate a running background fit (no real thread — just the holder state).
+    at.session_state["fit_job"] = {
+        "status": "running", "t0": 0.0, "param_preview": ["growth_rate"]}
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    # progress banner is shown …
+    assert any("Fitting" in (i.value or "") for i in at.info)
+    # … AND the rest of the page still rendered (not short-circuited): section 1 upload.
+    assert any("Upload data" in (m.value or "") for m in at.markdown)
+    # navigation away works even while a fit "runs"
+    at.session_state["current_page_radio"] = "Interactive Simulator"
+    at.run()
+    assert at.session_state["current_page"] == "Interactive Simulator"
+    assert len(at.exception) == 0, at.exception
+    # …and coming BACK must not raise (the fit_refresh/fit_stop button keys must be
+    # excluded from the persisted fit_config re-seed, else assigning them raises
+    # StreamlitValueAssignmentNotAllowedError).
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert at.session_state["current_page"] == "Calibration"
+    assert len(at.exception) == 0, at.exception
+    assert any("Fitting" in (i.value or "") for i in at.info)   # banner still there

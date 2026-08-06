@@ -245,6 +245,103 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-06) — Calibration fit runs in a SEPARATE PROCESS (real nav-freeze fix)
+
+The freeze-on-navigate persisted even with no auto-poll, because the fit ran in a **thread**:
+measured, a threaded pbisim fit leaves the main thread at only ~22% CPU, and the *real*
+pbisim-fit NLS is heavier — the GIL starves Streamlit, so navigating freezes until the fit
+ends. No Streamlit-side polling trick fixes a GIL-bound thread. Owner chose (AskUserQuestion)
+to keep navigation, so the fit now runs in a **separate process**.
+
+- `pbisim_app/fit_process.py` (NEW, Streamlit-free): `run_fit_in_process(queue, payload)` runs
+  `run_nls_fit_v2` and puts `("done", {map, ci, fitted_config})` or `("error", msg)` on the
+  queue. It EXTRACTS results to picklable primitives in the child (the posterior may not
+  pickle; a `ModelConfig` does — verified).
+- `_start_fit_process(payload)` (calibration.py) forks via `mp.get_context("fork")` +
+  `Process(..., daemon=True)`. **Fork, not spawn/forkserver**: spawn re-imports the Streamlit
+  app script in the child (breaks it); fork inherits memory, so the payload (config, dataset,
+  covariate resolvers) is NOT pickled to pass — only the *result* is pickled back through the
+  queue. Parent pre-imports `nls_fit`/`pbisim_fit.refinement.nls` before forking so the child
+  runs no imports (import lock = the usual fork-in-a-thread deadlock source). n_arm_jobs=1 → no
+  nested workers (a daemon process can't have children). Fork is the Linux/Render default
+  (deploy = python:3.11-slim, no fork DeprecationWarning; 3.13 dev box warns but works).
+- `_monitor_fit_job` polls the queue non-blocking each render (harvest done/error; detect a
+  process that exited with no result = crash/OOM). Still **no auto-poll loop** — a running fit
+  shows a STATIC banner + manual **🔄 Refresh status** (+ Stop, which `terminate()`s the
+  process = real cancellation). Navigation is a plain rerun; the process has its own GIL so the
+  app stays fully responsive. Result harvested on Refresh/return. `_harvest_fit_done` reads
+  `_job["result"]` (the queue dict) instead of a live posterior.
+- Removed the thread worker `_fit_worker` + `import threading`.
+- Tests: monitor tests now inject a plain `queue.Queue` with a `("done"/"error", …)` item
+  (deterministic); the 9 real fit tests fork a real subprocess and are driven by `_settle_fit`.
+  Full suite green. **Risk noted:** fork-in-a-multithreaded-process can (rarely) deadlock;
+  pre-importing in the parent mitigates the common case. If it ever bites on deploy, the
+  fallback is a synchronous spinner.
+
+## Done this session (2026-08-06) — Calibration fit progress: no auto-poll (superseded same day)
+
+Saga of the running-fit progress display (all on the Calibration page; the fit itself always
+ran fine in a daemon thread — this was only about how the UI *observes* it):
+1. `sleep(1)+st.rerun()` loop at page top → monopolised Streamlit's script runner → app froze
+   ~1 min, nav radio **desynced to the wrong page**, finished fit never harvested. Also blew
+   CI's per-`.run()` wall-clock timeout (one `.run()` spanned the whole fit).
+2. `st.fragment(run_every=1.0)` → fixed on-page ticking, but the fragment timer kept firing /
+   re-triggering `st.rerun(scope="app")` after the user navigated away → **froze again**.
+
+Measured the actual cost: a threaded pbisim fit leaves the main thread at ~172 ticks/s (vs ~930
+idle, worst stall 40 ms) — i.e. the **thread does NOT freeze the app**; every freeze was the
+*polling mechanism* fighting Streamlit's execution model. So: **removed all auto-poll.** A
+running fit now shows a **STATIC banner + a manual `🔄 Refresh status` button** (+ Stop).
+Navigation is a plain rerun (nothing to starve → no freeze, no desync); the result is harvested
+by `_monitor_fit_job` on the next render — when the user clicks Refresh or simply returns to the
+page. Trade-off: the banner doesn't tick live and the result isn't *pushed* — the user pulls it
+(Refresh/return). `_harvest_fit_done` extracted; records `calib_fit_error` instead of throwing
+if a converged result can't be read.
+
+**Test impact:** the fit is async, so a single `.run()` after "Run NLS fit" returns while the
+thread runs. `_settle_fit(at)` (test_models.py) re-runs the app until `fit_job` clears — added
+after each of the 9 fit-run clicks (each `at.run()` acts like a Refresh). New `test_calibration
+.py::test_running_fit_does_not_freeze_page_or_navigation` (running job shows banner, page still
+renders, nav away works). Suite green.
+
+Possible future upgrade if live auto-update is wanted without the freeze: run the fit in a
+SUBPROCESS (frees the main thread fully) — but the polling-vs-Streamlit fragility is the same
+regardless of thread/process, so the manual-Refresh model is the robust baseline.
+
+## Done this session (2026-08-06) — coupled sweep can mix categorical + continuous
+
+Bug: a **Coupled (linked)** parameter sweep that paired a **categorical** signal-function
+param (e.g. Lysis signal function) with a **continuous** one (e.g. Initial Phage Density)
+didn't work — the coupled loop applied EVERY selected param via `apply_sweep_parameter`,
+which mutates an already-built config, but a signal-function choice resolves at BUILD time
+(session key + `*_kwargs()` helpers), so the categorical one was silently ignored. (The 1D
+categorical sweep already handled this by set-key-then-rebuild; coupled didn't.)
+
+Fix (`views/param_sweeps.py`): split coupled labels into categorical vs continuous. Per
+step, if any categorical is present, set each categorical **session key** to that step's
+option and **rebuild** via `build_nominal_config_from_gui()`; then apply the continuous
+params via `apply_sweep_parameter` on the rebuilt config; solve. Categorical session keys
+saved before / restored after in a `finally` (no residue on the live model). UI: a categorical
+coupled param uses **one dropdown PER STEP** — a "number of steps" `st.number_input`
+(`pc_catn_{i}`) sets how many `st.selectbox`es (`pc_catopt_{i}_{j}`) render, so an option can
+**REPEAT** across steps (e.g. constant×3 then nutrient×3 paired with 0,1e3,1e5,0,1e3,1e5 =
+the full 2×3 factorial as a linked series). A single `st.multiselect` was tried first but it
+can't repeat an option (each disappears once chosen) — that's why per-step boxes. Each keyed
+selectbox is sanitized (pop a stale/invalid persisted value before render so it can't raise).
+Compute reads `[pc_catopt_{i}_{j} for j in range(pc_catn_{i})]`, drops invalids. Continuous
+params stay comma-text (`pc_series_{i}`); the "same length" check pairs them. Trajectory-label + summary formatting made
+value-type-aware (`_short_sweep_label` / `_fmt_sweep_value`; the coupled summary applies the
+`{:.2e}` numeric format only to numeric columns — a categorical column holds option-name
+strings). Pure-numeric coupled sweeps unchanged (no rebuild, no restore).
+
+**2D + categorical:** NOT supported — 2D axes are both numeric (heatmap grid). Added a UI
+guard: picking a signal-function param for either 2D axis shows a warning and **disables**
+Run 2D, pointing to 1D (compare options) or Coupled (pair with a continuous param). (Repro
+path untouched — still the "1D only" message for coupled/2D.) Test: `test_sweeps.py::
+test_coupled_sweep_mixes_categorical_and_continuous` (mix lysis-signal + P0 via the dropdown;
+asserts option strings + densities in the summary, session key restored, empty selection
+rejected). Suite green.
+
 ## Done this session (2026-08-05) — Calibration fit-monitor survives navigation
 
 Bug: run an NLS fit, navigate away from Calibration and back → the progress banner

@@ -1,6 +1,6 @@
 """Rendered by app.py when this page is selected."""
 import re
-import threading
+import multiprocessing as _mp
 import time as _time
 
 from pbisim_app.common import *  # noqa: F401,F403
@@ -54,24 +54,29 @@ def _pf(s):
         return None
 
 
-def _fit_worker(holder):
-    """Background NLS fit. Writes results into the plain ``holder`` dict only — it
-    never touches ``st`` / ``session_state`` (it runs off the ScriptRunContext), so
-    the Streamlit UI stays responsive and the fit can be abandoned via a Stop button."""
+def _start_fit_process(payload):
+    """Launch the NLS fit in a SEPARATE PROCESS and return ``(process, queue)``.
+
+    Uses the ``fork`` start method: the child inherits the parent's memory, so the
+    (possibly non-picklable) ``payload`` — config, dataset, covariate resolvers — is NOT
+    pickled to pass it (only the *result* is pickled back through the queue). ``fork`` is
+    the Linux/Render default and, unlike ``spawn``/``forkserver``, does not re-import the
+    Streamlit app script in the child. Daemonised so it can't outlive the server; the fit
+    passes ``n_arm_jobs=1`` so it never spawns nested workers (a daemon process can't)."""
+    from pbisim_app.fit_process import run_fit_in_process
+    # Pre-import the fit machinery in the PARENT so the forked child runs NO imports —
+    # the import lock is the most common fork-in-a-multithreaded-process deadlock source,
+    # and the child inherits already-imported modules. (Best-effort; harmless if it fails.)
     try:
-        from pbisim_app import nls_fit as _nls
-        fp = _nls.run_nls_fit_v2(
-            holder["cfg"], holder["targets"], holder["thetas"], holder["mappings"],
-            holder["ds"], holder["obs"], od_to_cfu=holder["od_link"],
-            n_restarts=holder["restarts"], max_nfev=holder["maxnfev"],
-            estimate_b0=holder.get("estimate_b0", "none"),
-            obs_compartments=holder.get("obs_compartments") or None,
-            covariate_effects=holder.get("covariate_effects") or None)
-        holder["fp"] = fp
-        holder["status"] = "done"
-    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
-        holder["error"] = f"{type(e).__name__}: {e}"
-        holder["status"] = "error"
+        import pbisim_app.nls_fit  # noqa: F401
+        import pbisim_fit.refinement.nls  # noqa: F401
+    except Exception:
+        pass
+    _ctx = _mp.get_context("fork")
+    _q = _ctx.Queue()
+    _proc = _ctx.Process(target=run_fit_in_process, args=(_q, payload), daemon=True)
+    _proc.start()
+    return _proc, _q
 
 
 def _apply_map_to_state(map_dict):
@@ -257,111 +262,141 @@ def _compute_overlay(config, iB, iP, iS, mk, ctx):
     }
 
 
+def _harvest_fit_done(_job):
+    """Read a finished fit's result (``_job['result']`` = the picklable dict the fit
+    subprocess returned: ``{'map','ci','fitted_config'}``) into session_state:
+    ``calib_fit_result`` (MAP + CI table), ``calib_fitted_config``, and the fitted-curve
+    ``calib_overlay_result``. Returns True on success; on failure records
+    ``calib_fit_error`` and returns False (so a fit that converged to an unreadable
+    result surfaces a clean message instead of a raw traceback)."""
+    _res = _job["result"]
+    try:
+        _map = _res["map"]
+        _ci = _res.get("ci") or {}
+        _mapped = {m["path"] for m in _job["mappings"]}
+        _pl = _job["path_label"]
+        _pmeta = [{"label": _pl.get(t["path"], t["path"]), "key": f"free{k}"}
+                  for k, t in enumerate(_job["targets"])
+                  if t["free"] and t["path"] not in _mapped]
+        _pmeta += [{"label": f"θ {th['name']}", "key": th["name"]}
+                   for th in _job["thetas"]]
+        st.session_state["calib_fit_result"] = {
+            "map": {k: float(v) for k, v in _map.items()},
+            "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
+            "params": _pmeta, "model": _job["fit_model"],
+        }
+        _fcfg = _res["fitted_config"]
+        st.session_state["calib_fitted_config"] = _fcfg
+        try:
+            # If B₀ / initial phage were estimated (fit_initial_cfu/pfu), reflect
+            # them in the overlay's inoculum so the fitted curve matches the data.
+            _fB2, _fP2 = _job["fB"], _job["fP"]
+            _fovl = dict(_job["ovl_ctx"])
+            _ic = getattr(_fcfg, "fit_initial_cfu", None)
+            if _ic is not None and np.isfinite(_ic) and _ic > 0:
+                if float(np.sum(_fB2)) > 0:
+                    _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
+                _fovl["arm_cond"] = {a: {**c, "b0": float(_ic)}
+                                     for a, c in _job["ovl_ctx"]["arm_cond"].items()}
+            _ip = getattr(_fcfg, "fit_initial_pfu", None)
+            if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
+                _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
+            _fovl["title"] = "Fitted model vs observations (NLS MAP)"
+            if _job["od_link"]:
+                _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
+            st.session_state["calib_overlay_result"] = _compute_overlay(
+                _fcfg, _fB2, _fP2, _job["fS"], _job["fmk"], _fovl)
+        except Exception:
+            pass
+        return True
+    except Exception as _he:  # noqa: BLE001 — surface, don't crash the page
+        st.session_state["calib_fit_error"] = (
+            f"The fit finished but its result couldn't be read: {type(_he).__name__}: {_he}")
+        return False
+
+
 def _monitor_fit_job():
     """Observe the background NLS fit at the TOP of the page — decoupled from
     section 5c's parameter-table code.
 
-    The fit runs in a ``daemon`` thread (``_fit_worker``) that writes only into the
-    ``fit_job`` holder, a plain ``session_state`` dict; it therefore keeps running
-    across page navigation (it does not depend on the Calibration page rendering).
-    This function is only what DISPLAYS and HARVESTS that job.
+    The fit runs in a separate PROCESS (``_start_fit_process``) that returns its result on
+    a ``queue``; the process has its own interpreter/GIL, so the Streamlit app stays fully
+    responsive and navigable while it runs. This function only DISPLAYS and HARVESTS it, at
+    the top of ``render()`` — outside section 5c's ``try`` — so a completed fit is picked up
+    the moment the user returns and the banner can't be hidden by an unrelated error.
 
-    Previously the running banner and the done→result harvest lived deep inside
-    section 5c's ``try`` block, which rebuilds from parameter-table / arm-selection
-    state that is deliberately *not* persisted across navigation. So on returning to
-    the page that block could raise before reaching the poll code — hiding the
-    progress banner and leaving a *completed* fit un-harvested until the section
-    rendered cleanly again (the fit was never killed, only its status stopped being
-    shown). Running this monitor at the top of ``render()`` — outside that ``try`` —
-    makes the banner un-hideable and picks up a fit that finished while the user was
-    on another page the moment they return. While a fit is running it renders the
-    banner + Stop and reruns from here (~1 s cadence) instead of falling through to
-    the rest of the page, so a slow multi-cycle fit doesn't rebuild the heavy page —
-    or blow AppTest/CI's wall-clock timeout — on every poll.
-    """
+    **No auto-poll.** Earlier thread-based versions polled with a whole-app
+    ``sleep``+``st.rerun`` loop (starved the script runner → froze + nav desync) and then an
+    ``st.fragment(run_every=…)`` (timer kept re-triggering a whole-app rerun after nav →
+    froze again). Both fight Streamlit's model, and a *thread* also couldn't keep the app
+    responsive (GIL). Now: the fit is a process (responsive), and the running banner is
+    STATIC with a manual **Refresh** button. Navigation is a plain rerun (nothing to
+    starve); the result is harvested on the next render — when the user clicks Refresh or
+    simply returns to this page. The queue is checked here each render."""
+    _err = st.session_state.pop("calib_fit_error", None)
+    if _err:
+        st.error(_err)
     _job = st.session_state.get("fit_job")
     if _job is None:
-        return False
-    _status = _job.get("status")
-
-    if _status == "error":
-        st.error(f"Fit failed: {_job.get('error')}")
+        return
+    if _job.get("status") != "running":
         st.session_state["fit_job"] = None
-        return False
+        return
 
-    if _status == "done":
-        _fp = _job["fp"]
-        try:
-            _map = _fp.map()
+    # Non-blocking check of the fit process: harvest a result off the queue, or detect a
+    # process that died without producing one.
+    _q, _proc = _job.get("queue"), _job.get("proc")
+    _finished = False
+    try:
+        if _q is not None and not _q.empty():
+            _kind, _data = _q.get_nowait()
+            if _kind == "done":
+                _job["result"] = _data
+                _harvest_fit_done(_job)
+            else:
+                st.session_state["calib_fit_error"] = f"Fit failed: {_data}"
+            _finished = True
+        elif _proc is not None and not _proc.is_alive():
+            # Exited without a result on the queue (crash / OOM-killed / segfault).
+            st.session_state["calib_fit_error"] = (
+                "The fit process exited unexpectedly without a result (it may have run out "
+                "of memory or crashed). Try fewer restarts / max-evaluations, or a simpler model.")
+            _finished = True
+    except Exception as _pe:  # noqa: BLE001 — queue/process error, don't crash the page
+        st.session_state["calib_fit_error"] = f"Could not read the fit result: {_pe}"
+        _finished = True
+
+    if _finished:
+        if _proc is not None:
             try:
-                _ci = _fp.credible_interval(0.95)
-            except Exception:
-                _ci = {}
-            _mapped = {m["path"] for m in _job["mappings"]}
-            _pl = _job["path_label"]
-            _pmeta = [{"label": _pl.get(t["path"], t["path"]), "key": f"free{k}"}
-                      for k, t in enumerate(_job["targets"])
-                      if t["free"] and t["path"] not in _mapped]
-            _pmeta += [{"label": f"θ {th['name']}", "key": th["name"]}
-                       for th in _job["thetas"]]
-            st.session_state["calib_fit_result"] = {
-                "map": {k: float(v) for k, v in _map.items()},
-                "ci": {k: [float(a), float(b)] for k, (a, b) in _ci.items()},
-                "params": _pmeta, "model": _job["fit_model"],
-            }
-            _fcfg = _fp.to_config()
-            st.session_state["calib_fitted_config"] = _fcfg
-            try:
-                # If B₀ / initial phage were estimated (fit_initial_cfu/pfu), reflect
-                # them in the overlay's inoculum so the fitted curve matches the data.
-                _fB2, _fP2 = _job["fB"], _job["fP"]
-                _fovl = dict(_job["ovl_ctx"])
-                _ic = getattr(_fcfg, "fit_initial_cfu", None)
-                if _ic is not None and np.isfinite(_ic) and _ic > 0:
-                    if float(np.sum(_fB2)) > 0:
-                        _fB2 = _fB2 * (float(_ic) / float(np.sum(_fB2)))
-                    _fovl["arm_cond"] = {a: {**c, "b0": float(_ic)}
-                                         for a, c in _job["ovl_ctx"]["arm_cond"].items()}
-                _ip = getattr(_fcfg, "fit_initial_pfu", None)
-                if _ip is not None and np.isfinite(_ip) and _ip > 0 and len(_fP2):
-                    _fP2 = np.asarray(_fP2, dtype=float).copy(); _fP2[0] = float(_ip)
-                _fovl["title"] = "Fitted model vs observations (NLS MAP)"
-                if _job["od_link"]:
-                    _fovl["link_vals"] = dict(_job["ovl_ctx"]["link_vals"], od=_job["od_link"])
-                st.session_state["calib_overlay_result"] = _compute_overlay(
-                    _fcfg, _fB2, _fP2, _job["fS"], _job["fmk"], _fovl)
+                _proc.join(timeout=1)
             except Exception:
                 pass
-        finally:
-            st.session_state["fit_job"] = None
+        st.session_state["fit_job"] = None
         st.rerun()
+        return
 
-    if _status == "running":
-        _el = _time.time() - _job.get("t0", _time.time())
-        _pnames = ", ".join(_job.get("param_preview", []))
-        st.info(
-            f"⏳ Fitting **{len(_job.get('param_preview', []))} parameter(s)** — "
-            f"~{_el:0.0f}s elapsed. The fit runs in a background thread and **keeps "
-            f"running if you leave this page** — come back any time and the result "
-            f"will be waiting. Press **Stop** to abandon it."
-            + (f"  \nEstimating: {_pnames}" if _pnames else ""))
-        if st.button("Stop fit", key="fit_stop"):
-            _job["status"] = "cancelled"
-            st.session_state["fit_job"] = None
-            st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
-            st.rerun()
-        # Poll from the TOP: while a fit runs we render ONLY this banner + Stop and
-        # rerun, WITHOUT rebuilding the rest of the (heavy) page each second — the
-        # dataset/overlay/fit-table below are static stored data during a fit, so
-        # re-rendering them every cycle buys nothing and is the main per-cycle cost
-        # (it also blew AppTest/CI's wall-clock timeout, which spans the whole rerun
-        # chain). The solver has no per-iteration callback, so a ~1 s cadence just
-        # keeps the elapsed-time banner ticking. Reruns until the thread flips the
-        # status, at which point the done/error branch above harvests it.
-        _time.sleep(1.0)
+    # Still running — static banner + manual Refresh + Stop (no auto-rerun loop).
+    _el = _time.time() - _job.get("t0", _time.time())
+    _pnames = ", ".join(_job.get("param_preview", []))
+    st.info(
+        f"⏳ Fitting **{len(_job.get('param_preview', []))} parameter(s)** in a background "
+        f"process (started ~{_el:0.0f}s ago). The app stays responsive — **navigate away and "
+        f"come back** freely; the fit keeps running and the result will be waiting. Click "
+        f"**Refresh status** to check on it here."
+        + (f"  \nEstimating: {_pnames}" if _pnames else ""))
+    _rc1, _rc2 = st.columns(2)
+    if _rc1.button("🔄 Refresh status", key="fit_refresh", width="stretch"):
+        st.rerun()   # single rerun (not a loop): re-checks the queue / harvests if done
+    if _rc2.button("Stop fit", key="fit_stop", width="stretch"):
+        if _proc is not None and _proc.is_alive():
+            try:
+                _proc.terminate()
+            except Exception:
+                pass
+        st.session_state["fit_job"] = None
+        st.warning("Fit stopped — result discarded. (Fix the bounds and re-run.)")
         st.rerun()
-
-    return False
 
 
 def render():
@@ -386,7 +421,7 @@ def render():
     # widgets are fine to persist.)
     _FIT_NOPERSIST = {"fit_csv", "fit_config", "fit_dataset", "fit_overlay", "fit_clear",
                       "fit_load", "fit_save_scenario", "fit_run_nls", "fit_apply_map",
-                      "fit_model_sel", "fit_job", "fit_stop", "fit_tbl_reset",
+                      "fit_model_sel", "fit_job", "fit_stop", "fit_refresh", "fit_tbl_reset",
                       "fit_spec_from_tables", "fit_spec_to_tables", "fit_spec_rev",
                       "fit_share_go", "fit_cmp_add", "fit_cmp_clear"}
     _fcfg = st.session_state.setdefault("fit_config", {})
@@ -401,11 +436,11 @@ def render():
                 pass  # widget type refuses assignment (e.g. a button) — skip it
 
     # Background-fit monitor — rendered FIRST, before the (fragile, non-persisted)
-    # section-5c code, so a running fit's progress and a finished fit's result are
-    # always shown/harvested regardless of the rest of the page's state. While a fit
-    # runs this shows only the banner + Stop and reruns (~1 s) from here — it does NOT
-    # fall through to render the rest of the page each cycle (that's expensive and is
-    # static stored data during a fit). It harvests a finished/failed fit on return.
+    # section-5c code, so a running fit's progress and a finished fit's result are always
+    # shown/harvested regardless of the rest of the page's state. The fit runs in a separate
+    # PROCESS (own GIL → app stays responsive/navigable); a running fit shows a STATIC banner
+    # + manual Refresh (no auto-poll loop). The result is harvested off the process queue on
+    # the next render (Refresh / return).
     _monitor_fit_job()
 
     # ── 1. Upload + column mapping ───────────────────────────────────────────
@@ -1362,9 +1397,10 @@ def render():
                 _any_free = any(t["free"] for t in _targets) or bool(_thetas)
                 _job = st.session_state.get("fit_job")
                 _running = bool(_job and _job.get("status") == "running")
-                # The fit runs in a background thread so the UI never freezes and a bad
-                # fit can be stopped (pbisim-fit's refine_nls has no cancel hook, so
-                # Stop discards the result; the running restart finishes in the bg).
+                # The fit runs in a separate PROCESS (not a thread): a ~1-min NLS fit is
+                # CPU-heavy and a thread would starve Streamlit's main thread via the GIL,
+                # freezing navigation. A process has its own interpreter/GIL, so the app
+                # stays responsive and navigable while the fit runs; Stop terminates it.
                 if st.button("Run NLS fit", key="fit_run_nls", type="primary",
                              width="stretch", disabled=_running):
                     if _theta_bad:
@@ -1381,14 +1417,19 @@ def render():
                                                          od_to_cfu=_od_link, dose_unit=_dose_unit,
                                                          arm_doses=_arm_doses,
                                                          arm_covariates=_arm_covariates)
-                            _holder = {
-                                "status": "running", "t0": _time.time(), "fp": None, "error": None,
-                                "cfg": _fit_cfg, "targets": _targets, "thetas": _thetas,
-                                "mappings": _mappings, "ds": _ds_fit, "obs": list(_sel_obs),
+                            _proc, _q = _start_fit_process({
+                                "base_config": _fit_cfg, "targets": _targets, "thetas": _thetas,
+                                "mappings": _mappings, "dataset": _ds_fit, "obs_keys": list(_sel_obs),
+                                "od_to_cfu": _od_link, "n_restarts": _restarts,
+                                "max_nfev": _maxnfev, "estimate_b0": _estimate_b0,
                                 "obs_compartments": dict(_obs_comp),
                                 "covariate_effects": list(_covariate_effects),
-                                "od_link": _od_link, "restarts": _restarts, "maxnfev": _maxnfev,
-                                "estimate_b0": _estimate_b0,
+                            })
+                            st.session_state["fit_job"] = {
+                                "status": "running", "t0": _time.time(),
+                                "proc": _proc, "queue": _q, "result": None,
+                                "od_link": _od_link,
+                                "targets": _targets, "thetas": _thetas, "mappings": _mappings,
                                 # post-processing context captured now, so edits during the
                                 # fit don't change how the result is interpreted/overlaid.
                                 "fit_model": _fit_model, "path_label": dict(_path_label),
@@ -1400,8 +1441,6 @@ def render():
                                      if t["free"] and t["path"] not in {m["path"] for m in _mappings}]
                                     + [f"θ {th['name']}" for th in _thetas]),
                             }
-                            st.session_state["fit_job"] = _holder
-                            threading.Thread(target=_fit_worker, args=(_holder,), daemon=True).start()
                             st.rerun()
                         except Exception as _fe:
                             st.error(f"Could not start fit: {_fe}")
