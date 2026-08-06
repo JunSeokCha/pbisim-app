@@ -6,6 +6,11 @@ import numpy as np
 from pbisim import PBIModel, solve_ode
 from pbisim.strains import StrainDefinition, StrainSet
 from pbisim.strains.genotypes import BinaryResistanceGenotypes, BacterialStrain, PhageStrain, Antibiotic
+from pathlib import Path as _Path
+
+# Absolute path — Streamlit >=1.59 resolves a relative AppTest.from_file() path against
+# the CALLER's directory (tests/), not the CWD, so a relative "pbisim_app/app.py" breaks.
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def test_brg_build_and_run():
@@ -384,7 +389,7 @@ def test_bacteria_to_resource_ratio_editable_in_all_modes():
     (it was previously read-only there); pseudolysogeny is now editable in
     BRG + StrainSet."""
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     keys = lambda a: {n.key for n in a.number_input if n.key}
     assert "str_ratio_0" in keys(at)  # Direct
@@ -407,7 +412,7 @@ def test_direct_mutation_rate_survives_navigation():
     sweep and back (the widget value= previously read an unwired key and reverted
     to 1e-7)."""
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     # 2 strains, 1 phage -> the 2^m mutation shortcut renders direct_mu_0
     wt = dict(at.session_state["int_strains"][0])
@@ -434,7 +439,7 @@ def test_dormancy_signals_and_growth_signals():
 
     # nutrient+density dormancy with a custom Ks runs (the reported bug). Drive the
     # widgets (not the dict) so keyed widget state doesn't override the edits.
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     at.session_state["int_carrying_capacity"] = 1e9
     at.session_state["str_dorm_en_0"] = True   # enable dormancy (per-strain rate control)
@@ -452,7 +457,7 @@ def test_dormancy_signals_and_growth_signals():
     # all four growth signals build without error
     for name, track in [("constant_growth", False), ("monod_growth", True),
                         ("logistic_growth", False), ("monod_logistic_growth", True)]:
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+        a = AppTest.from_file(APP, default_timeout=200)
         a.run()
         a.session_state["int_growth_function"] = name
         a.session_state["int_track_nutrients"] = track
@@ -467,7 +472,7 @@ def test_dormancy_signal_config_in_brg_and_strainset():
     map to the right engine dormancy function (+ density threshold) in BRG and StrainSet."""
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     at.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"
     at.run(); at.run()
@@ -482,7 +487,7 @@ def test_dormancy_signal_config_in_brg_and_strainset():
     assert cfg.dormancy_carrying_capacity == 1e8  # default density threshold
     assert len(at.error) == 0
 
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    a = AppTest.from_file(APP, default_timeout=200)
     a.run()
     a.session_state["widget_builder_mode"] = "Custom Strains & Graph (StrainSet)"
     a.run(); a.run()
@@ -499,7 +504,7 @@ def test_reset_environment_clears_brg_and_strainset():
     """Reset Environment must clear BRG / StrainSet config, not just the Direct
     builder — the mode returns to Direct and the mode-specific keys are gone."""
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at = AppTest.from_file(APP, default_timeout=160)
     at.run()
     # configure BRG + a StrainSet mutation graph
     at.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"
@@ -531,7 +536,7 @@ def test_death_signal_function_selector():
              "density (crowding)": "density_dependent_death",
              "nutrient + density": "nutrient_and_density_death"}
     for label, fn in DEATH.items():
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+        a = AppTest.from_file(APP, default_timeout=160)
         a.run()
         a.session_state["str_death_0"] = 0.05   # nonzero death rate via the widget
         a.run()
@@ -549,12 +554,12 @@ def test_lysis_signal_function_selector():
     from streamlit.testing.v1 import AppTest
 
     # Direct, default = constant lysis → lysis_progression_function stays None.
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert a.session_state["simulation_config"].lysis_progression_function is None
 
     # Direct, nutrient (Monod) lysis → frac_lysis + Ks_lysis flow through (Monod growth default).
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [s for s in a.selectbox if "Lysis signal function" in (s.label or "")][0].set_value("nutrient (Monod)").run()
     a.session_state["int_monod_constant_lysis"] = 0.15
     a.run()
@@ -565,7 +570,7 @@ def test_lysis_signal_function_selector():
     assert len(a.error) == 0
 
     # Coercion: nutrient lysis + constant growth (S frozen) → falls back to constant lysis.
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     a.session_state["int_growth_function"] = "constant_growth"
     a.session_state["int_track_nutrients"] = False
     a.session_state["int_lysis_function"] = "frac_lysis"
@@ -576,7 +581,7 @@ def test_lysis_signal_function_selector():
 
     # BRG + StrainSet: frac_lysis wired via to_config.
     for mode in ("Binary Genotypes (BRG)", "Custom Strains & Graph (StrainSet)"):
-        b = AppTest.from_file("pbisim_app/app.py", default_timeout=200); b.run()
+        b = AppTest.from_file(APP, default_timeout=200); b.run()
         b.session_state["widget_builder_mode"] = mode
         b.run(); b.run()
         b.session_state["int_lysis_function"] = "frac_lysis"
@@ -595,7 +600,7 @@ def test_lysis_floor_reaches_config_all_modes():
     from streamlit.testing.v1 import AppTest
     for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
                  "Custom Strains & Graph (StrainSet)"):
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        a = AppTest.from_file(APP, default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
         a.session_state["int_lysis_function"] = "frac_lysis"
@@ -608,7 +613,7 @@ def test_lysis_floor_reaches_config_all_modes():
         assert len(a.error) == 0, (mode, [e.value for e in a.error])
 
     # default (constant lysis) leaves the floor at 0
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert a.session_state["simulation_config"].lysis_floor == 0.0
 
@@ -621,7 +626,7 @@ def test_new_growth_signals_build():
     # Direct — each new signal builds and is set on the config.
     for fn, label in [("density_throttled_growth", "density-throttled (Monod × 1/(1+ΣB/Kd))"),
                       ("gompertz_growth", "Gompertz (nutrient)")]:
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+        a = AppTest.from_file(APP, default_timeout=160); a.run()
         [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(label).run()
         [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
         cfg = a.session_state["simulation_config"]
@@ -635,7 +640,7 @@ def test_gompertz_uses_nutrient_scale_defaults_and_grows():
     at a flat 0-growth curve (the exp overflow when S∞≈1e9)."""
     import numpy as np
     from streamlit.testing.v1 import AppTest
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     # a density-scale carrying capacity must NOT leak into Gompertz S∞
     a.session_state["int_carrying_capacity"] = 1e9
     [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(
@@ -649,7 +654,7 @@ def test_gompertz_uses_nutrient_scale_defaults_and_grows():
     assert np.max(cfu) > 2.0 * cfu[0], (cfu[0], np.max(cfu))
 
     # density-throttled forwards density_growth_constant (Kd).
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(
         "density-throttled (Monod × 1/(1+ΣB/Kd))").run()
     a.session_state["int_density_growth_constant"] = 5e8
@@ -658,7 +663,7 @@ def test_gompertz_uses_nutrient_scale_defaults_and_grows():
     assert a.session_state["simulation_config"].density_growth_constant == 5e8
 
     # BRG mode also accepts a new growth signal via to_config.
-    b = AppTest.from_file("pbisim_app/app.py", default_timeout=200); b.run()
+    b = AppTest.from_file(APP, default_timeout=200); b.run()
     b.session_state["widget_builder_mode"] = "Binary Genotypes (BRG)"; b.run(); b.run()
     b.session_state["int_growth_function"] = "density_throttled_growth"; b.run()
     [btn for btn in b.button if "Run Simulation" in (btn.label or "")][0].click().run()
@@ -674,7 +679,7 @@ def test_infected_nutrient_consumption_is_per_phage():
     for mode, key in [("Direct (ModelBuilder)", "phg_infnut_0"),
                       ("Binary Genotypes (BRG)", "brg_phg_infnut_0"),
                       ("Custom Strains & Graph (StrainSet)", "ss_phg_infnut_0")]:
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        a = AppTest.from_file(APP, default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
         _w = [n for n in a.number_input if n.key == key]
@@ -687,7 +692,7 @@ def test_infected_nutrient_consumption_is_per_phage():
         assert len(a.error) == 0, (mode, [e.value for e in a.error])
 
     # default is off — a zero per-phage array (or scalar 0), backward-compatible
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert not np.any(a.session_state["simulation_config"].infected_nutrient_consumption)
 
@@ -698,7 +703,7 @@ def test_smooth_efficiency_monod_all_modes():
     from streamlit.testing.v1 import AppTest
     for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
                  "Custom Strains & Graph (StrainSet)"):
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        a = AppTest.from_file(APP, default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
         a.session_state["int_growth_function"] = "smooth_efficiency_monod"
@@ -724,7 +729,7 @@ def test_sequential_diauxic_growth_all_modes():
 
     for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
                  "Custom Strains & Graph (StrainSet)"):
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        a = AppTest.from_file(APP, default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
         a.session_state["int_growth_function"] = "sequential_monod"
@@ -757,7 +762,7 @@ def test_nutrient_dependent_od_config_all_modes():
     import numpy as np
     for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
                  "Custom Strains & Graph (StrainSet)"):
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=200); a.run()
+        a = AppTest.from_file(APP, default_timeout=200); a.run()
         if not mode.startswith("Direct"):
             a.session_state["widget_builder_mode"] = mode; a.run(); a.run()
         a.session_state["int_debris_enabled"] = True
@@ -777,7 +782,7 @@ def test_prerun_inherit_debris_checkbox():
     """The 'Inherit bacterial debris' checkbox appears only when a pre-run AND the debris
     ODE are both on, and a run with it works."""
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at = AppTest.from_file(APP, default_timeout=160)
     at.run()
 
     # debris off -> no checkbox even with a pre-run
@@ -801,7 +806,7 @@ def test_count_increment_sticks_no_revert():
     """Increasing the number of phages / bacteria persists — it must not blink back
     to the previous value on the follow-up rerun (the keyless value=len() self-fight)."""
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=140)
+    at = AppTest.from_file(APP, default_timeout=140)
     at.run()
     for label, state_key in (("Number of phages", "int_phages"),
                              ("Number of strains", "int_strains")):
@@ -820,7 +825,7 @@ def test_brg_dormant_adsorption_wired():
     config (previously missing — dormant adsorption was silently 0 in BRG)."""
     import numpy as np
     from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=160)
+    at = AppTest.from_file(APP, default_timeout=160)
     at.run()
     [s for s in at.selectbox if s.label == "Bacterial Population Builder Mode"][0] \
         .set_value("Binary Genotypes (BRG)").run()
@@ -841,7 +846,7 @@ def test_dormant_od_fraction_reaches_config_all_modes():
     from streamlit.testing.v1 import AppTest
     for mode in ("Direct (ModelBuilder)", "Binary Genotypes (BRG)",
                  "Custom Strains & Graph (StrainSet)"):
-        at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+        at = AppTest.from_file(APP, default_timeout=200)
         at.run()
         at.session_state["widget_builder_mode"] = mode
         at.run(); at.run()
@@ -862,7 +867,7 @@ def test_frac_lysis_survives_under_any_nutrient_growth():
     for glabel, gfn in [("Gompertz (nutrient)", "gompertz_growth"),
                         ("smooth two-efficiency Monod", "smooth_efficiency_monod"),
                         ("density-throttled (Monod × 1/(1+ΣB/Kd))", "density_throttled_growth")]:
-        a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+        a = AppTest.from_file(APP, default_timeout=160); a.run()
         [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value(glabel).run()
         [s for s in a.selectbox if "Lysis signal function" in (s.label or "")][0].set_value("nutrient (Monod)").run()
         [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()
@@ -872,7 +877,7 @@ def test_frac_lysis_survives_under_any_nutrient_growth():
 
     # a NON-nutrient growth (constant) still coerces frac_lysis away (→ engine default
     # constant lysis, which the config represents as lysis_progression_function=None)
-    a = AppTest.from_file("pbisim_app/app.py", default_timeout=160); a.run()
+    a = AppTest.from_file(APP, default_timeout=160); a.run()
     [s for s in a.selectbox if "Growth signal function" in (s.label or "")][0].set_value("constant (unlimited)").run()
     [s for s in a.selectbox if "Lysis signal function" in (s.label or "")][0].set_value("nutrient (Monod)").run()
     [b for b in a.button if "Run Simulation" in (b.label or "")][0].click().run()

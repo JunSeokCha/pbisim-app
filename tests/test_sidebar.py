@@ -11,6 +11,9 @@ import matplotlib
 matplotlib.use("Agg")
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
+
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def _api_key_field_shown(at):
@@ -18,7 +21,7 @@ def _api_key_field_shown(at):
 
 
 def test_api_key_field_hidden_once_set():
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=90)
+    at = AppTest.from_file(APP, default_timeout=90)
     at.run()
 
     # With a key in place, the password field must NOT be rendered (so the browser has
@@ -31,7 +34,7 @@ def test_api_key_field_hidden_once_set():
 
 
 def test_change_button_reveals_field():
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=90)
+    at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["api_key"] = "sk-test-123"
     at.session_state["_editing_api_key"] = False

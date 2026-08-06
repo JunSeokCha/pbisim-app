@@ -14,6 +14,9 @@ matplotlib.use("Agg")
 
 from types import SimpleNamespace
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
+
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 from pbisim_app.agent import AgentRun
 
 
@@ -34,7 +37,7 @@ class _ConfiguringAgent:
 
 def _configure(config):
     """Return an AppTest that has applied `config` via the assistant's configure handler."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=150)
+    at = AppTest.from_file(APP, default_timeout=150)
     at.run()
     at.session_state["current_page_radio"] = "AI Assistant"
     at.session_state["api_key"] = "x"

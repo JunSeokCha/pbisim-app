@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
 
-APP = "pbisim_app/app.py"
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def _library_page():

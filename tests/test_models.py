@@ -17,10 +17,11 @@ import pandas as pd
 import pytest
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
 
 from pbisim_app.common import _is_model_data_key, DEMO_MODELS, WORKING_DRAFT_LABEL
 
-APP = "pbisim_app/app.py"
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def _settle_fit(at, tries=300):

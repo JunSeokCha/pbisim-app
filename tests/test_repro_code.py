@@ -18,6 +18,9 @@ matplotlib.use("Agg")
 
 import pytest
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
+
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def _sel(at, label):
@@ -25,7 +28,7 @@ def _sel(at, label):
 
 
 def _run(growth_label, death_label, dorm_signal=None):
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     _sel(at, "Growth signal function").set_value(growth_label)
     _sel(at, "Death signal function").set_value(death_label)
@@ -55,7 +58,7 @@ def test_repro_reproduces_growth_and_death_signals():
 def test_repro_reproduces_smooth_efficiency_growth():
     """smooth_efficiency_monod round-trips via with_smooth_efficiency_growth in the Direct
     reproduction script and matches the app's build (efficient K + low-S K + θ/hill)."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     _sel(at, "Growth signal function").set_value("smooth two-efficiency Monod")
     at.session_state["int_monod_constant"] = 0.2
@@ -81,7 +84,7 @@ def test_repro_reproduces_sequential_diauxic_growth():
     """Diauxic growth (sequential_monod) must round-trip via with_sequential_growth in the
     Direct reproduction script and match the app's build path (the three phase arrays)."""
     import numpy as np
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     _sel(at, "Growth signal function").set_value("sequential / diauxic (Monod)")
     at.session_state["int_growth_n_phases"] = 2
@@ -122,7 +125,7 @@ def test_repro_reproduces_dormancy_signals():
 def test_repro_brg_and_strainset_signal_functions(mode):
     """BRG / StrainSet pass the signal functions to ``to_config`` as function objects —
     the script must import and forward them, execute cleanly, and match the build path."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     _sel(at, "Bacterial Population Builder Mode").set_value(mode)
     at.run()
@@ -149,7 +152,7 @@ def test_repro_brg_strainset_diffusion_signal(mode):
     """BRG / StrainSet set the depth-diffusion functions on the config POST-build (their
     to_config can't take them). The generated script must mirror that assignment (import
     + `cfg.dormancy_diffusion_*_function = …`), execute, and match the build path."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=200)
+    at = AppTest.from_file(APP, default_timeout=200)
     at.run()
     _sel(at, "Bacterial Population Builder Mode").set_value(mode)
     at.run()
@@ -238,7 +241,7 @@ _PHAGE_DOSE = [{"time": 1.0, "amount": 1e8, "target_type": "phage",
 def test_repro_full_config_parity_with_dosing(mode):
     """Every field of the script's config must equal the app's built config — including
     a t=1 phage bolus (the dosing that BRG/StrainSet repro used to drop entirely)."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=220)
+    at = AppTest.from_file(APP, default_timeout=220)
     at.run()
     if mode != "Direct (ModelBuilder)":
         _sel(at, "Bacterial Population Builder Mode").set_value(mode)
@@ -263,7 +266,7 @@ def test_repro_brg_equilibrium_ic_and_prerun():
     """BRG equilibrium IC must appear in the script as the derivation call (not just the
     resulting numbers), and a stationary pre-run must start from it (B0=initial_B) rather
     than override it."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=220)
+    at = AppTest.from_file(APP, default_timeout=220)
     at.run()
     _sel(at, "Bacterial Population Builder Mode").set_value("Binary Genotypes (BRG)")
     at.run()
@@ -294,7 +297,7 @@ def _sweep_code(at):
 def test_param_sweep_reproduction_code_execs():
     """The Parameter Sweeps page emits a runnable 1D-sweep script that shadows the base
     builder and loops over the app's own apply_sweep_parameter."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=240)
+    at = AppTest.from_file(APP, default_timeout=240)
     at.run()
     at.session_state["current_page_radio"] = "Parameter Sweeps"
     at.run()
@@ -312,7 +315,7 @@ def test_param_sweep_reproduction_code_execs():
 def test_dose_sweep_reproduction_code_execs_and_zeroes_swept_phage():
     """The Dose-Response page emits a runnable script that rebuilds the per-run dose
     schedule and starts the swept phage at zero free phage (so dose=0 is a true control)."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=240)
+    at = AppTest.from_file(APP, default_timeout=240)
     at.run()
     at.session_state["current_page_radio"] = "Dose-Response Sweeps"
     at.run()

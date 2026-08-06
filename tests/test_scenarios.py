@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
 
-APP = "pbisim_app/app.py"
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def test_scenario_save_load_roundtrip_restores_full_config():

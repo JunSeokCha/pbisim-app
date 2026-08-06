@@ -18,6 +18,11 @@ from pbisim_app.trial_helper import (
     run_trial_simulation,
     plot_pkpd_trajectories_plotly,
 )
+from pathlib import Path as _Path
+
+# Absolute path — Streamlit >=1.59 resolves a relative AppTest.from_file() path against
+# the CALLER's directory (tests/), not the CWD, so a relative "pbisim_app/app.py" breaks.
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def test_build_regimen_doses_single_and_repeat():
@@ -137,7 +142,7 @@ def test_dose_record_is_editable_inline():
     matplotlib.use("Agg")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     at.session_state["int_doses"] = [
         {"time": 1.0, "amount": 1e8, "target_type": "phage", "target_idx": 0,
@@ -159,7 +164,7 @@ def test_trial_arm_is_editable_inline():
     matplotlib.use("Agg")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     at.session_state["trial_arms"] = [
         {"name": "Low dose",
@@ -181,7 +186,7 @@ def test_trial_iiv_is_editable_inline():
     matplotlib.use("Agg")
     from streamlit.testing.v1 import AppTest
 
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     at.session_state["trial_iiv_inputs"] = [
         {"path": "growth_rates", "dist_type": "LogNormal", "params": {"cv": 0.2},

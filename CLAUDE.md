@@ -245,6 +245,24 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-06) — CI test-suite fix (absolute AppTest paths for Streamlit ≥1.59)
+
+The GitHub Actions **test-and-deploy** workflow (`.github/workflows/deploy.yml`) has been
+failing at "Run test suite" on every push for a while — while the Render deploy succeeded
+(autoDeploy is independent of Actions). Root cause: CI does `pip install -e .` (no pins), so
+it gets the **latest** streamlit; a recent version (≈1.59+) changed `AppTest.from_file(<relative
+path>)` to resolve against the **calling test file's directory** (`tests/`), not the CWD — so
+`AppTest.from_file("pbisim_app/app.py")` looked for `tests/pbisim_app/app.py` → `FileNotFoundError`
+in **all ~100 AppTest tests**. Reproduced locally in a throwaway venv with latest deps
+(streamlit 1.61.1 / numpy 2.5 / pandas 3.0): 107 failed → after the fix, **267 passed** (so the
+newer numpy/pandas are otherwise fine).
+
+Fix: every test now passes an **absolute** path (from_file uses an absolute path verbatim on all
+versions) — `APP = str(Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")` — replacing
+the module-level `APP = "pbisim_app/app.py"` and every inline `AppTest.from_file("pbisim_app/app.py"…)`
+across all test files. (No dependency pinning — the app itself runs fine on latest streamlit on
+Render; only the test path was version-fragile.) Verified on both streamlit 1.58 (dev) and 1.61 (CI-like).
+
 ## Done this session (2026-08-06) — Calibration fit runs in a SEPARATE PROCESS (real nav-freeze fix)
 
 The freeze-on-navigate persisted even with no auto-poll, because the fit ran in a **thread**:

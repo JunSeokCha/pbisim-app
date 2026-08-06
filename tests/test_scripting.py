@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
 
 from pbisim_app.executor import execute_code, new_namespace
 
-APP = "pbisim_app/app.py"
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 # ── executor: notebook 'kernel' vs the AI-assistant fresh namespace ──

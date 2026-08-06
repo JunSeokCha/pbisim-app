@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
 from pbisim import ModelBuilder
 from pbisim_app.sweep_helper import (
     get_sweep_parameters,
@@ -15,7 +16,7 @@ from pbisim_app.sweep_helper import (
     pad_vectors,
 )
 
-APP = "pbisim_app/app.py"
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 def test_parse_comma_separated_series():
     """Verify parsing handles spaces, scientific notation, and float values."""

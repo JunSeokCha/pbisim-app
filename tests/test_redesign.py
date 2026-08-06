@@ -7,12 +7,15 @@ outcome badge, metric tiles) renders without error — not pixels.
 from __future__ import annotations
 
 from streamlit.testing.v1 import AppTest
+from pathlib import Path as _Path
+
+APP = str(_Path(__file__).resolve().parents[1] / "pbisim_app" / "app.py")
 
 
 def test_results_header_and_peak_phage_tile():
     """After a run, the Interactive Simulator shows a results header with a
     solver/runtime meta line, an outcome badge, and a Peak Phage Titre tile."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
@@ -27,7 +30,7 @@ def test_results_header_and_peak_phage_tile():
 
 def test_run_button_is_primary():
     """The main Run action is a primary button (visual hierarchy)."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     runs = [b for b in at.button if "Run Simulation" in (b.label or "")]
     assert runs and runs[0].proto.type == "primary"
@@ -35,7 +38,7 @@ def test_run_button_is_primary():
 
 def test_plot_axis_controls_render_after_run():
     """The 'Plot options' axis-control toggle appears once results exist."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
@@ -88,7 +91,7 @@ def test_viz_helper_apply_functions():
 def test_entity_series_selector_renders():
     """After a run, the Bacterial tab offers per-compartment series checkboxes
     (registry-driven), with the defaults reproducing the previous view."""
-    at = AppTest.from_file("pbisim_app/app.py", default_timeout=180)
+    at = AppTest.from_file(APP, default_timeout=180)
     at.run()
     [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
     assert len(at.exception) == 0, at.exception
