@@ -131,3 +131,42 @@ def test_build_series_registry():
     assert _np.allclose(by_key["total_viable"].getter(r), r.sum_prefixes("B", "D", "I", "H"))
     for s in S:
         assert np.isfinite(np.asarray(s.getter(r), dtype=float)).all()
+
+
+def test_phage_pk_central_and_peripheral_series_and_helpers():
+    """With phage PK on, build_series exposes the CENTRAL (blood conc. = Pc/Vc, default on)
+    and — for a 2-compartment model (k12 > 0) — the PERIPHERAL (Pp amount) series; the
+    common helpers compute the central concentration and peripheral amount."""
+    import numpy as np
+    from pbisim import ModelBuilder, PBIModel, solve_ode, PhagePKConfig
+    from pbisim_app.viz_helper import build_series
+    from pbisim_app.common import (central_phage_total, peripheral_phage_total,
+                                    phage_uses_two_compartment, phage_pk_enabled)
+    pk = PhagePKConfig(n_phages=1, Vc=np.array([5000.0]), k_elim=np.array([0.2]),
+                       k_in=np.array([0.1]), k_out=np.array([0.05]),
+                       k12=np.array([0.3]), k21=np.array([0.15]))   # 2-compartment
+    cfg = (ModelBuilder(n_bacteria=1, n_phages=1).with_growth_rates([0.8])
+           .with_phage_params(burst_sizes=[[80]], latent_periods=[[0.5]],
+                              adsorption_rates=[[1e-8]]).with_phage_pk(pk)).build()
+    r = solve_ode(PBIModel(cfg, initial_B=np.array([1e7]), initial_P=np.array([0.0]),
+                           initial_Pc=np.array([1e9])), t_end=12, dt=0.5)
+    phages = [{"name": "P0", "pk_mode": "Effect Compartment", "Vc": 5000.0,
+               "k12": 0.3, "k21": 0.15}]
+    S = {s.key: s for s in build_series(r, config=cfg, strains=[{"name": "WT"}],
+                                        phages=phages, antibiotics=[],
+                                        builder_mode="Direct (ModelBuilder)")}
+    assert "P0" in S and "Pc0" in S and "Pp0" in S          # site + central + peripheral
+    assert S["P0"].default and S["Pc0"].default             # site + central on by default
+    assert not S["Pp0"].default                             # peripheral opt-in
+    assert np.allclose(S["Pc0"].getter(r), r.get("Pc0") / 5000.0)   # central = Pc/Vc
+    # common helpers
+    assert phage_pk_enabled(phages) and phage_uses_two_compartment(phages)
+    assert float(np.max(central_phage_total(r, phages))) > 0
+    assert float(np.max(peripheral_phage_total(r, phages))) > 0
+    # 1-compartment phage → no peripheral series / zero peripheral
+    phages1 = [{"name": "P0", "pk_mode": "Effect Compartment", "Vc": 5000.0}]
+    S1 = {s.key for s in build_series(r, config=cfg, strains=[{"name": "WT"}],
+                                      phages=phages1, antibiotics=[],
+                                      builder_mode="Direct (ModelBuilder)")}
+    assert "Pc0" in S1 and "Pp0" not in S1
+    assert not phage_uses_two_compartment(phages1)

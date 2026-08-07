@@ -290,6 +290,7 @@ def _render_body(theme_mode):
                 total_incl_trajectories = []  # (time, B+D+I+H, label)
                 active_trajectories = []    # (time, B, label)
                 phage_trajectories = []     # (time, total_free_phage, label)
+                central_phage_trajectories = []  # (time, central/blood conc. Σ Pc/Vc, label)
                 od_trajectories = []        # (time, od, label) — only if OD/debris enabled
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
                 _seen = []                  # (label, cfu) for coercion/duplicate flagging
@@ -332,6 +333,8 @@ def _render_body(theme_mode):
                         total_incl_trajectories.append((result.time, _total_incl, _lbl))
                         active_trajectories.append((result.time, _active, _lbl))
                         phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
+                        if phage_pk_enabled(phages_gui):
+                            central_phage_trajectories.append((result.time, central_phage_total(result, phages_gui), _lbl))
                         if _od_enabled:
                             od_trajectories.append((result.time, _safe_od(result, _cfu), _lbl))
                         progress_bar.progress((idx + 1) / len(chosen_opts))
@@ -351,6 +354,7 @@ def _render_body(theme_mode):
                     "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
                     "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
+                    "central_phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in central_phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
@@ -375,6 +379,7 @@ def _render_body(theme_mode):
                 total_incl_trajectories = [] # (time, B+D+I+H, label)
                 active_trajectories = [] # (time, B, label)
                 phage_trajectories = []  # (time, total_free_phage, label)
+                central_phage_trajectories = []  # (time, central/blood conc. Σ Pc/Vc, label)
                 od_trajectories = [] # (time, od, label) — only if OD/debris enabled
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
 
@@ -432,6 +437,8 @@ def _render_body(theme_mode):
                     total_incl_trajectories.append((result.time, _total_incl, _lbl))
                     active_trajectories.append((result.time, _active, _lbl))
                     phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
+                    if phage_pk_enabled(phages_gui):
+                        central_phage_trajectories.append((result.time, central_phage_total(result, phages_gui), _lbl))
                     if _od_enabled:
                         _od = (_safe_od(result, total_bacteria))
                         od_trajectories.append((result.time, _od, _lbl))
@@ -447,6 +454,7 @@ def _render_body(theme_mode):
                     "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
                     "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
+                    "central_phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in central_phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
@@ -496,6 +504,7 @@ def _render_body(theme_mode):
                 total_incl_trajectories = []    # B+D+I+H
                 active_trajectories = []        # B
                 phage_trajectories = []  # (time, total_free_phage, label)
+                central_phage_trajectories = []  # (time, central/blood conc. Σ Pc/Vc, label)
                 od_trajectories = []
                 _od_enabled = st.session_state.get("int_debris_enabled", False)
                 try:
@@ -548,6 +557,8 @@ def _render_body(theme_mode):
                         total_incl_trajectories.append((result.time, _total_incl, _lbl))
                         active_trajectories.append((result.time, _active, _lbl))
                         phage_trajectories.append((result.time, result.sum_prefixes("P"), _lbl))
+                        if phage_pk_enabled(phages_gui):
+                            central_phage_trajectories.append((result.time, central_phage_total(result, phages_gui), _lbl))
                         if _od_enabled:
                             _od = (_safe_od(result, total_bacteria))
                             od_trajectories.append((result.time, _od, _lbl))
@@ -569,6 +580,7 @@ def _render_body(theme_mode):
                     "total_incl_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in total_incl_trajectories],
                     "active_trajectories": [(np.asarray(t), np.asarray(b), lbl) for t, b, lbl in active_trajectories],
                     "phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in phage_trajectories],
+                    "central_phage_trajectories": [(np.asarray(t), np.asarray(p), lbl) for t, p, lbl in central_phage_trajectories],
                     "od_trajectories": [(np.asarray(t), np.asarray(o), lbl) for t, o, lbl in od_trajectories],
                 }
 
@@ -675,7 +687,9 @@ def _render_body(theme_mode):
                 if _ps.get("active_trajectories"):
                     _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
                 if _ps.get("phage_trajectories"):
-                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                    _traces["Free phage — infection site (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                if _ps.get("central_phage_trajectories"):
+                    _traces["Central phage — blood (PFU/mL)"] = ("log", _ps["central_phage_trajectories"])
                 if _ps.get("od_trajectories"):
                     _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
                 plot_sweep_traces(_traces, "ps1d_traj", title_suffix="across runs")
@@ -706,7 +720,9 @@ def _render_body(theme_mode):
                 if _ps.get("active_trajectories"):
                     _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
                 if _ps.get("phage_trajectories"):
-                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                    _traces["Free phage — infection site (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                if _ps.get("central_phage_trajectories"):
+                    _traces["Central phage — blood (PFU/mL)"] = ("log", _ps["central_phage_trajectories"])
                 if _ps.get("od_trajectories"):
                     _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
                 plot_sweep_traces(_traces, "pscoupled_traj", title_suffix="across runs")
@@ -737,7 +753,9 @@ def _render_body(theme_mode):
                 if _ps.get("active_trajectories"):
                     _traces["Active only (B)"] = ("log", _ps["active_trajectories"])
                 if _ps.get("phage_trajectories"):
-                    _traces["Total free phage (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                    _traces["Free phage — infection site (PFU/mL)"] = ("log", _ps["phage_trajectories"])
+                if _ps.get("central_phage_trajectories"):
+                    _traces["Central phage — blood (PFU/mL)"] = ("log", _ps["central_phage_trajectories"])
                 if _ps.get("od_trajectories"):
                     _traces["Optical density (AU)"] = ("linear", _ps["od_trajectories"])
                 plot_sweep_traces(_traces, "pscat_traj", title_suffix="across options")

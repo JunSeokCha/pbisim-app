@@ -500,6 +500,29 @@ def test_dormancy_signal_config_in_brg_and_strainset():
     assert len(a.error) == 0
 
 
+def test_phage_two_compartment_pk_wired_into_config():
+    """A phage with PK enabled and k12 > 0 builds a 2-compartment PhagePKConfig (peripheral
+    tissue): the app's build sets k12/k21 on phage_pk_config and the solved result carries
+    both the central (Pc) and peripheral (Pp) compartment states."""
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()  # Direct mode by default
+    # enable phage PK on phage 0, then set the peripheral-compartment rates via their widgets
+    at.session_state["phg_pk_0"] = "Effect Compartment"
+    at.run()
+    at.session_state["phg_k12_0"] = 0.3
+    at.session_state["phg_k21_0"] = 0.15
+    at.run()
+    [b for b in at.button if "Run Simulation" in (b.label or "")][0].click().run()
+    assert len(at.error) == 0, at.error
+    pk = at.session_state["simulation_config"].phage_pk_config
+    assert pk is not None
+    assert pk.k12 is not None and float(pk.k12[0]) == 0.3
+    assert pk.k21 is not None and float(pk.k21[0]) == 0.15
+    r = at.session_state["simulation_result"]
+    assert r.get("Pc0") is not None and r.get("Pp0") is not None   # both compartments present
+
+
 def test_reset_environment_clears_brg_and_strainset():
     """Reset Environment must clear BRG / StrainSet config, not just the Direct
     builder — the mode returns to Direct and the mode-specific keys are gone."""

@@ -382,6 +382,65 @@ def _safe_od(result, total_bacteria):
         return np.asarray(total_bacteria, dtype=float) / factor
 
 
+def phage_pk_enabled(phages):
+    """True when any configured phage has PK enabled (pk_mode ≠ 'None'), i.e. the result
+    carries central-compartment ``Pc{j}`` (and, with 2-compartment, ``Pp{j}``) states."""
+    return any((p or {}).get("pk_mode", "None") != "None" for p in (phages or []))
+
+
+def central_phage_total(result, phages):
+    """Total CENTRAL-compartment (blood) phage **concentration** = Σⱼ Pc{j}/Vc{j}
+    (phages/mL), over phages with PK enabled — directly comparable to the infection-site
+    titre ``sum_prefixes('P')``. Zeros if no phage PK / no Pc state in the result."""
+    tot = None
+    for j, p in enumerate(phages or []):
+        if (p or {}).get("pk_mode", "None") == "None":
+            continue
+        try:
+            pc = np.asarray(result.get(f"Pc{j}"), dtype=float)
+        except Exception:
+            continue
+        vc = float(p.get("Vc", 5000.0)) or 1.0
+        tot = pc / vc if tot is None else tot + pc / vc
+    return tot if tot is not None else np.zeros_like(result.time, dtype=float)
+
+
+def peripheral_phage_total(result, phages):
+    """Total PERIPHERAL-tissue phage **amount** = Σⱼ Pp{j}, over phages using the
+    2-compartment model (k12 > 0). The peripheral compartment has no volume in the engine,
+    so this is an amount (not a concentration). Zeros if no 2-compartment phage / no Pp."""
+    tot = None
+    for j, p in enumerate(phages or []):
+        if (p or {}).get("pk_mode", "None") == "None" or float((p or {}).get("k12", 0.0)) <= 0:
+            continue
+        try:
+            pp = np.asarray(result.get(f"Pp{j}"), dtype=float)
+        except Exception:
+            continue
+        tot = pp if tot is None else tot + pp
+    return tot if tot is not None else np.zeros_like(result.time, dtype=float)
+
+
+def phage_uses_two_compartment(phages):
+    """True when any PK-enabled phage has a peripheral compartment (k12 > 0)."""
+    return any((p or {}).get("pk_mode", "None") != "None" and float((p or {}).get("k12", 0.0)) > 0
+               for p in (phages or []))
+
+
+def _phage_pk_k12_k21(phages):
+    """(k12, k21) arrays for ``PhagePKConfig`` when any PK-enabled phage has a peripheral
+    compartment (k12 > 0), else ``(None, None)`` for a 1-compartment central model.
+    ``PhagePKConfig`` requires k12 and k21 both set or both None; a PK-enabled phage that
+    leaves k12=0 just stays 1-compartment (k12=k21=0)."""
+    if not phage_uses_two_compartment(phages):
+        return None, None
+    k12 = np.array([float(p.get("k12", 0.0)) if p.get("pk_mode", "None") != "None" else 0.0
+                    for p in phages])
+    k21 = np.array([float(p.get("k21", 0.0)) if p.get("pk_mode", "None") != "None" else 0.0
+                    for p in phages])
+    return k12, k21
+
+
 def _sweep_summary_tiles(df_summary):
     """Render a compact metric-tile row summarising a sweep's runs. Robust to
     missing/non-numeric columns (used by the Dose-Response and Parameter sweeps)."""
@@ -2091,10 +2150,12 @@ def build_nominal_config_from_gui():
                 
                 has_mc = any(p["pk_mode"] == "Mass-Conserving" for p in phages)
                 vis = np.array([p.get("Vi", 10.0) if p["pk_mode"] == "Mass-Conserving" else 0.0 for p in phages]) if has_mc else None
+                _phage_k12, _phage_k21 = _phage_pk_k12_k21(phages)
                 
                 pk_config = rec.new(
                     PhagePKConfig,
-                    n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms
+                    n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms,
+                    k12=_phage_k12, k21=_phage_k21,
                 )
                 builder = rec.call("builder", builder, "with_phage_pk", pk_config)
                 
@@ -2340,10 +2401,12 @@ def build_nominal_config_from_gui():
             kms = np.array([p.get("Km_elim", 0.0) if p.get("Km_elim", 0.0) > 0 else np.inf for p in phages])
             has_mc = any(p["pk_mode"] == "Mass-Conserving" for p in phages)
             vis = np.array([p.get("Vi", 10.0) if p["pk_mode"] == "Mass-Conserving" else 0.0 for p in phages]) if has_mc else None
+            _phage_k12, _phage_k21 = _phage_pk_k12_k21(phages)
             
             phage_pk_config = rec.new(
                 PhagePKConfig,
-                n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms
+                n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms,
+                k12=_phage_k12, k21=_phage_k21,
             )
 
         # Expose nonlinear clearances
@@ -2533,10 +2596,12 @@ def build_nominal_config_from_gui():
             kms = np.array([p.get("Km_elim", 0.0) if p.get("Km_elim", 0.0) > 0 else np.inf for p in phages])
             has_mc = any(p["pk_mode"] == "Mass-Conserving" for p in phages)
             vis = np.array([p.get("Vi", 10.0) if p["pk_mode"] == "Mass-Conserving" else 0.0 for p in phages]) if has_mc else None
+            _phage_k12, _phage_k21 = _phage_pk_k12_k21(phages)
             
             phage_pk_config = rec.new(
                 PhagePKConfig,
-                n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms
+                n_phages=n_phages, Vc=vcs, k_elim=k_elims, k_in=k_ins, k_out=k_outs, Vi=vis, Km_elim=kms,
+                k12=_phage_k12, k21=_phage_k21,
             )
 
         decay_rates = np.array([p["phage_decay_rates"] for p in phages])
@@ -3130,6 +3195,10 @@ __all__ = [
     '_next_uid',
     '_carry_prerun_debris',
     '_safe_od',
+    'phage_pk_enabled',
+    'central_phage_total',
+    'peripheral_phage_total',
+    'phage_uses_two_compartment',
     '_sweep_summary_tiles',
     'counted_number_input',
     'load_preset_to_state',

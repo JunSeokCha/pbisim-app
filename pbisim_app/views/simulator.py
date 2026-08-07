@@ -552,6 +552,18 @@ def render_model_builder(inoculum_mode="magnitude"):
                             key=f"phg_km_elim_{i}",
                             help="Central elimination saturation. Set to 0 to disable."
                         )
+                        pc1, pc2 = st.columns(2)
+                        with pc1:
+                            phages[i]["k12"] = st.number_input(
+                                "Central→peripheral k12 (h⁻¹)", value=float(phages[i].get("k12", 0.0)),
+                                min_value=0.0, step=0.05, key=f"phg_k12_{i}",
+                                help="Set > 0 to add a 2-compartment peripheral tissue compartment "
+                                     "(Pp). 0 = one-compartment central model.")
+                        with pc2:
+                            phages[i]["k21"] = st.number_input(
+                                "Peripheral→central k21 (h⁻¹)", value=float(phages[i].get("k21", 0.0)),
+                                min_value=0.0, step=0.05, key=f"phg_k21_{i}",
+                                help="Return transfer from the peripheral compartment. Used only when k12 > 0.")
                         if phages[i]["pk_mode"] == "Mass-Conserving":
                             phages[i]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[i].get("Vi", 10.0)), key=f"phg_vi_{i}")
 
@@ -729,6 +741,18 @@ def render_model_builder(inoculum_mode="magnitude"):
                             key=f"brg_phg_km_elim_{idx}",
                             help="Central elimination saturation. Set to 0 to disable.",
                         )
+                        bpc1, bpc2 = st.columns(2)
+                        with bpc1:
+                            phages[idx]["k12"] = st.number_input(
+                                "Central→peripheral k12 (h⁻¹)", value=float(phages[idx].get("k12", 0.0)),
+                                min_value=0.0, step=0.05, key=f"brg_phg_k12_{idx}",
+                                help="Set > 0 to add a 2-compartment peripheral tissue compartment "
+                                     "(Pp). 0 = one-compartment central model.")
+                        with bpc2:
+                            phages[idx]["k21"] = st.number_input(
+                                "Peripheral→central k21 (h⁻¹)", value=float(phages[idx].get("k21", 0.0)),
+                                min_value=0.0, step=0.05, key=f"brg_phg_k21_{idx}",
+                                help="Return transfer from the peripheral compartment. Used only when k12 > 0.")
                         if phages[idx]["pk_mode"] == "Mass-Conserving":
                             phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"brg_phg_vi_{idx}")
 
@@ -950,6 +974,18 @@ def render_model_builder(inoculum_mode="magnitude"):
                             key=f"ss_phg_km_elim_{idx}",
                             help="Central elimination saturation. Set to 0 to disable.",
                         )
+                        spc1, spc2 = st.columns(2)
+                        with spc1:
+                            phages[idx]["k12"] = st.number_input(
+                                "Central→peripheral k12 (h⁻¹)", value=float(phages[idx].get("k12", 0.0)),
+                                min_value=0.0, step=0.05, key=f"ss_phg_k12_{idx}",
+                                help="Set > 0 to add a 2-compartment peripheral tissue compartment "
+                                     "(Pp). 0 = one-compartment central model.")
+                        with spc2:
+                            phages[idx]["k21"] = st.number_input(
+                                "Peripheral→central k21 (h⁻¹)", value=float(phages[idx].get("k21", 0.0)),
+                                min_value=0.0, step=0.05, key=f"ss_phg_k21_{idx}",
+                                help="Return transfer from the peripheral compartment. Used only when k12 > 0.")
                         if phages[idx]["pk_mode"] == "Mass-Conserving":
                             phages[idx]["Vi"] = st.number_input("Infection Site Volume (Vi mL)", value=float(phages[idx].get("Vi", 10.0)), key=f"ss_phg_vi_{idx}")
     return builder_mode

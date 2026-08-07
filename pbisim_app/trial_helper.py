@@ -304,15 +304,19 @@ def plot_pkpd_trajectories_plotly(
     y_label="log₁₀ CFU/mL",
     log10=True,
     floor=1.0,
+    divide_by=1.0,
 ):
     """Per-arm median trajectory (+ IQR band) for a set of state prefixes.
 
     Use ``prefixes=("B","D")`` for plating CFU (colony-forming: uninfected active +
     dormant; infected I/H lyse and don't colonize), ``prefixes=("B","D","I","H")`` for
-    total live load (in-vivo burden / qPCR), and ``prefixes=("P",)`` for free phage (PFU).
+    total live load (in-vivo burden / qPCR), ``prefixes=("P",)`` for free phage at the
+    infection site (PFU), and ``prefixes=("Pc",)`` with ``divide_by=Vc`` for the central
+    (blood) phage CONCENTRATION (Pc summed over phages, divided by the central volume).
     """
     fig = go.Figure()
     palette = px.colors.qualitative.Plotly
+    _scale = float(divide_by) or 1.0
 
     for i, arm_name in enumerate(result.arm_names):
         tr = result[arm_name]
@@ -320,6 +324,8 @@ def plot_pkpd_trajectories_plotly(
             time, traj = tr.get_trajectories(*prefixes)
         except (ValueError, KeyError):
             continue
+        if _scale != 1.0:
+            traj = np.asarray(traj, dtype=float) / _scale
         if log10:
             traj = np.log10(np.maximum(traj, float(floor)))
 

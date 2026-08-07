@@ -155,8 +155,32 @@ def test_dose_response_shows_od_trajectories_when_enabled():
     assert "CFU — culturable (B+D)" in opts
     assert "Total incl. infected (B+D+I+H)" in opts
     assert "Active only (B)" in opts
-    assert "Total free phage (PFU/mL)" in opts
+    assert "Free phage — infection site (PFU/mL)" in opts
     assert "Optical density (AU)" in opts
+
+
+def test_dose_response_shows_central_phage_when_pk_enabled():
+    """When phage PK is enabled, the dose-response sweep collects the central (blood) phage
+    concentration and offers it as a trace, alongside the infection-site titre."""
+    at = AppTest.from_file(APP, default_timeout=220)
+    at.run()
+    at.session_state["phg_pk_0"] = "Effect Compartment"   # enable phage PK on phage 0
+    at.run()
+    at.session_state["current_page_radio"] = "Dose-Response Sweeps"
+    at.run()
+    at.session_state["dr_sweep_phg_en_0"] = True
+    at.run()
+    at.session_state["dr_sweep_phg_series_0"] = "0, 1e8"
+    at.session_state["dr_sweep_phg_unit_0"] = "PFU (absolute)"
+    at.run()
+    [b for b in at.button if "Run Dose-Response" in (b.label or "")][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    assert at.session_state["dr_sweep_result"].get("central_phage_trajectories")  # collected
+    trace = [s for s in at.selectbox if s.label == "Trace"]
+    assert trace, "Trace selectbox missing"
+    opts = list(trace[0].options)
+    assert "Free phage — infection site (PFU/mL)" in opts
+    assert "Central phage — blood (PFU/mL)" in opts
 
 
 def test_sweep_results_survive_navigation():

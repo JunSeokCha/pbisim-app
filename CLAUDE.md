@@ -245,6 +245,35 @@ restore, invalid-cookie, sign-out suppression).
 - Preset `script_code` strings for type="single" presets (01–10, 13) are reference
   only — they are not executed. Any API mismatch there is cosmetic but should be fixed.
 
+## Done this session (2026-08-07) — phage 2-compartment PK + central-compartment display
+
+Owner: (1) show central-compartment phage concentration wherever phage is plotted, (2) wire
+pbisim's 2-compartment phage PK (peripheral tissue) which the app lacked (antibiotic PK already
+had k12/k21). Engine recap: phage PK states are `P` (infection site, plotted), `Pc` (central/
+blood, amount → conc = Pc/Vc), `Pp` (peripheral tissue amount, no volume in engine); 2-comp is
+`PhagePKConfig(k12=, k21=)`.
+
+- **2-compartment (A):** added **k12** (central→peripheral) + **k21** (peripheral→central) inputs
+  to the phage-PK section in all 3 builder modes (Direct/BRG/StrainSet; shown when PK mode ≠ None,
+  default 0 = 1-compartment). Build wires them via new `_phage_pk_k12_k21(phages)` → all three
+  `PhagePKConfig(...)` calls in common.py (arrays when any PK phage has k12>0, else None; engine
+  requires both-or-neither). `build_series` adds a **`Pp{j}`** peripheral series (opt-in) when k12>0,
+  and relabelled the central series "(blood)" → "(central/blood conc.)".
+- **Central display throughout (B):** the Simulator already showed `Pc{j}` (central conc.). Added it
+  to the other surfaces: **Dose-Response** + **Parameter Sweeps** (all 3 loops) collect a
+  `central_phage_trajectories` (Σ Pc/Vc) and offer a **"Central phage — blood (PFU/mL)"** trace
+  (infection-site relabelled "Free phage — infection site"); **Clinical Trials** PK/PD outputs gained
+  a central option (`prefixes=("Pc",)` with new `divide_by=Vc` on `plot_pkpd_trajectories_plotly`;
+  uses the first PK phage's Vc, caption if phages' Vc differ).
+- Helpers (common.py, exported): `phage_pk_enabled`, `central_phage_total` (Σ Pc/Vc conc.),
+  `peripheral_phage_total` (Σ Pp amount), `phage_uses_two_compartment`, `_phage_pk_k12_k21`.
+- k12/k21 default via `.get(...,0.0)` (no default-dict churn; captured in scenarios once the PK
+  section renders). Tests: `test_redesign::test_phage_pk_central_and_peripheral_series_and_helpers`
+  (series+helpers), `test_builder_modes::test_phage_two_compartment_pk_wired_into_config` (app build
+  → config.phage_pk_config.k12/k21 + Pc/Pp states), `test_sweeps::
+  test_dose_response_shows_central_phage_when_pk_enabled`. Suite **270 green**. AI system_prompt has
+  no phage-PK section at all (pre-existing) — left out of scope. **NOT committed** (UI change).
+
 ## Done this session (2026-08-06) — model-aware fit-parameter table (one knob per quantity)
 
 Owner flagged real internal inconsistencies in the Calibration fit table: it exposed BOTH

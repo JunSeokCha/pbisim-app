@@ -261,18 +261,32 @@ def _render_body(theme_mode):
                 "CFU — culturable (B+D)": (("B", "D"), "log₁₀ CFU/mL"),
                 "Total incl. infected (B+D+I+H)": (("B", "D", "I", "H"), "log₁₀ cells/mL"),
                 "Active only (B)": (("B",), "log₁₀ cells/mL"),
-                "Free phage (PFU/mL)": (("P",), "log₁₀ PFU/mL"),
+                "Free phage — infection site (PFU/mL)": (("P",), "log₁₀ PFU/mL"),
                 "Immune effector": (("Imm",), "log₁₀ Imm"),
             }
+            # Central-compartment (blood) phage is only present when phage PK is enabled.
+            # Show it as a CONCENTRATION = Σ Pc / Vc (divide the summed central amount by
+            # the central volume; uses the first PK phage's Vc — see caption if they differ).
+            _pk_on = phage_pk_enabled(_tphages)
+            _pk_vcs = [float(p.get("Vc", 5000.0)) for p in _tphages if p.get("pk_mode", "None") != "None"]
+            _central_vc = _pk_vcs[0] if _pk_vcs else 1.0
+            _central_name = "Central phage — blood (PFU/mL)"
+            if _pk_on:
+                _TRIAL_OUTPUTS[_central_name] = (("Pc",), "log₁₀ PFU/mL")
             _outputs = st.multiselect(
                 "Outputs", list(_TRIAL_OUTPUTS),
-                default=["CFU — culturable (B+D)", "Free phage (PFU/mL)"],
+                default=["CFU — culturable (B+D)", "Free phage — infection site (PFU/mL)"],
                 key="trial_pkpd_outputs",
             )
+            if _pk_on and _central_name in _outputs and len(set(_pk_vcs)) > 1:
+                st.caption("Central phage uses the first PK phage's Vc for the Σ Pc → concentration; "
+                           "phages have differing Vc, so it's approximate for multi-phage cocktails.")
             for _name in _outputs:
                 _prefixes, _ylab = _TRIAL_OUTPUTS[_name]
+                _div = _central_vc if _prefixes == ("Pc",) else 1.0
                 st.plotly_chart(
-                    plot_pkpd_trajectories_plotly(result, prefixes=_prefixes, title=_name, y_label=_ylab),
+                    plot_pkpd_trajectories_plotly(result, prefixes=_prefixes, title=_name,
+                                                  y_label=_ylab, divide_by=_div),
                     width="stretch",
                 )
 

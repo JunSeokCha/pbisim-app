@@ -305,9 +305,14 @@ def build_series(result, *, config, strains, phages, antibiotics, builder_mode):
                               (lambda r, j=j: r.get(f"P{j}")), default=True, log=True))
             if phages[j].get("pk_mode", "None") != "None":
                 Vc = phages[j].get("Vc", 5000.0)
-                out.append(Series(f"Pc{j}", f"{name} (blood)", "Phage",
+                out.append(Series(f"Pc{j}", f"{name} (central/blood conc.)", "Phage",
                                   (lambda r, j=j, Vc=Vc: r.get(f"Pc{j}") / Vc),
                                   default=True, log=True, dash="dash"))
+                # 2-compartment: peripheral tissue amount (no volume in the engine).
+                if float(phages[j].get("k12", 0.0)) > 0:
+                    out.append(Series(f"Pp{j}", f"{name} (peripheral tissue, amount)", "Phage",
+                                      (lambda r, j=j: r.get(f"Pp{j}")),
+                                      default=False, log=True, dash="dot"))
     return out
 
 
