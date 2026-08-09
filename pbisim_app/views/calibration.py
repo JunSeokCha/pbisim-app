@@ -1252,21 +1252,36 @@ def render():
                                 "v": float(_model_val("int_debris_v", 0.2) or 0.2),
                                 "kdis": float(_model_val("int_debris_kdis", 0.01) or 0.01),
                                 "u": float(_model_val("int_debris_u", 0.4) or 0.4)}
-                        # Latent period for the f\u2080 forward model \u2014 from the chosen model (not
-                        # refine_f0's 0.5 default). Burst = the fixed-burst input above.
+                        # f₀-refine forward-model nuisances — editable inputs, defaulting to
+                        # the chosen model's values (burst = the Fixed-burst input above). Shown
+                        # only when Refine f₀ is on (they affect ONLY the f₀ refine).
                         try:
-                            _lat = float(np.asarray(getattr(_fit_cfg, "latent_periods", [[0.5]]))[0, 0])
+                            _lat_def = float(np.asarray(getattr(_fit_cfg, "latent_periods", [[0.5]]))[0, 0])
                         except Exception:
-                            _lat = 0.5
-                        _f0_note = ""
+                            _lat_def = 0.5
+                        _dbg_def = _strip_debris or {"v": 0.3, "kdis": 0.1, "u": 0.0}
                         if _fit_f0:
-                            _dbg = (f"debris v={_strip_debris['v']:.3g}, kdis={_strip_debris['kdis']:.3g}"
-                                    if _strip_debris is not None else "default debris (OD/debris off)")
-                            _f0_note = (f" \u00b7 f\u2080 refine nuisances: burst={_b_fixed:g}, "
-                                        f"latent={_lat:g}, {_dbg}")
-                        st.caption(f"Using od_to_cfu = {_od2cfu:.3e} (\u00a74) \u00b7 monod_constant = {_mk:g} \u00b7 "
-                                   f"growth model = {_strip_gs}{_f0_note}. B\u2080 defaults to the "
-                                   "control's first OD.")
+                            st.caption("f₀-refine forward-model nuisances (default to the chosen "
+                                       "model; burst = the fixed-burst input above):")
+                            _lat = st.number_input(
+                                "f₀ · latent period (h)", min_value=0.0, value=float(_lat_def),
+                                key="strip_f0_latent")
+                            _dcols = st.columns(3)
+                            _strip_debris = {
+                                "v": _dcols[0].number_input(
+                                    "f₀ · debris v", min_value=0.0,
+                                    value=float(_dbg_def["v"]), key="strip_f0_dv"),
+                                "kdis": _dcols[1].number_input(
+                                    "f₀ · debris k_dis", min_value=0.0,
+                                    value=float(_dbg_def["kdis"]), key="strip_f0_kdis"),
+                                "u": _dcols[2].number_input(
+                                    "f₀ · debris u", min_value=0.0,
+                                    value=float(_dbg_def["u"]), key="strip_f0_u"),
+                            }
+                        else:
+                            _lat = _lat_def
+                        st.caption(f"Using od_to_cfu = {_od2cfu:.3e} (§4) · monod_constant = {_mk:g} · "
+                                   f"growth model = {_strip_gs}. B₀ defaults to the control's first OD.")
                         if _fit_f0 and _gs_fn not in ("monod_growth", "logistic_growth",
                                                       "constant_growth"):
                             st.caption(f"Note: '{_gs_fn}' has no dedicated stripping forward model \u2014 "

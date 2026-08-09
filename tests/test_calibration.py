@@ -604,3 +604,28 @@ def test_curve_stripping_applies_to_builder_and_overlay():
         assert _tot > 0 and abs(_bs[1] / _tot - _f0) < 1e-6
     # the overlay was recomputed (key present; a dict on success, None on a sim failure)
     assert "calib_overlay_result" in at.session_state
+
+
+def test_curve_stripping_f0_nuisance_widgets():
+    """Refine f₀ exposes editable latent-period + debris (v/k_dis/u) input widgets,
+    defaulting to the model, and a fit runs through them without error."""
+    at = AppTest.from_file(APP, default_timeout=260)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    # hidden until Refine f₀ is on
+    assert not any("debris" in (n.label or "") for n in at.number_input)
+    at.session_state["strip_fitf0"] = True
+    at.run()
+    _keys = {n.key for n in at.number_input if n.key}
+    assert {"strip_f0_latent", "strip_f0_dv", "strip_f0_kdis", "strip_f0_u"} <= _keys
+    assert len(at.exception) == 0
+    # a fit through the widgets produces an f0 tagged 'fit'
+    [b for b in at.button if b.key == "strip_compute"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    _R = at.session_state["calib_strip_result"]
+    assert _R.estimates["f0"][1] == "fit"
