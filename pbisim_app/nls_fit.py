@@ -95,6 +95,47 @@ def _get_path(config, path):
     return float(arr[int(i)] if j is None else arr[int(i), int(j)])
 
 
+def set_config_path(config, path, value):
+    """Set a parameter on a config by the same grammar as ``_get_path`` (``growth_rates[0]``,
+    ``adsorption_rates[0,0]``, ``monod_constant``). Mutates arrays in place; ``setattr`` for
+    scalars. Returns ``True`` if applied, ``False`` if the attribute/index doesn't exist on
+    this config (so unsettable paths — e.g. ``init_resistant_fraction``, which is a BRG builder
+    concept with no ModelConfig field — are skipped, not errors)."""
+    m = _re.match(r"([\w.]+)(?:\[(\d+)(?:,(\d+))?\])?$", path)
+    if not m:
+        return False
+    attr, i, j = m.group(1), m.group(2), m.group(3)
+    parts = attr.split(".")
+    try:
+        obj = config
+        for part in parts[:-1]:
+            obj = getattr(obj, part)
+        leaf = parts[-1]
+        if i is None:
+            if not hasattr(obj, leaf):
+                return False
+            setattr(obj, leaf, float(value))
+            return True
+        arr = getattr(obj, leaf, None)
+        if arr is None:
+            return False
+        a = np.asarray(arr, dtype=float)
+        ii = int(i)
+        if j is None:
+            if ii >= a.shape[0]:
+                return False
+            a[ii] = float(value)
+        else:
+            jj = int(j)
+            if a.ndim < 2 or ii >= a.shape[0] or jj >= a.shape[1]:
+                return False
+            a[ii, jj] = float(value)
+        setattr(obj, leaf, a)
+        return True
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return False
+
+
 def available_targets(config, initial_cfu=None, initial_pfu=None, builder_mode=None):
     """Comprehensive list of estimable model parameters for this config:
     [(label, path, current_value, lo, hi, log)]. Only families present in the config
@@ -478,6 +519,106 @@ def estimate_od_to_cfu(agg, sel_arms):
             if np.isfinite(c) and np.isfinite(o) and c > 0 and o > 0:
                 ratios.append(c / o)
     return float(np.median(ratios)) if ratios else None
+
+
+_STRIP_GROWTH_SIGNAL = {"logistic_growth": "logistic", "constant_growth": "constant"}
+
+
+def strip_growth_signal(growth_fn):
+    """Map an app growth-function name (``int_growth_function``) to the ``growth_signal`` that
+    curve stripping understands: ``'monod' | 'logistic' | 'constant'`` — the only three forward
+    models ``propose_initials`` / ``refine_f0`` build. Pure logistic and constant map to
+    themselves; every nutrient-throttled variant (monod, monod+logistic, gompertz, density-
+    throttled, sequential, smooth-efficiency) shares the Monod early-rate correction, so it maps
+    to ``'monod'`` (an approximation for the non-Monod nutrient models — captioned in the UI)."""
+    return _STRIP_GROWTH_SIGNAL.get(str(growth_fn), "monod")
+
+
+def strip_curves(agg, conds, *, obs_key="od", b_fixed, od_to_cfu, monod_constant, B0=None,
+                 control_arm=None, fit_f0=False, growth_signal="monod", debris=None,
+                 f0_latent=0.5):
+    """Analytic curve-stripping initial estimates from the aggregated OD assay data.
+
+    Wraps pbisim-fit's ``propose_initials`` — it reads growth rate, carrying capacity,
+    adsorption, resistant fraction, Monod constant, … straight off the geometric features
+    of the OD curves (no ODE fit, no iteration). The app's per-(arm, time) median trace is
+    passed as a 1-row ``(1, n_t)`` matrix per arm; ``propose_initials`` nan-medians wells
+    itself, so this is equivalent to feeding the raw replicate wells.
+
+    OD-only: needs a no-phage control and ≥1 phage arm (MOI > 0). ``conds`` is
+    ``{arm: {"moi": float}}``. The control arm is the one passed as ``control_arm``; when
+    that is ``None`` it is auto-detected as the first arm with MOI ≤ 0 (a blank/NaN MOI is
+    *not* auto-detected — pass ``control_arm`` for those datasets).
+
+    ``growth_signal`` (``'monod' | 'logistic' | 'constant'``) picks the forward model both the
+    g-correction and the f0 refine assume — pass the chosen model's signal (via
+    :func:`strip_growth_signal`) so a logistic/constant model isn't stripped under Monod.
+    ``fit_f0=True`` adds pbisim-fit's 1-D ``refine_f0`` Brent refinement of the (fragile)
+    resistant fraction. Its forward-sim nuisances all come from the chosen model: burst = the
+    stripping ``b_fixed`` (refine_f0's ``burst`` default), ``f0_latent`` = the model's latent
+    period, and ``debris`` — ``{"v", "kdis", "u"}`` from the OD/debris module — forwarded via
+    ``propose_initials``'s ``f0_debris_*`` (``debris=None``/``f0_latent`` unset → the log-phase
+    defaults). Returns a ``CurveStripResult`` (``.value(name)``, ``.initials`` config-path→value,
+    ``.report()``). Raises ``ValueError`` when the data can't support stripping."""
+    from pbisim_fit.refinement.curve_strip import propose_initials
+
+    m = agg[agg["observable"] == obs_key]
+    if m.empty:
+        raise ValueError(
+            f"Curve stripping needs an '{obs_key}' (optical-density) observable — "
+            "none is present in the selected data.")
+    times = np.array(sorted(float(t) for t in m["time"].unique()), dtype=float)
+    tidx = {t: i for i, t in enumerate(times)}
+
+    def _row(arm):
+        row = np.full(len(times), np.nan, dtype=float)
+        for _, r in m[m["arm"] == arm].iterrows():
+            row[tidx[float(r["time"])]] = float(r["value"])
+        return row.reshape(1, -1)
+
+    def _moi(arm):
+        v = (conds.get(arm) or {}).get("moi", None)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    od_arms = list(m["arm"].unique())
+    if control_arm is not None:
+        if control_arm not in od_arms:
+            raise ValueError(f"Control arm '{control_arm}' has no '{obs_key}' data.")
+        ctrl = control_arm
+    else:
+        ctrl = next((a for a in od_arms if _moi(a) <= 0.0), None)   # NaN ≤ 0 is False
+        if ctrl is None:
+            raise ValueError(
+                "No no-phage control auto-detected (the control's MOI may be blank/NaN). "
+                "Specify the control arm manually.")
+    treat = [(_moi(a), a) for a in od_arms
+             if a != ctrl and np.isfinite(_moi(a)) and _moi(a) > 0.0]
+    if not treat:
+        raise ValueError(
+            "Curve stripping needs at least one phage arm (MOI > 0) — none found.")
+
+    control_M = _row(ctrl)
+    arms = [{"moi": moi, "M": _row(arm)} for moi, arm in sorted(treat)]
+    _d = debris or {}
+    return propose_initials(
+        times, control_M, arms, b_fixed=float(b_fixed), od2cfu=float(od_to_cfu),
+        monod_constant=float(monod_constant), B0=(None if B0 is None else float(B0)),
+        growth_signal=str(growth_signal), fit_f0=bool(fit_f0), f0_latent=float(f0_latent),
+        f0_debris_v=float(_d.get("v", 0.3)), f0_debris_kdis=float(_d.get("kdis", 0.1)),
+        f0_debris_u=float(_d.get("u", 0.0)))
+
+
+def strip_sanity_check(strip_result, fitted_map):
+    """Compare a completed fit's MAP values to the curve-stripping estimates.
+
+    ``fitted_map`` is the fit's MAP dict (keyed by config path, e.g. ``growth_rates[0]``);
+    ``sanity_check`` also accepts estimate-name keys and ignores anything it can't match
+    (theta names). Returns an ``AgreementReport`` (``.rows``, ``.flagged``, ``.ok``)."""
+    from pbisim_fit.refinement.curve_strip import sanity_check
+    return sanity_check(strip_result, fitted_map)
 
 
 def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit="moi",

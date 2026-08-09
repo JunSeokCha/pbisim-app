@@ -513,3 +513,94 @@ def test_running_fit_does_not_freeze_page_or_navigation():
     assert at.session_state["current_page"] == "Calibration"
     assert len(at.exception) == 0, at.exception
     assert any("Fitting" in (i.value or "") for i in at.info)   # banner still there
+
+
+def _od_screen():
+    """OD screen with a no-phage control (MOI 0) + two phage arms (growth→lysis→regrowth)."""
+    t = np.arange(0, 25.0, 2.0)               # 13 points
+    ctrl = np.minimum(0.02 * np.exp(0.32 * t), 1.2)
+    up = np.minimum(0.02 * np.exp(0.32 * t[:5]), 1.2)
+    lysis = np.concatenate([up, np.geomspace(up[-1], 0.03, 5), np.geomspace(0.04, 0.6, 3)])
+    rows = []
+    for moi, y in ((0.0, ctrl), (0.1, lysis), (1.0, lysis)):
+        for ti, v in zip(t, y):
+            for rep in range(2):
+                rows.append({"MOI": moi, "TIME": float(ti),
+                             "DV": float(v) * (1.0 + 0.01 * rep)})
+    return pd.DataFrame(rows)
+
+
+def test_curve_stripping_seeds_fit_table():
+    """The §5c curve-stripping panel computes analytic estimates and seeds the fit table
+    (matching rows get a value + role=Free)."""
+    at = AppTest.from_file(APP, default_timeout=200)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+
+    # Compute analytic estimates
+    comp = [b for b in at.button if b.key == "strip_compute"]
+    assert comp, "curve-stripping Compute button not rendered"
+    comp[0].click().run()
+    assert len(at.exception) == 0, at.exception
+    assert "calib_strip_result" in at.session_state
+    R = at.session_state["calib_strip_result"]
+    assert "growth_rates[0]" in R.initials
+
+    # Seed the fit table
+    seed = [b for b in at.button if b.key == "strip_seed"]
+    assert seed, "Seed button not rendered after compute"
+    seed[0].click().run()
+    assert len(at.exception) == 0, at.exception
+
+    df = at.session_state["fit_targets_df"]
+    row = df[df["path"] == "growth_rates[0]"]
+    assert not row.empty and row.iloc[0]["role"] == "Free"
+    assert str(row.iloc[0]["value"]).strip() not in ("", "nan")
+
+
+def test_curve_stripping_applies_to_builder_and_overlay():
+    """The 'Apply estimates to model & refresh overlay' button writes the stripped growth rate
+    into the builder (manual-calibration value) for ALL bacterial species — not just strain 0 —
+    re-seeds the builder widgets, and recomputes the overlay."""
+    at = AppTest.from_file(APP, default_timeout=260)
+    at.run()
+    # a 2-strain model: g_max must map to BOTH strains (not just growth_rates[0])
+    _s0 = at.session_state["int_strains"][0]
+    at.session_state["int_strains"] = [dict(_s0), dict(_s0)]
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.session_state["fit_show_builder"] = True          # reveal the manual-calibration builder
+    at.run()
+
+    [b for b in at.button if b.key == "strip_compute"][0].click().run()
+    assert "calib_strip_result" in at.session_state
+    _inits = at.session_state["calib_strip_result"].initials
+    g_target = _inits.get("growth_rates[0]")
+    assert g_target is not None
+
+    [b for b in at.button if b.key == "strip_apply"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    # BOTH strains' growth moved to the stripped g_max (mapped to all species)
+    for _s in at.session_state["int_strains"]:
+        assert abs(float(_s["growth_rate"]) - float(g_target)) < 1e-6
+    # and the builder growth-rate WIDGETS re-seeded (str_growth_0/1), like NLS-apply does
+    for _k in ("str_growth_0", "str_growth_1"):
+        assert _k in at.session_state
+        assert abs(float(at.session_state[_k]) - float(g_target)) < 1e-6
+    # f0 propagates as the WT/resistant initial_B split (resistant = strain 1)
+    if "init_resistant_fraction" in _inits:
+        _f0 = float(_inits["init_resistant_fraction"])
+        _bs = [float(_s["initial_B"]) for _s in at.session_state["int_strains"]]
+        _tot = _bs[0] + _bs[1]
+        assert _tot > 0 and abs(_bs[1] / _tot - _f0) < 1e-6
+    # the overlay was recomputed (key present; a dict on success, None on a sim failure)
+    assert "calib_overlay_result" in at.session_state

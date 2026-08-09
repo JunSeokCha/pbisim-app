@@ -498,3 +498,148 @@ def test_nls_fit_recovers_growth_from_tutorial_csv():
     m = fp.map()
     assert 0.9 < m["growth_rates[0]"] < 1.5              # truth 1.2
     assert 5e7 < m["bacteria_to_resource_ratio[0]"] < 2e8   # truth 1e8
+
+
+# ── Curve stripping (analytic warm-start) ────────────────────────────────────
+
+def _od_strip_agg():
+    """An `_agg`-shaped OD dataset: a no-phage control (MOI 0, logistic growth) plus
+    two phage arms (growth → lysis dip → regrowth). od_to_cfu=1.0 in the test, so the
+    OD values are read directly as CFU."""
+    t = np.arange(0, 25.0)
+    ctrl = np.minimum(1e7 * np.exp(0.38 * t), 1e9)
+    up = np.minimum(1e7 * np.exp(0.38 * t[:8]), 1e9)
+    lysis = np.concatenate([up, np.geomspace(up[-1], 1e3, 9), np.geomspace(1.5e3, 5e6, 8)])
+    rows = []
+    for arm, y in (("ctrl", ctrl), ("moi_0p1", lysis), ("moi_1", lysis)):
+        for ti, v in zip(t, y):
+            rows.append({"arm": arm, "observable": "od", "time": float(ti),
+                         "value": float(v), "lo": float(v), "hi": float(v)})
+    conds = {"ctrl": {"moi": 0.0}, "moi_0p1": {"moi": 0.1}, "moi_1": {"moi": 1.0}}
+    return pd.DataFrame(rows), conds
+
+
+def test_curve_strip_and_sanity_check():
+    """strip_curves reads growth/capacity off the OD control and returns config-path
+    initials; strip_sanity_check flags fitted values against the analytic bands."""
+    agg, conds = _od_strip_agg()
+    R = nls.strip_curves(agg, conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3)
+
+    assert np.isfinite(R.value("g_max")) and R.value("g_max") > 0
+    assert np.isfinite(R.value("cap")) and R.value("cap") > 0
+    inits = R.initials
+    assert inits and "growth_rates[0]" in inits and "bacteria_to_resource_ratio[0]" in inits
+    assert isinstance(R.report(), str) and R.report()
+
+    # feed the stripped g_max back as the "fitted" value → ratio 1.0 → in band, ok
+    rep = nls.strip_sanity_check(R, {"growth_rates[0]": R.value("g_max")})
+    g_rows = [row for row in rep.rows if row[0] == "g_max"]
+    assert g_rows and g_rows[0][5] is True          # (name, stripped, fitted, ratio, band, ok)
+    assert rep.ok and not rep.flagged
+
+    # a wildly-off fitted value is flagged
+    rep2 = nls.strip_sanity_check(R, {"growth_rates[0]": R.value("g_max") * 100.0})
+    assert "g_max" in rep2.flagged and not rep2.ok
+
+
+def test_curve_strip_requires_od_control_and_moi_arm():
+    """Clear ValueErrors when the data can't support stripping."""
+    agg, conds = _od_strip_agg()
+    # no OD observable
+    with pytest.raises(ValueError):
+        nls.strip_curves(agg.assign(observable="cfu"), conds,
+                         b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3)
+    # no MOI-0 control
+    no_ctrl = {"ctrl": {"moi": 1.0}, "moi_0p1": {"moi": 0.1}, "moi_1": {"moi": 1.0}}
+    with pytest.raises(ValueError):
+        nls.strip_curves(agg, no_ctrl, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3)
+    # no phage arm
+    all_ctrl = {"ctrl": {"moi": 0.0}, "moi_0p1": {"moi": 0.0}, "moi_1": {"moi": 0.0}}
+    with pytest.raises(ValueError):
+        nls.strip_curves(agg, all_ctrl, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3)
+
+
+def test_curve_strip_manual_control_arm():
+    """A control with blank/NaN MOI isn't auto-detected, but an explicit control_arm works."""
+    agg, _ = _od_strip_agg()
+    nan_conds = {"ctrl": {"moi": float("nan")}, "moi_0p1": {"moi": 0.1}, "moi_1": {"moi": 1.0}}
+    with pytest.raises(ValueError):
+        nls.strip_curves(agg, nan_conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3)
+    R = nls.strip_curves(agg, nan_conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3,
+                         control_arm="ctrl")
+    assert np.isfinite(R.value("g_max")) and "growth_rates[0]" in R.initials
+    # a control_arm with no OD data is a clear error
+    with pytest.raises(ValueError):
+        nls.strip_curves(agg, nan_conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3,
+                         control_arm="nope")
+
+
+def test_curve_strip_fit_f0_refinement():
+    """fit_f0=True runs pbisim-fit's 1-D refine_f0 → the f0 estimate is tagged 'fit'."""
+    agg, conds = _od_strip_agg()
+    R = nls.strip_curves(agg, conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3, fit_f0=True)
+    assert R.estimates["f0"][1] == "fit"
+    assert np.isfinite(R.value("f0"))
+
+
+def test_set_config_path_and_skips_unknown():
+    """set_config_path writes by path grammar and returns False (skips) for paths with no field."""
+    cfg = (ModelBuilder(n_bacteria=2, n_phages=1).with_growth_rates([1.0, 0.9])
+           .with_phage_params(burst_sizes=[[50], [50]], latent_periods=[[0.5], [0.5]],
+                              adsorption_rates=[[1e-8], [1e-8]]).build())
+    assert nls.set_config_path(cfg, "growth_rates[0]", 1.7) and nls._get_path(cfg, "growth_rates[0]") == 1.7
+    assert nls.set_config_path(cfg, "adsorption_rates[1,0]", 2e-9)
+    assert nls._get_path(cfg, "adsorption_rates[1,0]") == 2e-9
+    assert nls.set_config_path(cfg, "monod_constant", 0.25) and nls._get_path(cfg, "monod_constant") == 0.25
+    # unsettable field / out-of-range index → False (safely skipped, not an error)
+    assert not nls.set_config_path(cfg, "init_resistant_fraction", 1e-3)
+    assert not nls.set_config_path(cfg, "growth_rates[9]", 1.0)
+    assert not nls.set_config_path(cfg, "adsorption_rates[0,9]", 1.0)
+
+
+def test_strip_growth_signal_mapping():
+    """App growth-function names map to the three signals curve stripping supports."""
+    assert nls.strip_growth_signal("monod_growth") == "monod"
+    assert nls.strip_growth_signal("logistic_growth") == "logistic"
+    assert nls.strip_growth_signal("constant_growth") == "constant"
+    for fn in ("gompertz_growth", "density_throttled_growth", "smooth_efficiency_monod",
+               "monod_logistic_growth", "sequential_monod", "something_new"):
+        assert nls.strip_growth_signal(fn) == "monod"
+
+
+def test_curve_strip_growth_signal_and_debris_passthrough():
+    """growth_signal picks the forward model; fit_f0 + a debris dict runs the direct refine_f0."""
+    agg, conds = _od_strip_agg()
+    R = nls.strip_curves(agg, conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3,
+                         growth_signal="logistic")
+    assert np.isfinite(R.value("g_max"))
+    R2 = nls.strip_curves(agg, conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3,
+                          fit_f0=True, debris={"v": 0.25, "kdis": 0.02, "u": 0.1}, f0_latent=0.8)
+    assert R2.estimates["f0"][1] == "fit" and np.isfinite(R2.value("f0"))
+
+
+def test_broadcast_growth_maps_g_to_all_species():
+    """_broadcast_growth spreads g_max to every strain's growth_rates[i]; other params untouched."""
+    from pbisim_app.views.calibration import _broadcast_growth
+    out = _broadcast_growth({"growth_rates[0]": 0.5, "bacteria_to_resource_ratio[1]": 3e8}, 3)
+    assert out["growth_rates[0]"] == out["growth_rates[1]"] == out["growth_rates[2]"] == 0.5
+    assert out["bacteria_to_resource_ratio[1]"] == 3e8
+    # no growth estimate → unchanged
+    assert _broadcast_growth({"adsorption_rates[0,0]": 1e-8}, 2) == {"adsorption_rates[0,0]": 1e-8}
+
+
+def test_split_initial_B_by_f0():
+    """f0 maps onto the WT/resistant initial_B split (strain 1 = resistant), total preserved."""
+    from pbisim_app.views.calibration import _split_initial_B_by_f0
+    strains = [{"initial_B": 6e6}, {"initial_B": 2e6}]        # total 8e6
+    assert _split_initial_B_by_f0(strains, 0.25)
+    assert abs(strains[0]["initial_B"] - 6e6) < 1e-3          # (1-0.25)*8e6
+    assert abs(strains[1]["initial_B"] - 2e6) < 1e-3          # 0.25*8e6
+    # guards: <2 strains, zero total, None
+    assert not _split_initial_B_by_f0([{"initial_B": 1e7}], 0.1)
+    assert not _split_initial_B_by_f0([{"initial_B": 0}, {"initial_B": 0}], 0.1)
+    assert not _split_initial_B_by_f0(strains, None)
+    # clamp to [0,1]
+    _s2 = [{"initial_B": 1e6}, {"initial_B": 1e6}]
+    assert _split_initial_B_by_f0(_s2, 1.5)
+    assert _s2[0]["initial_B"] == 0.0 and _s2[1]["initial_B"] == 2e6

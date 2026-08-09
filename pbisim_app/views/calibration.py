@@ -163,6 +163,35 @@ def _apply_config_to_state(cfg):
     st.session_state["int_phages"] = phages
 
 
+def _broadcast_growth(inits, n_bacteria):
+    """Curve stripping estimates ONE growth rate (g_max = the control's growth). Map it to ALL
+    bacterial species (growth_rates[i]), not only growth_rates[0], so every strain's growth is
+    set/seeded — the resistant genotype gets the same growth absent a per-strain estimate. Other
+    stripped params (cap, cap_r, adsorption, …) stay per-index."""
+    out = dict(inits)
+    g = out.get("growth_rates[0]")
+    if g is not None:
+        for i in range(int(n_bacteria)):
+            out[f"growth_rates[{i}]"] = float(g)
+    return out
+
+
+def _split_initial_B_by_f0(strains, f0):
+    """Map a resistant fraction f0 onto the first two strains' ``initial_B`` (strain 0 = WT /
+    sensitive, strain 1 = resistant — the 2-genotype stripping convention), preserving their
+    combined total. In Direct/StrainSet the resistant fraction IS this split (there's no
+    ``init_resistant_fraction`` ModelConfig field). Returns True if applied."""
+    if f0 is None or len(strains) < 2:
+        return False
+    f0 = float(min(max(float(f0), 0.0), 1.0))
+    tot = float(strains[0].get("initial_B", 0.0)) + float(strains[1].get("initial_B", 0.0))
+    if tot <= 0:
+        return False
+    strains[0]["initial_B"] = (1.0 - f0) * tot
+    strains[1]["initial_B"] = f0 * tot
+    return True
+
+
 def _compute_overlay(config, iB, iP, iS, mk, ctx):
     """Simulate `config` once per arm and project every selected observable into a
     small-multiples overlay-vs-data result dict (also computes per-obs RMSE/R² and the
@@ -423,7 +452,8 @@ def render():
                       "fit_load", "fit_save_scenario", "fit_run_nls", "fit_apply_map",
                       "fit_model_sel", "fit_job", "fit_stop", "fit_refresh", "fit_tbl_reset",
                       "fit_spec_from_tables", "fit_spec_to_tables", "fit_spec_rev",
-                      "fit_share_go", "fit_cmp_add", "fit_cmp_clear"}
+                      "fit_share_go", "fit_cmp_add", "fit_cmp_clear",
+                      "strip_compute", "strip_seed", "strip_apply"}
     _fcfg = st.session_state.setdefault("fit_config", {})
     for _wk, _wv in list(_fcfg.items()):
         if _wk in _FIT_NOPERSIST:
@@ -1150,6 +1180,210 @@ def render():
                     st.session_state["fit_targets_df"] = pd.DataFrame(_rows)
                     st.session_state["fit_targets_sig"] = _sig
 
+                # ── Curve stripping — analytic initial estimates (warm-start) ─────
+                with st.expander("\U0001F3AF Curve stripping \u2014 analytic initial estimates", expanded=False):
+                    st.caption(
+                        "Read growth rate, carrying capacity, adsorption, resistant fraction \u2026 "
+                        "straight off the **OD** curves (pbisim-fit's `propose_initials` \u2014 no ODE "
+                        "fit), then **seed the fit table** with them. A good warm start makes the "
+                        "NLS fit converge far more reliably on these stiff phage\u2013bacteria ODEs.")
+                    if "_strip_apply_msg" in st.session_state:
+                        st.success(st.session_state.pop("_strip_apply_msg"))
+                    _od_arms = (_agg[_agg["observable"] == "od"]["arm"].unique().tolist()
+                                if "od" in set(_agg["observable"].unique()) else [])
+
+                    def _armmoi(_a):
+                        _v = (_conds.get(_a) or {}).get("moi", None)
+                        try:
+                            return float(_v)
+                        except (TypeError, ValueError):
+                            return float("nan")
+                    _mois = {a: _armmoi(a) for a in _od_arms}
+                    _auto_ctrl = next((a for a in _od_arms if _mois[a] <= 0.0), None)   # NaN<=0 False
+                    _treat_arms = [a for a in _od_arms if np.isfinite(_mois[a]) and _mois[a] > 0.0]
+                    if not _od_arms:
+                        st.info("Curve stripping needs an **OD/turbidity** observable \u2014 none in "
+                                "the selected data.")
+                    elif not _treat_arms:
+                        st.info("Curve stripping needs **\u22651 phage arm (MOI > 0)** \u2014 none found. "
+                                "Set per-arm MOI in \u00a74.")
+                    else:
+                        # Control arm: auto-detected MOI=0 by default; overridable for datasets
+                        # whose control has a blank/NaN MOI (auto-detect can't find those).
+                        if _auto_ctrl is None:
+                            st.warning("No MOI = 0 control auto-detected (the control's MOI may be "
+                                       "blank/NaN). Pick the control arm below.")
+                        _ctrl_choice = st.selectbox(
+                            "Control arm (no phage)", _od_arms,
+                            index=(_od_arms.index(_auto_ctrl) if _auto_ctrl in _od_arms else 0),
+                            key="strip_ctrl",
+                            help="The no-phage reference. Auto-set to the MOI = 0 arm; override if "
+                                 "your control's MOI is blank/NaN.")
+                        try:
+                            _b_def = float(np.asarray(getattr(_fit_cfg, "burst_sizes", [[50.0]]))[0, 0])
+                        except Exception:
+                            _b_def = 50.0
+                        _b_fixed = st.number_input(
+                            "Fixed burst size (b)", min_value=1.0,
+                            value=float(_b_def if _b_def and _b_def > 0 else 50.0),
+                            key="strip_bfixed",
+                            help="Curve stripping treats burst size as known while it solves "
+                                 "adsorption from the lysis curve.")
+                        _fit_f0 = st.checkbox(
+                            "Refine f\u2080 (1-D fit)", value=False, key="strip_fitf0",
+                            help="After stripping, refine the pre-existing resistant fraction f\u2080 "
+                                 "with pbisim-fit's single-parameter forward-simulation fit "
+                                 "(`refine_f0`) \u2014 the one fragile analytic estimate. Slower: a "
+                                 "few ODE solves.")
+                        _od2cfu = float(st.session_state.get("int_od_to_cfu_conversion_factor", 2e8) or 2e8)
+                        _mk = float(getattr(_fit_cfg, "monod_constant", 0.3) or 0.3)
+
+                        # Growth signal + debris of the CHOSEN model (frozen snapshot, or the live
+                        # draft) \u2192 so the g-correction and f\u2080 refine use the right forward model, and
+                        # f\u2080 refine uses the model's debris (not propose_initials' frozen defaults).
+                        def _model_val(_k, _d):
+                            return ((_fit_snap or {}).get(_k, _d) if _fit_snap is not None
+                                    else st.session_state.get(_k, _d))
+                        _gs_fn = _model_val("int_growth_function", "monod_growth") or "monod_growth"
+                        _strip_gs = _nls.strip_growth_signal(_gs_fn)
+                        _strip_debris = None
+                        if _model_val("int_debris_enabled", False):
+                            _strip_debris = {
+                                "v": float(_model_val("int_debris_v", 0.2) or 0.2),
+                                "kdis": float(_model_val("int_debris_kdis", 0.01) or 0.01),
+                                "u": float(_model_val("int_debris_u", 0.4) or 0.4)}
+                        # Latent period for the f\u2080 forward model \u2014 from the chosen model (not
+                        # refine_f0's 0.5 default). Burst = the fixed-burst input above.
+                        try:
+                            _lat = float(np.asarray(getattr(_fit_cfg, "latent_periods", [[0.5]]))[0, 0])
+                        except Exception:
+                            _lat = 0.5
+                        _f0_note = ""
+                        if _fit_f0:
+                            _dbg = (f"debris v={_strip_debris['v']:.3g}, kdis={_strip_debris['kdis']:.3g}"
+                                    if _strip_debris is not None else "default debris (OD/debris off)")
+                            _f0_note = (f" \u00b7 f\u2080 refine nuisances: burst={_b_fixed:g}, "
+                                        f"latent={_lat:g}, {_dbg}")
+                        st.caption(f"Using od_to_cfu = {_od2cfu:.3e} (\u00a74) \u00b7 monod_constant = {_mk:g} \u00b7 "
+                                   f"growth model = {_strip_gs}{_f0_note}. B\u2080 defaults to the "
+                                   "control's first OD.")
+                        if _fit_f0 and _gs_fn not in ("monod_growth", "logistic_growth",
+                                                      "constant_growth"):
+                            st.caption(f"Note: '{_gs_fn}' has no dedicated stripping forward model \u2014 "
+                                       f"approximated as '{_strip_gs}' for the g-correction and f\u2080 refine.")
+                        if st.button("Compute initial estimates", key="strip_compute"):
+                            try:
+                                st.session_state["calib_strip_result"] = _nls.strip_curves(
+                                    _agg, _conds, b_fixed=_b_fixed, od_to_cfu=_od2cfu,
+                                    monod_constant=_mk, control_arm=_ctrl_choice, fit_f0=_fit_f0,
+                                    growth_signal=_strip_gs, debris=_strip_debris, f0_latent=_lat)
+                            except Exception as _se:
+                                st.session_state.pop("calib_strip_result", None)
+                                st.error(f"Curve stripping failed: {_se}")
+                        _R = st.session_state.get("calib_strip_result")
+                        if _R is not None:
+                            _erows = [{"estimate": _nm,
+                                       "value": (f"{_val:.4g}" if np.isfinite(_val) else "\u2014"),
+                                       "reliability": _rel}
+                                      for _nm, (_val, _rel) in _R.estimates.items()]
+                            st.dataframe(pd.DataFrame(_erows), hide_index=True, width="stretch")
+                            with st.expander("Full report", expanded=False):
+                                st.code(_R.report())
+                            _inits = dict(_R.initials)
+                            if st.button("Seed fit table with these estimates", key="strip_seed",
+                                         width="stretch"):
+                                _df = st.session_state.get("fit_targets_df")
+                                # g_max maps to ALL bacterial species' growth_rates[i] rows.
+                                _seed_inits = _broadcast_growth(
+                                    _inits, getattr(_fit_cfg, "n_bacteria", 1))
+                                if _df is not None and _seed_inits:
+                                    _paths = set(_df["path"])
+                                    _applied = [p for p in _seed_inits if p in _paths]
+                                    _skipped = [p for p in _seed_inits if p not in _paths]
+                                    for _p in _applied:
+                                        _df.loc[_df["path"] == _p, "value"] = f"{_seed_inits[_p]:g}"
+                                        _df.loc[_df["path"] == _p, "role"] = "Free"
+                                    st.session_state["fit_targets_df"] = _df
+                                    st.session_state["fit_spec_rev"] = _rev + 1
+                                    if _applied:
+                                        st.success("Seeded (set Free): " + ", ".join(_applied))
+                                    if _skipped:
+                                        st.caption("Not in this model's fit table (skipped): "
+                                                   + ", ".join(_skipped))
+                                    st.rerun()
+                                elif not _inits:
+                                    st.warning("No solid/medium estimates to seed.")
+
+                            # Push the estimates into the Working-draft builder (the manual-
+                            # calibration values) AND refresh the overlay in one click.
+                            if st.button("Apply estimates to model & refresh overlay",
+                                         key="strip_apply", width="stretch"):
+                                if not _inits:
+                                    st.warning("No solid/medium estimates to apply.")
+                                else:
+                                    _mode = st.session_state.get("int_builder_mode",
+                                                                 "Direct (ModelBuilder)")
+                                    # Start from the current builder config, override the stripped
+                                    # paths, then write the resolved params back into int_* via the
+                                    # SAME path the 'Apply fitted values' button uses.
+                                    _cfg0 = build_nominal_config_from_gui()[0]
+                                    # g_max maps to ALL bacterial species (not just growth_rates[0]),
+                                    # so every strain's growth widget re-seeds — matching NLS-apply.
+                                    _apply_inits = _broadcast_growth(
+                                        _inits, getattr(_cfg0, "n_bacteria", 1))
+                                    _ap, _sk = [], []
+                                    for _p, _v in _apply_inits.items():
+                                        (_ap if _nls.set_config_path(_cfg0, _p, _v) else _sk).append(_p)
+                                    _apply_config_to_state(_cfg0)
+                                    if _mode == "Binary Genotypes (BRG)":
+                                        # BRG strain kinetics live on int_brg_base_* (not the
+                                        # per-strain dicts _apply_config_to_state writes). The
+                                        # resistant genotype's cap/growth AND its fraction follow
+                                        # the fitness cost / equilibrium — no independent slot, so
+                                        # cap_r / init_resistant_fraction stay skipped here.
+                                        if "growth_rates[0]" in _inits:
+                                            st.session_state["int_brg_base_growth"] = \
+                                                float(_inits["growth_rates[0]"])
+                                        if "bacteria_to_resource_ratio[0]" in _inits:
+                                            st.session_state["int_brg_base_ratio"] = \
+                                                float(_inits["bacteria_to_resource_ratio[0]"])
+                                    else:
+                                        # f0 (resistant fraction) → the resistant strain's initial_B
+                                        # split (Direct/StrainSet have no init_resistant_fraction
+                                        # field — the fraction IS the WT/resistant B0 split).
+                                        _f0v = _apply_inits.get("init_resistant_fraction")
+                                        _strns = st.session_state.get("int_strains", [])
+                                        if _split_initial_B_by_f0(_strns, _f0v):
+                                            st.session_state["int_strains"] = _strns
+                                            if "init_resistant_fraction" in _sk:
+                                                _sk.remove("init_resistant_fraction")
+                                            _ap.append("init_resistant_fraction (B₀ split)")
+                                    # Drop builder widget keys so the inputs re-seed from int_*.
+                                    for _k in [k for k in list(st.session_state.keys())
+                                               if k.startswith("fit_edit_")
+                                               or k.startswith(_BUILDER_WIDGET_PREFIXES)]:
+                                        st.session_state.pop(_k, None)
+                                    # Recompute the overlay from the updated builder state.
+                                    try:
+                                        _c1, _b1, _p1, _s1, _m1 = build_nominal_config_from_gui()
+                                        st.session_state["calib_overlay_result"] = _compute_overlay(
+                                            _c1, _b1, _p1, _s1, _m1, _ovl_ctx)
+                                    except Exception:
+                                        st.session_state["calib_overlay_result"] = None
+                                    # Persist the outcome across the rerun (a bare st.success here
+                                    # is discarded by st.rerun) → shown at the panel top next render.
+                                    _msg = ("**Applied to the model & refreshed the overlay.** "
+                                            + ("Set: " + ", ".join(_ap) + ". " if _ap else "")
+                                            + ("Skipped (no builder slot — e.g. BRG resistant "
+                                               "fraction): " + ", ".join(_sk) + ". " if _sk else ""))
+                                    if st.session_state.get("fit_show_builder"):
+                                        _msg += ("\n\n_The model-builder inputs update in state but a "
+                                                 "Streamlit repaint quirk can leave an **open** builder "
+                                                 "showing the old numbers — collapse & reopen that "
+                                                 "section to see the refreshed values._")
+                                    st.session_state["_strip_apply_msg"] = _msg
+                                    st.rerun()
+
                 st.markdown("**Fit parameters** \u2014 set each parameter's **role**: "
                             "**Fixed** (held at value) \u00b7 **Free** (estimated with bounds/prior) "
                             "\u00b7 **Derived** (`= expression` of a \u03b8, defined below).")
@@ -1482,6 +1716,34 @@ def render():
                             "95% CI high": (f"{_hi:.4g}" if _hi is not None else "—"),
                         })
                     st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch")
+
+                    # Fit vs. curve-stripping agreement (if a strip result exists)
+                    _sr = st.session_state.get("calib_strip_result")
+                    if _sr is not None and _fr.get("map"):
+                        with st.expander("🔎 Fit vs. curve-stripping agreement"):
+                            st.caption("Compares each fitted parameter to its analytic curve-"
+                                       "stripping estimate. Bands are wide by design — an out-of-band "
+                                       "ratio is a caution flag (possible local minimum / model or "
+                                       "data mismatch), not necessarily an error.")
+                            try:
+                                _rep = _nls.strip_sanity_check(_sr, _fr["map"])
+                                if not _rep.rows:
+                                    st.caption("No parameters overlap between the fit and the "
+                                               "stripping estimates.")
+                                else:
+                                    if _rep.ok:
+                                        st.success("All checked parameters agree with the analytic estimates.")
+                                    else:
+                                        st.warning("Outside the analytic band: " + ", ".join(_rep.flagged))
+                                    st.dataframe(pd.DataFrame([
+                                        {"parameter": _rw[0], "stripped": f"{_rw[1]:.4g}",
+                                         "fitted": f"{_rw[2]:.4g}", "ratio": f"{_rw[3]:.2f}",
+                                         "band": f"{_rw[4][0]:g}–{_rw[4][1]:g}",
+                                         "ok": ("✓" if _rw[5] else "⚠")}
+                                        for _rw in _rep.rows]), hide_index=True, width="stretch")
+                            except Exception as _re:
+                                st.caption(f"(Agreement check unavailable — {_re})")
+
                     st.caption("The overlay above already shows the fitted curves. **Apply** writes "
                                "these values into the model the fit ran against, so every task can reuse it.")
                     if st.button("Apply fitted values to model", key="fit_apply_map",
