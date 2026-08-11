@@ -632,8 +632,9 @@ def test_curve_stripping_f0_nuisance_widgets():
 
 
 def test_amortized_panel_and_strip_guards_render():
-    """The amortized-ONNX panel lists a net selector (net list is lazy, no onnxruntime import
-    needed) and the curve-strip Advanced picker guards render."""
+    """The curve-strip Advanced picker guards always render; the amortized-ONNX net selector
+    renders when onnxruntime is available (the panel is gated on it — CI installs the app
+    without the [onnx] extra, so it shows an 'install onnxruntime' notice instead)."""
     at = AppTest.from_file(APP, default_timeout=240)
     at.run()
     at.session_state["fit_dataset"] = {
@@ -643,15 +644,15 @@ def test_amortized_panel_and_strip_guards_render():
     at.session_state["current_page_radio"] = "Calibration"
     at.run()
     assert len(at.exception) == 0, at.exception
-    _sel_keys = {s.key for s in at.selectbox if s.key}
-    assert "amort_net" in _sel_keys, sorted(k for k in _sel_keys if k)
-    # amortized run/seed/apply buttons exist
-    _btn = {b.key for b in at.button if b.key}
-    assert "amort_run" in _btn
-    # curve-strip picker guards
+    # curve-strip picker guards ALWAYS render (no onnxruntime needed)
     _chk = {c.key for c in at.checkbox if c.key}
     assert "strip_reqpeak" in _chk
     assert "strip_minvir" in {n.key for n in at.number_input if n.key}
+    # amortized net selector + run button only when onnxruntime is installed
+    from pbisim_app import nls_fit as _nls
+    if _nls.amortized_available():
+        assert "amort_net" in {s.key for s in at.selectbox if s.key}
+        assert "amort_run" in {b.key for b in at.button if b.key}
 
 
 def test_apply_auto_adds_resistant_strain_from_one():
