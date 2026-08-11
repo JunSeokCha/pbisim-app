@@ -69,7 +69,10 @@ jobs:
           pip install "git+https://${PBISIM_TOKEN}@github.com/phage-therapy-sim/pbisim.git@${PBISIM_REF}"
           FIT_TOKEN="${PBISIM_FIT_TOKEN:-$PBISIM_TOKEN}"
           pip install "git+https://${FIT_TOKEN}@github.com/phage-therapy-sim/pbisim-fit.git@${PBISIM_FIT_REF}"
-          pip install -e .
+          # [onnx] installs onnxruntime (torch-free) so the amortized-inference tests
+          # actually RUN in CI instead of skipping (importorskip). GitHub's Ubuntu
+          # runners have a modern libstdc++, so onnxruntime imports cleanly here.
+          pip install -e '.[onnx]'
           pip install pytest
 
       - name: Run test suite
