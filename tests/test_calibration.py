@@ -648,9 +648,10 @@ def test_amortized_panel_and_strip_guards_render():
     _chk = {c.key for c in at.checkbox if c.key}
     assert "strip_reqpeak" in _chk
     assert "strip_minvir" in {n.key for n in at.number_input if n.key}
-    # amortized net selector + run button only when onnxruntime is installed
+    # amortized net selector + run button only when onnxruntime is installed AND at least
+    # one net is available (the panel gates on both).
     from pbisim_app import nls_fit as _nls
-    if _nls.amortized_available():
+    if _nls.amortized_available() and _nls.list_amortized_nets():
         assert "amort_net" in {s.key for s in at.selectbox if s.key}
         assert "amort_run" in {b.key for b in at.button if b.key}
 
