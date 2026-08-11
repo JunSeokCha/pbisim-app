@@ -44,12 +44,12 @@ RUN FIT_TOKEN="${PBISIM_FIT_TOKEN:-$PBISIM_TOKEN}" \
     && pip install "git+https://${FIT_TOKEN}@github.com/phage-therapy-sim/pbisim-fit.git@${PBISIM_FIT_REF}"
 
 # --- 2. App source + remaining deps (editable so prompts/ resolves at runtime) ---
-# The [scripting] extra adds the code-editor component so the (opt-in, gated) Scripting
-# page gets a real editor when enabled; it's lazy-imported, so it costs nothing when
-# scripting is off, and the page falls back to a plain textarea if it's ever absent.
+# [scripting] adds the code-editor component for the opt-in Scripting page; [onnx] adds
+# onnxruntime for the Calibration page's instant amortized fit (torch-free). Both are
+# lazy-imported, so they cost nothing when unused and degrade gracefully if absent.
 WORKDIR /app
 COPY . /app
-RUN pip install -e '.[scripting]'
+RUN pip install -e '.[scripting,onnx]'
 
 # --- 3. Scrub any token left in VCS install metadata ---
 RUN find /opt/venv -name direct_url.json -delete || true

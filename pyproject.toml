@@ -46,6 +46,13 @@ scripting = [
     # base deploy is unaffected; install this only where scripting is enabled.
     "streamlit-code-editor>=0.1.20",
 ]
+onnx = [
+    # Instant amortized inference on the Calibration page: runs pbisim-fit's exported
+    # SetEstimator nets via onnxruntime. TORCH-FREE (onnxruntime only; do NOT add torch).
+    # Lazy-imported — the app runs without it (the amortized panel shows "unavailable").
+    # Matches the pbisim-fit `[onnx]` extra.
+    "onnxruntime>=1.17",
+]
 
 [project.scripts]
 pbisim-app = "pbisim_app.cli:main"

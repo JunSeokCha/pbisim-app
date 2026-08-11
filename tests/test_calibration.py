@@ -629,3 +629,91 @@ def test_curve_stripping_f0_nuisance_widgets():
     assert len(at.exception) == 0, at.exception
     _R = at.session_state["calib_strip_result"]
     assert _R.estimates["f0"][1] == "fit"
+
+
+def test_amortized_panel_and_strip_guards_render():
+    """The amortized-ONNX panel lists a net selector (net list is lazy, no onnxruntime import
+    needed) and the curve-strip Advanced picker guards render."""
+    at = AppTest.from_file(APP, default_timeout=240)
+    at.run()
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    assert len(at.exception) == 0, at.exception
+    _sel_keys = {s.key for s in at.selectbox if s.key}
+    assert "amort_net" in _sel_keys, sorted(k for k in _sel_keys if k)
+    # amortized run/seed/apply buttons exist
+    _btn = {b.key for b in at.button if b.key}
+    assert "amort_run" in _btn
+    # curve-strip picker guards
+    _chk = {c.key for c in at.checkbox if c.key}
+    assert "strip_reqpeak" in _chk
+    assert "strip_minvir" in {n.key for n in at.number_input if n.key}
+
+
+def test_apply_auto_adds_resistant_strain_from_one():
+    """The user's case: a 1-strain builder. Applying a strip/amortized (2-genotype) estimate
+    auto-adds a resistant strain and populates it (cap_r + resistant adsorption 0)."""
+    at = AppTest.from_file(APP, default_timeout=260)
+    at.run()
+    assert len(at.session_state["int_strains"]) == 1          # default builder: one strain
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    [b for b in at.button if b.key == "strip_compute"][0].click().run()
+    _R = at.session_state["calib_strip_result"]
+    assert "bacteria_to_resource_ratio[1]" in _R.initials      # a 2-genotype estimate (cap_r)
+
+    [b for b in at.button if b.key == "strip_apply"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    _strns = at.session_state["int_strains"]
+    assert len(_strns) == 2                                    # resistant strain was added
+    # resistant strain carries cap_r and does not adsorb the phage
+    _cap_r = float(_R.initials["bacteria_to_resource_ratio[1]"])
+    assert abs(float(_strns[1]["bacteria_to_resource_ratio"]) - _cap_r) < max(1.0, 1e-3 * _cap_r)
+    assert float(at.session_state["ads_1_0"]) == 0.0
+    # both strains got the stripped growth
+    _g = float(_R.initials["growth_rates[0]"])
+    for _s in _strns:
+        assert abs(float(_s["growth_rate"]) - _g) < 1e-6
+
+
+def test_amortized_apply_auto_adds_resistant_strain():
+    """Amortized apply reuses the shared apply path → also auto-adds + populates the resistant
+    strain from a 1-strain builder."""
+    import pytest
+    pytest.importorskip("onnxruntime")
+    from pbisim_app import nls_fit as _nls
+    if not _nls.list_amortized_nets():
+        pytest.skip("no amortized nets available")
+    at = AppTest.from_file(APP, default_timeout=300)
+    at.run()
+    assert len(at.session_state["int_strains"]) == 1
+    at.session_state["fit_dataset"] = {
+        "raw": _od_screen(), "time": "TIME", "value": "DV",
+        "observable": "od", "arm_cols": ["MOI"], "moi": "MOI",
+    }
+    at.session_state["current_page_radio"] = "Calibration"
+    at.run()
+    [b for b in at.button if b.key == "amort_run"][0].click().run()
+    assert "calib_amortized_result" in at.session_state, at.exception
+    [b for b in at.button if b.key == "amort_apply"][0].click().run()
+    assert len(at.exception) == 0, at.exception
+    assert len(at.session_state["int_strains"]) == 2
+    assert float(at.session_state["ads_1_0"]) == 0.0
+    # debris exists in the fitted config → the OD/debris module is auto-enabled + populated,
+    # even though the builder didn't have it pre-activated
+    assert bool(at.session_state["int_debris_enabled"]) is True
+    assert float(at.session_state["int_debris_v"]) > 0
+    # structural function choices are mirrored from the fitted config (not just numbers):
+    # lysis = frac_lysis (app default is constant_lysis), nutrient growth, Monod Ks, inc
+    assert at.session_state["int_lysis_function"] == "frac_lysis"
+    assert at.session_state["int_growth_function"] == "monod_growth"
+    assert float(at.session_state["int_monod_constant"]) == 0.3
+    assert float(at.session_state["int_phages"][0]["infected_nutrient_consumption"]) > 0

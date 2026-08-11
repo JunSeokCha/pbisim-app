@@ -192,6 +192,130 @@ def _split_initial_B_by_f0(strains, f0):
     return True
 
 
+def _ensure_resistant_genotype(inits, mode):
+    """A curve-strip / amortized estimate is a 2-GENOTYPE model (WT + resistant: the resistant
+    strain does NOT adsorb the phage — its defining trait — and carries its own capacity `cap_r`
+    and initial fraction `f0`). In Direct/StrainSet, make sure the builder has a resistant strain
+    at index 1 — add a WT clone if it has only one — and mark it resistant (pairwise adsorption 0
+    to every phage), so `cap_r` / `f0` / the resistant growth have somewhere to land. BRG is
+    inherently 2-genotype (its resistant genotype is derived from the fitness cost), so it's left
+    alone. Returns a short list of what it did (for the apply message)."""
+    if mode == "Binary Genotypes (BRG)":
+        return []
+    if not ("bacteria_to_resource_ratio[1]" in inits or "init_resistant_fraction" in inits):
+        return []
+    _strns = st.session_state.get("int_strains", [])
+    if not _strns:
+        return []
+    _did = []
+    if len(_strns) < 2:
+        import copy as _copy
+        _res = _copy.deepcopy(_strns[0])
+        _res["name"] = str(_strns[0].get("name", "WT")) + " (resistant)"
+        st.session_state["int_strains"] = _strns + [_res]
+        _did.append("added a resistant strain")
+    # Resistant genotype (strain 1) does not adsorb the phage → set its pairwise adsorption to 0.
+    _nph = max(len(st.session_state.get("int_phages", [])), 1)
+    for _j in range(_nph):
+        st.session_state[f"ads_1_{_j}"] = 0.0
+    _did.append("resistant adsorption = 0")
+    return _did
+
+
+def _config_structure(config, extra=None):
+    """Structural function CHOICES (not just numbers) to mirror from a fitted config into the
+    builder, so an applied model reproduces the fit: the lysis progression function (e.g.
+    ``frac_lysis`` — the app default is ``constant_lysis``), the growth-signal function, the
+    Monod Ks, and the infected-cell nutrient draw. Returns ``{session_key: value}`` (plus a
+    special ``"_inc"`` key applied per-phage). ``extra`` may carry ``{"inc": value}`` from the
+    estimate's MAP when the config's own field is a placeholder."""
+    _s = {}
+    _lf = getattr(config, "lysis_progression_function", None)
+    if getattr(_lf, "__name__", None):
+        _s["int_lysis_function"] = _lf.__name__                 # e.g. "frac_lysis"
+    _gf = getattr(config, "growth_function", None)
+    if getattr(_gf, "__name__", None):
+        _s["int_growth_function"] = _gf.__name__
+    elif getattr(config, "track_nutrients", False):
+        _s["int_growth_function"] = "monod_growth"              # None + nutrient → Monod
+    _mc = getattr(config, "monod_constant", None)
+    if _mc is not None:
+        _s["int_monod_constant"] = float(_mc)
+    _inc = (extra or {}).get("inc")
+    if _inc is None:
+        try:
+            _inc = float(np.max(np.asarray(getattr(config, "infected_nutrient_consumption", 0.0))))
+        except Exception:
+            _inc = None
+    if _inc is not None and _inc > 0:
+        _s["_inc"] = float(_inc)
+    return _s
+
+
+def _apply_initials_to_builder(inits, structure=None):
+    """Write estimate initials (``{config_path: value}``) into the Working-draft builder (the
+    manual-calibration values), reusing the fit-apply write path. Shared by curve-strip Apply
+    and amortized-ONNX Apply. Ensures a resistant genotype exists (2-genotype estimate), mirrors
+    the fitted model's structural function choices (``structure``, from :func:`_config_structure`
+    — lysis/growth signal, Monod Ks, infected-nutrient draw), broadcasts g_max to all species,
+    mirrors BRG base growth/cap, maps f0 to the WT/resistant B0 split, and enables + populates the
+    OD/debris module. Builder widgets are popped here; the caller recomputes the overlay. Returns
+    ``(applied, skipped)`` path lists."""
+    from pbisim_app.nls_fit import set_config_path
+    _mode = st.session_state.get("int_builder_mode", "Direct (ModelBuilder)")
+    # Ensure the 2-genotype structure BEFORE building the config, so cap_r / f0 have a strain 1.
+    _extra = _ensure_resistant_genotype(inits, _mode)
+    # Mirror the fitted model's structural function choices BEFORE build_nominal so the rebuilt
+    # config uses them (a param that exists in the fit but whose function/module isn't selected
+    # in the builder must still take effect).
+    _struct = dict(structure or {})
+    for _key in ("int_lysis_function", "int_growth_function", "int_monod_constant"):
+        if _struct.get(_key) is not None:
+            st.session_state[_key] = _struct[_key]
+            _extra.append(_key.replace("int_", "") + " → " + str(_struct[_key]))
+    if _struct.get("_inc") is not None:
+        _incv = float(_struct["_inc"])
+        st.session_state["int_infected_nutrient_consumption"] = _incv       # legacy scalar seed
+        for _ph in st.session_state.get("int_phages", []):
+            _ph["infected_nutrient_consumption"] = _incv                    # per-phage (authoritative)
+        _extra.append("infected consumption → %.3g" % _incv)
+    _cfg0 = build_nominal_config_from_gui()[0]
+    _ai = _broadcast_growth(inits, getattr(_cfg0, "n_bacteria", 1))
+    _ap, _sk = [], []
+    for _p, _v in _ai.items():
+        (_ap if set_config_path(_cfg0, _p, _v) else _sk).append(_p)
+    _apply_config_to_state(_cfg0)
+    # Debris rates live on session keys, and the OD/debris module is FEATURE-GATED
+    # (int_debris_enabled). A fitted param that exists in the estimate but whose module isn't
+    # pre-activated in the builder must still take effect — so enable the module when applying
+    # its params (the general rule; debris is the gated case in the strip/amortized param set).
+    if "debris_v" in _ai or "debris_kdis" in _ai:
+        st.session_state["int_debris_enabled"] = True
+        if "debris_v" in _ai:
+            st.session_state["int_debris_v"] = float(_ai["debris_v"])
+        if "debris_kdis" in _ai:
+            st.session_state["int_debris_kdis"] = float(_ai["debris_kdis"])
+        st.session_state.setdefault("int_debris_u", 0.0)
+        _extra.append("enabled OD/debris")
+    if _mode == "Binary Genotypes (BRG)":
+        if "growth_rates[0]" in _ai:
+            st.session_state["int_brg_base_growth"] = float(_ai["growth_rates[0]"])
+        if "bacteria_to_resource_ratio[0]" in _ai:
+            st.session_state["int_brg_base_ratio"] = float(_ai["bacteria_to_resource_ratio[0]"])
+    else:
+        _f0v = _ai.get("init_resistant_fraction")
+        _strns = st.session_state.get("int_strains", [])
+        if _split_initial_B_by_f0(_strns, _f0v):
+            st.session_state["int_strains"] = _strns
+            if "init_resistant_fraction" in _sk:
+                _sk.remove("init_resistant_fraction")
+            _ap.append("init_resistant_fraction (B₀ split)")
+    for _k in [k for k in list(st.session_state.keys())
+               if k.startswith("fit_edit_") or k.startswith(_BUILDER_WIDGET_PREFIXES)]:
+        st.session_state.pop(_k, None)
+    return _ap + _extra, _sk
+
+
 def _compute_overlay(config, iB, iP, iS, mk, ctx):
     """Simulate `config` once per arm and project every selected observable into a
     small-multiples overlay-vs-data result dict (also computes per-obs RMSE/R² and the
@@ -1229,6 +1353,19 @@ def render():
                             key="strip_bfixed",
                             help="Curve stripping treats burst size as known while it solves "
                                  "adsorption from the lysis curve.")
+                        with st.expander("Advanced picker guards (real-data artifacts)", expanded=False):
+                            _req_peak = st.checkbox(
+                                "Require growth before the lysis peak", value=False,
+                                key="strip_reqpeak",
+                                help="The lysis peak must clear the inoculum OD, skipping a lag-phase "
+                                     "dip at t\u22480 \u2014 avoids an inflated adsorption k on screens that dip "
+                                     "before growing.")
+                            _min_vir = st.number_input(
+                                "Min. virulence to keep a phage arm (0 = off)", min_value=0.0,
+                                value=0.0, key="strip_minvir", format="%g",
+                                help="A phage arm whose max local virulence vs the control is below "
+                                     "this abstains (no k / lysis peak) \u2014 filters resistant / no-kill "
+                                     "arms. 0 disables.")
                         _fit_f0 = st.checkbox(
                             "Refine f\u2080 (1-D fit)", value=False, key="strip_fitf0",
                             help="After stripping, refine the pre-existing resistant fraction f\u2080 "
@@ -1291,7 +1428,8 @@ def render():
                                 st.session_state["calib_strip_result"] = _nls.strip_curves(
                                     _agg, _conds, b_fixed=_b_fixed, od_to_cfu=_od2cfu,
                                     monod_constant=_mk, control_arm=_ctrl_choice, fit_f0=_fit_f0,
-                                    growth_signal=_strip_gs, debris=_strip_debris, f0_latent=_lat)
+                                    growth_signal=_strip_gs, debris=_strip_debris, f0_latent=_lat,
+                                    require_growth_peak=_req_peak, min_virulence=_min_vir)
                             except Exception as _se:
                                 st.session_state.pop("calib_strip_result", None)
                                 st.error(f"Curve stripping failed: {_se}")
@@ -1336,49 +1474,7 @@ def render():
                                 if not _inits:
                                     st.warning("No solid/medium estimates to apply.")
                                 else:
-                                    _mode = st.session_state.get("int_builder_mode",
-                                                                 "Direct (ModelBuilder)")
-                                    # Start from the current builder config, override the stripped
-                                    # paths, then write the resolved params back into int_* via the
-                                    # SAME path the 'Apply fitted values' button uses.
-                                    _cfg0 = build_nominal_config_from_gui()[0]
-                                    # g_max maps to ALL bacterial species (not just growth_rates[0]),
-                                    # so every strain's growth widget re-seeds — matching NLS-apply.
-                                    _apply_inits = _broadcast_growth(
-                                        _inits, getattr(_cfg0, "n_bacteria", 1))
-                                    _ap, _sk = [], []
-                                    for _p, _v in _apply_inits.items():
-                                        (_ap if _nls.set_config_path(_cfg0, _p, _v) else _sk).append(_p)
-                                    _apply_config_to_state(_cfg0)
-                                    if _mode == "Binary Genotypes (BRG)":
-                                        # BRG strain kinetics live on int_brg_base_* (not the
-                                        # per-strain dicts _apply_config_to_state writes). The
-                                        # resistant genotype's cap/growth AND its fraction follow
-                                        # the fitness cost / equilibrium — no independent slot, so
-                                        # cap_r / init_resistant_fraction stay skipped here.
-                                        if "growth_rates[0]" in _inits:
-                                            st.session_state["int_brg_base_growth"] = \
-                                                float(_inits["growth_rates[0]"])
-                                        if "bacteria_to_resource_ratio[0]" in _inits:
-                                            st.session_state["int_brg_base_ratio"] = \
-                                                float(_inits["bacteria_to_resource_ratio[0]"])
-                                    else:
-                                        # f0 (resistant fraction) → the resistant strain's initial_B
-                                        # split (Direct/StrainSet have no init_resistant_fraction
-                                        # field — the fraction IS the WT/resistant B0 split).
-                                        _f0v = _apply_inits.get("init_resistant_fraction")
-                                        _strns = st.session_state.get("int_strains", [])
-                                        if _split_initial_B_by_f0(_strns, _f0v):
-                                            st.session_state["int_strains"] = _strns
-                                            if "init_resistant_fraction" in _sk:
-                                                _sk.remove("init_resistant_fraction")
-                                            _ap.append("init_resistant_fraction (B₀ split)")
-                                    # Drop builder widget keys so the inputs re-seed from int_*.
-                                    for _k in [k for k in list(st.session_state.keys())
-                                               if k.startswith("fit_edit_")
-                                               or k.startswith(_BUILDER_WIDGET_PREFIXES)]:
-                                        st.session_state.pop(_k, None)
-                                    # Recompute the overlay from the updated builder state.
+                                    _ap, _sk = _apply_initials_to_builder(_inits)
                                     try:
                                         _c1, _b1, _p1, _s1, _m1 = build_nominal_config_from_gui()
                                         st.session_state["calib_overlay_result"] = _compute_overlay(
@@ -1398,6 +1494,112 @@ def render():
                                                  "section to see the refreshed values._")
                                     st.session_state["_strip_apply_msg"] = _msg
                                     st.rerun()
+
+                # ── Amortized fit (ONNX) — instant calibrated estimate ────────
+                _am_avail = _nls.amortized_available()
+                _am_nets = _nls.list_amortized_nets() if _am_avail else []
+                _am_od = "od" in set(_agg["observable"].unique())
+                with st.expander("⚡ Amortized fit (ONNX) — instant calibrated estimate", expanded=False):
+                    if "_amort_apply_msg" in st.session_state:
+                        st.success(st.session_state.pop("_amort_apply_msg"))
+                    st.caption("An instant, torch-free amortized estimate for an OD assay — a trained "
+                               "neural net, complementary to the slow NLS fit and the analytic strip. "
+                               "Pick the model trained for your phage/host; the estimate + 95% CI are "
+                               "immediate. Seed the NLS fit with it, or apply it to the model.")
+                    if not _am_avail:
+                        st.info("Needs `onnxruntime` (install `pbisim-fit[onnx]`) — not available here.")
+                    elif not (_am_od and _am_nets):
+                        st.info("Needs an **OD** observable and an available amortized model.")
+                    else:
+                        try:
+                            _am_bdef = float(np.asarray(getattr(_fit_cfg, "burst_sizes", [[50.0]]))[0, 0])
+                        except Exception:
+                            _am_bdef = 50.0
+                        try:
+                            _am_latdef = float(np.asarray(getattr(_fit_cfg, "latent_periods", [[0.5]]))[0, 0])
+                        except Exception:
+                            _am_latdef = 0.5
+                        _am_net = st.selectbox(
+                            "Amortized model", _am_nets, key="amort_net",
+                            help="Each net is trained for a specific phage/host + OD assay; it is only "
+                                 "valid inside that trained envelope (single-phage, OD-only here).")
+                        _amc = st.columns(2)
+                        _am_burst = _amc[0].number_input(
+                            "Burst size (context)", min_value=1.0,
+                            value=float(_am_bdef if _am_bdef and _am_bdef > 0 else 50.0),
+                            key="amort_burst", help="Supplied context (measured/assumed), not inferred.")
+                        _am_latent = _amc[1].number_input(
+                            "Latent period (h, context)", min_value=0.0, value=float(_am_latdef),
+                            key="amort_latent")
+                        st.caption("B₀ and MOI are read from the arms automatically.")
+                        if st.button("Run amortized fit", key="amort_run"):
+                            try:
+                                _am_ds = _nls.build_dataset(_agg, _sel_arms, ["od"], _arm_cond,
+                                                            od_to_cfu=_od_link, dose_unit=_dose_unit)
+                                st.session_state["calib_amortized_result"] = _nls.amortized_fit(
+                                    _am_ds, _am_net, burst=_am_burst, latent=_am_latent)
+                            except Exception as _ae:
+                                st.session_state.pop("calib_amortized_result", None)
+                                st.error(f"Amortized fit failed: {_ae}")
+                        _amr = st.session_state.get("calib_amortized_result")
+                        if _amr is not None:
+                            _arows = []
+                            for _k, _v in _amr["map"].items():
+                                _lo, _hi = _amr["ci"].get(_k, [None, None])
+                                _arows.append({"parameter": _k, "MAP": f"{_v:.4g}",
+                                               "95% CI low": (f"{_lo:.4g}" if _lo is not None else "—"),
+                                               "95% CI high": (f"{_hi:.4g}" if _hi is not None else "—")})
+                            st.dataframe(pd.DataFrame(_arows), hide_index=True, width="stretch")
+                            # OOD guard: cross-check against the analytic strip when available.
+                            _sr = st.session_state.get("calib_strip_result")
+                            if _sr is not None:
+                                try:
+                                    _rep = _nls.strip_sanity_check(_sr, _amr["initials"])
+                                    if _rep.rows and not _rep.ok:
+                                        st.warning("Possible out-of-envelope: the amortized estimate "
+                                                   "disagrees with the analytic strip on — "
+                                                   + ", ".join(_rep.flagged) + " — consider the NLS fit.")
+                                    elif _rep.rows:
+                                        st.caption("Cross-check: agrees with the analytic strip.")
+                                except Exception:
+                                    pass
+                            else:
+                                st.caption("Tip: run **curve stripping** too — its sanity check "
+                                           "cross-checks the amortized estimate for out-of-distribution assays.")
+                            _amcols = st.columns(2)
+                            if _amcols[0].button("Seed fit table (warm-start NLS)", key="amort_seed"):
+                                _df = st.session_state.get("fit_targets_df")
+                                _si = _broadcast_growth(_amr["initials"], getattr(_fit_cfg, "n_bacteria", 1))
+                                if _df is not None and _si:
+                                    _paths = set(_df["path"])
+                                    _appl = [p for p in _si if p in _paths]
+                                    for _p in _appl:
+                                        _df.loc[_df["path"] == _p, "value"] = f"{_si[_p]:g}"
+                                        _df.loc[_df["path"] == _p, "role"] = "Free"
+                                    st.session_state["fit_targets_df"] = _df
+                                    st.session_state["fit_spec_rev"] = _rev + 1
+                                    if _appl:
+                                        st.success("Seeded (set Free): " + ", ".join(_appl))
+                                    st.rerun()
+                            if _amcols[1].button("Apply to model & refresh overlay", key="amort_apply"):
+                                _struct = (_config_structure(_amr.get("config"),
+                                                             {"inc": _amr["map"].get("inc")})
+                                           if _amr.get("config") is not None else None)
+                                _ap, _sk = _apply_initials_to_builder(_amr["initials"],
+                                                                      structure=_struct)
+                                try:
+                                    _c1, _b1, _p1, _s1, _m1 = build_nominal_config_from_gui()
+                                    st.session_state["calib_overlay_result"] = _compute_overlay(
+                                        _c1, _b1, _p1, _s1, _m1, _ovl_ctx)
+                                except Exception:
+                                    st.session_state["calib_overlay_result"] = None
+                                _m = ("**Applied the amortized fit & refreshed the overlay.** "
+                                      + ("Set: " + ", ".join(_ap) + ". " if _ap else ""))
+                                if st.session_state.get("fit_show_builder"):
+                                    _m += ("\n\n_Collapse & reopen an open model builder to see the "
+                                           "refreshed values (Streamlit repaint quirk)._")
+                                st.session_state["_amort_apply_msg"] = _m
+                                st.rerun()
 
                 st.markdown("**Fit parameters** \u2014 set each parameter's **role**: "
                             "**Fixed** (held at value) \u00b7 **Free** (estimated with bounds/prior) "

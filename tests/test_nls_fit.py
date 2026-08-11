@@ -643,3 +643,50 @@ def test_split_initial_B_by_f0():
     _s2 = [{"initial_B": 1e6}, {"initial_B": 1e6}]
     assert _split_initial_B_by_f0(_s2, 1.5)
     assert _s2[0]["initial_B"] == 0.0 and _s2[1]["initial_B"] == 2e6
+
+
+def test_strip_curves_picker_guards():
+    """require_growth_peak + min_virulence thread through to propose_initials (opt-in, no crash)."""
+    agg, conds = _od_strip_agg()
+    R = nls.strip_curves(agg, conds, b_fixed=50.0, od_to_cfu=1.0, monod_constant=0.3,
+                         require_growth_peak=True, min_virulence=0.05)
+    assert np.isfinite(R.value("g_max"))          # control-derived, unaffected by the guards
+
+
+def _amort_dataset():
+    import pandas as pd
+    t = np.arange(0, 25.0, 1.0)
+    ctrl = np.minimum(0.02 * np.exp(0.32 * t), 1.2)
+    up = np.minimum(0.02 * np.exp(0.32 * t[:8]), 1.2)
+    lysis = np.concatenate([up, np.geomspace(up[-1], 0.03, 9), np.geomspace(0.04, 0.6, 8)])
+    rows = []
+    for moi, y in ((0.0, ctrl), (0.1, lysis), (1.0, lysis)):
+        for ti, v in zip(t, y):
+            rows.append({"arm": f"m{moi}", "observable": "od", "time": float(ti),
+                         "value": float(v), "lo": v, "hi": v})
+    agg = pd.DataFrame(rows)
+    ac = {f"m{m}": {"b0": 4e6, "moi": m} for m in (0.0, 0.1, 1.0)}
+    return nls.build_dataset(agg, list(ac), ["od"], ac, od_to_cfu=2.4e9, dose_unit="moi")
+
+
+def test_amortized_available_and_nets():
+    """list_amortized_nets works WITHOUT importing onnxruntime (lazy) — the page can list nets."""
+    nets = nls.list_amortized_nets()
+    assert isinstance(nets, list)
+    if nets:
+        assert any("MXP1001" in n for n in nets)
+
+
+def test_amortized_fit_torch_free():
+    """The full amortized ONNX path is torch-free and returns map/ci/initials/config."""
+    import sys
+    pytest.importorskip("onnxruntime")            # skips on the dev box unless conda lib is on LD path
+    if not nls.list_amortized_nets():
+        pytest.skip("no amortized nets available")
+    ds = _amort_dataset()
+    res = nls.amortized_fit(ds, nls.list_amortized_nets()[0], burst=50.0, latent=0.5)
+    assert set(res["map"]) >= {"g", "cap", "cap_r", "k", "f0"}
+    assert res["initials"]["growth_rates[0]"] == pytest.approx(res["map"]["g"])
+    assert res["initials"]["latent_periods[0,0]"] == 0.5      # frozen context in initials
+    assert res["config"] is not None and float(res["config"].latent_periods[0, 0]) == 0.5
+    assert "torch" not in sys.modules

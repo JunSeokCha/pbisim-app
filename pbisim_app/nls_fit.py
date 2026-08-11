@@ -536,7 +536,7 @@ def strip_growth_signal(growth_fn):
 
 def strip_curves(agg, conds, *, obs_key="od", b_fixed, od_to_cfu, monod_constant, B0=None,
                  control_arm=None, fit_f0=False, growth_signal="monod", debris=None,
-                 f0_latent=0.5):
+                 f0_latent=0.5, require_growth_peak=False, min_virulence=0.0):
     """Analytic curve-stripping initial estimates from the aggregated OD assay data.
 
     Wraps pbisim-fit's ``propose_initials`` — it reads growth rate, carrying capacity,
@@ -608,7 +608,8 @@ def strip_curves(agg, conds, *, obs_key="od", b_fixed, od_to_cfu, monod_constant
         monod_constant=float(monod_constant), B0=(None if B0 is None else float(B0)),
         growth_signal=str(growth_signal), fit_f0=bool(fit_f0), f0_latent=float(f0_latent),
         f0_debris_v=float(_d.get("v", 0.3)), f0_debris_kdis=float(_d.get("kdis", 0.1)),
-        f0_debris_u=float(_d.get("u", 0.0)))
+        f0_debris_u=float(_d.get("u", 0.0)),
+        require_growth_peak=bool(require_growth_peak), min_virulence=float(min_virulence))
 
 
 def strip_sanity_check(strip_result, fitted_map):
@@ -619,6 +620,81 @@ def strip_sanity_check(strip_result, fitted_map):
     (theta names). Returns an ``AgreementReport`` (``.rows``, ``.flagged``, ``.ok``)."""
     from pbisim_fit.refinement.curve_strip import sanity_check
     return sanity_check(strip_result, fitted_map)
+
+
+# ── Amortized inference (ONNX, torch-free) ───────────────────────────────────
+# The shipped nets output natural-scale θ; these map onto the same config paths the strip/
+# NLS results use, so the app's Seed/Apply machinery is reused verbatim. ``inc`` (a per-phage
+# array on the config) is left out of the builder-apply path — the overlay uses the full
+# posterior config, which carries it.
+_AMORTIZED_PATH = {
+    "g": "growth_rates[0]", "cap": "bacteria_to_resource_ratio[0]",
+    "cap_r": "bacteria_to_resource_ratio[1]", "k": "adsorption_rates[0,0]",
+    "f0": "init_resistant_fraction", "v": "debris_v", "kdis": "debris_kdis",
+    "burst": "burst_sizes[0,0]", "latent": "latent_periods[0,0]",
+}
+
+
+def amortized_available():
+    """True if the amortized-ONNX predictor can run here (onnxruntime + pbisim-fit assets)."""
+    import importlib.util as _u
+    if _u.find_spec("onnxruntime") is None:
+        return False
+    try:
+        from pbisim_fit.demo import list_demo_onnx  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def list_amortized_nets():
+    """Names of the available amortized-ONNX models (pbisim-fit-provided; extensible to
+    user-uploaded nets later)."""
+    try:
+        from pbisim_fit.demo import list_demo_onnx
+        return list(list_demo_onnx())
+    except Exception:
+        return []
+
+
+def _amortized_to_config(pred, post):
+    """A ModelConfig from an amortized posterior. Prefers ``post.to_config()``; falls back to
+    rebuilding from ``map()`` + ``frozen_params`` when ``to_config()`` drops the frozen context
+    (a known pbisim-fit bug — see pbisim-fit/BUGNOTE_to_config_frozen_params.md). Returns None
+    if neither route works (overlay/apply then degrade to the MAP table only)."""
+    try:
+        return post.to_config()
+    except Exception:
+        pass
+    try:
+        spec, base = pred.param_spec, pred.base_config
+        vals = {**getattr(post, "frozen_params", {}), **post.map()}
+        order = list(spec._params.keys())
+        x_opt = np.array([spec._params[p].to_opt(vals[p]) for p in order])
+        return spec.apply(x_opt, base)
+    except Exception:
+        return None
+
+
+def amortized_fit(dataset, net_name, *, burst=50.0, latent=0.5, n_samples=2000):
+    """Instant amortized (ONNX, torch-free) parameter estimate for an OD-assay dataset.
+
+    ``dataset`` is the SAME wide ExperimentalDataset the app builds for ``refine_nls`` (a
+    control arm + MOI phage arms, OD, each with a t=0 bacteria dose = B0 and a MOI phage dose).
+    ``net_name`` from :func:`list_amortized_nets`; ``burst``/``latent`` are the required measured
+    context. Returns ``{map, ci, frozen, initials (config_path->value), config, target_paths}``."""
+    from pbisim_fit.demo import load_demo_onnx
+    pred = load_demo_onnx(net_name)
+    post = pred.infer(dataset, context={"burst": float(burst), "latent": float(latent)},
+                      n_samples=int(n_samples))
+    _map = {k: float(v) for k, v in post.map().items()}
+    _ci = {k: [float(lo), float(hi)] for k, (lo, hi) in post.credible_interval(0.95).items()}
+    _frozen = {k: float(v) for k, v in getattr(post, "frozen_params", {}).items()}
+    _all = {**_frozen, **_map}
+    initials = {_AMORTIZED_PATH[k]: v for k, v in _all.items() if k in _AMORTIZED_PATH}
+    return {"map": _map, "ci": _ci, "frozen": _frozen, "initials": initials,
+            "config": _amortized_to_config(pred, post),
+            "target_paths": list(post.parameter_names)}
 
 
 def build_dataset(agg, sel_arms, sel_obs, arm_cond, *, od_to_cfu=None, dose_unit="moi",
