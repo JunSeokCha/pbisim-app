@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "pbisim>=1.0",
+    # >=2.0: 2.0.0 carries two breaking numerical corrections (the latent_periods
+    # convention, and mutation flux generated at the parent strain's growth rate).
+    # Running this app against pbisim 1.x would silently produce different numbers.
+    "pbisim>=2.0",
     "anthropic>=0.30",
     "streamlit>=1.42",          # st.context.cookies (persistent-login gate)
     "matplotlib>=3.7",
@@ -28,7 +31,7 @@ fit = [
     #   local dev : pip install -e ../pbisim-fit
     #   deploy    : the Dockerfile installs it from GitHub (see PBISIM_FIT_* build args)
     # Do NOT add the pbisim-fit[sbi]/[neural_ode] extras — they pull torch (~2 GB).
-    "pbisim-fit>=0.1",
+    "pbisim-fit>=1.0",
 ]
 dev = [
     "pytest>=7.4",
