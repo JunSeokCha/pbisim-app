@@ -132,7 +132,13 @@ def test_nls_fit_sharing_recovers_shared_growth():
     from pbisim_fit.synthetic import reference_config
     agg = _agg_from_csv()
     cfg = reference_config()
-    shared = [{"paths": ["growth_rates[0]", "growth_rates[1]"], "lo": 0.1, "hi": 3.0, "log": False},
+    # hi=2.0, not 3.0: the multi-start midpoint of the search box is the first start,
+    # and the control CFU curve saturates by ~12 h, so growth is near-unidentifiable
+    # above the saturating rate. With hi=3.0 the midpoint is 1.55 — in that flat region
+    # AND above this test's own 1.5 ceiling — so the fit returns a barely-moved start.
+    # Measured: hi=3.0 -> 1.550 (2 restarts) / 1.369 (3); hi=2.0 -> 1.193 at 2 restarts,
+    # same wall-clock. Truth is 1.2. See "known product fragility" note in CLAUDE.md.
+    shared = [{"paths": ["growth_rates[0]", "growth_rates[1]"], "lo": 0.1, "hi": 2.0, "log": False},
               {"paths": ["bacteria_to_resource_ratio[0]", "bacteria_to_resource_ratio[1]"],
                "lo": 1e6, "hi": 1e10, "log": True}]
     ds = nls.build_dataset(agg, ["control"], ["cfu"], {}, od_to_cfu=None)
@@ -342,7 +348,8 @@ def test_estimable_fitness_cost_and_initial_cfu():
     from pbisim_fit.synthetic import reference_config
     cfg = reference_config()
     tgts = [
-        {"path": "growth_rates[0]", "free": True, "value": 1.0, "lo": 0.1, "hi": 3.0, "log": False},
+        # hi=2.0 not 3.0 — see the saturation/midpoint note on the sharing test above.
+        {"path": "growth_rates[0]", "free": True, "value": 1.0, "lo": 0.1, "hi": 2.0, "log": False},
         {"path": "fitness_cost", "free": True, "value": 0.0, "lo": 0.0, "hi": 0.9, "log": False},
         {"path": "fit_initial_cfu", "free": True, "value": 5e6, "lo": 1e3, "hi": 1e11, "log": True},
     ]
@@ -384,7 +391,8 @@ def test_build_param_spec_v2_free_and_mapping():
     targets = [{"path": p, "free": (p == "bacteria_to_resource_ratio[0]"), "value": v,
                 "lo": lo, "hi": hi, "log": log}
                for (lab, p, v, lo, hi, log) in nls.available_targets(cfg)]
-    thetas = [{"name": "theta1", "lo": 0.1, "hi": 3.0, "log": False, "initial": 1.0},
+    # theta1 hi=2.0 not 3.0 — see the saturation/midpoint note on the sharing test above.
+    thetas = [{"name": "theta1", "lo": 0.1, "hi": 2.0, "log": False, "initial": 1.0},
               {"name": "theta2", "lo": 0.0, "hi": 0.9, "log": False, "initial": 0.1}]
     mappings = [{"path": "growth_rates[0]", "expr": "theta1"},
                 {"path": "growth_rates[1]", "expr": "theta1*(1-theta2)"}]
@@ -498,6 +506,9 @@ def test_nls_fit_recovers_growth_from_tutorial_csv():
     picks = [by["Growth rate — strain 0"], by["Bacteria/resource ratio — strain 0"]]
     od_link = nls.estimate_od_to_cfu(agg, ["control"])
     ds = nls.build_dataset(agg, ["control"], ["cfu", "od"], {}, od_to_cfu=od_link)
+    # Uses the APP DEFAULT bounds from available_free_params (growth 0.1-2.0). 2 restarts
+    # suffice now that the default upper bound puts the multi-start midpoint at 1.05,
+    # inside the informative region — see the note on that default in nls_fit.py.
     fp = nls.run_nls_fit(cfg, picks, ds, ["cfu", "od"],
                          od_to_cfu=od_link, n_restarts=2, max_nfev=200)
     m = fp.map()

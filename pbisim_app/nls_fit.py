@@ -15,7 +15,13 @@ import numpy as np
 # available_free_params). Paths follow pbisim-fit's grammar; bounds are explicit
 # so no PARAM_BOUNDS lookup is required.
 FREE_PARAM_CATALOG = [
-    ("Growth rate — strain {i}",              "growth_rates[{i}]",                 0.1,  3.0,  False, "strain"),
+    # hi=2.0, not 3.0: the multi-start's first point is the midpoint of the box. A control
+    # curve that saturates leaves growth near-unidentifiable above the saturating rate, so a
+    # midpoint of 1.55 (from hi=3.0) sits in that flat region and the fit can return ~1.55 —
+    # the box midpoint, i.e. a non-fit — with nothing flagging it. hi=2.0 puts the midpoint
+    # at 1.05, inside the informative region. 2.0 h⁻¹ is a ~21 min doubling time, already
+    # fast for the organisms modelled here; 3.0 (~14 min) was not a realistic ceiling.
+    ("Growth rate — strain {i}",              "growth_rates[{i}]",                 0.1,  2.0,  False, "strain"),
     ("Bacteria/resource ratio — strain {i}",  "bacteria_to_resource_ratio[{i}]",   1e6,  1e10, True,  "strain"),
     ("Natural death rate — strain {i}",       "death_rate_B[{i}]",                 0.0,  1.0,  False, "strain"),
     ("Monod Ks (global)",                     "monod_constant",                    0.01, 5.0,  True,  "global"),
@@ -34,7 +40,8 @@ import re as _re
 # widened where useful). Used when a target is freed without explicit bounds.
 _FAMILY = {
     # family key: (lo, hi, log)
-    "growth_rates": (0.05, 3.0, False),
+    "growth_rates": (0.05, 2.0, False),   # see the growth-rate note above: hi=3.0 put the
+                                          # multi-start midpoint in the saturated flat region
     "bacteria_to_resource_ratio": (1e6, 1e11, True),
     "death_rate_B": (0.0, 2.0, False),
     "monod_constant": (0.01, 5.0, True),
