@@ -433,7 +433,12 @@ def test_prior_regularizes_map_estimate():
               "lo": 0.1, "hi": 3.0, "log": False}]
         if prior:
             t[0]["prior_mu"], t[0]["prior_sd"] = prior
-        return nls.run_nls_fit_v2(cfg, t, [], [], ds, ["cfu"], n_restarts=2, max_nfev=200).map()["free0"]
+        # n_restarts=5, not 2: fitting growth_rates[0] to a control CFU curve that
+        # saturates by ~12 h is near-flat, so the finite-difference gradient at the
+        # default midpoint start (1.55) sits at the ODE solver's own rtol (1e-6).
+        # With 2 restarts whether the optimizer takes a first step at all is decided
+        # by solver noise; 5 restarts converges reproducibly to ~1.193.
+        return nls.run_nls_fit_v2(cfg, t, [], [], ds, ["cfu"], n_restarts=5, max_nfev=2000).map()["free0"]
 
     assert 1.0 < _fit(None) < 1.4              # data-only ≈ 1.2
     assert abs(_fit((0.6, 0.03)) - 0.6) < 0.05  # tight prior at 0.6 dominates
