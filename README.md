@@ -121,7 +121,7 @@ A **Model selector** in the sidebar (and on each task page) chooses whether the 
 ## Testing
 
 ```bash
-python -m pytest tests/ -q    # ~205 passed
+python -m pytest tests/ -q    # 288 passed
 ```
 
 After any pbisim API change, also run the prompt↔engine sync guard:

@@ -18,7 +18,8 @@ run parameter sweeps, design clinical trials, and ask an AI assistant to build a
 explain simulations in natural language.
 
 **Status:** active development, **deployed on Render** (Standard instance, auto-deploy
-from `main`). **204 tests passing.** Depends on `pbisim>=1.0` **and `pbisim-fit>=0.1`**
+from `main`). **288 tests passing.** Depends on `pbisim>=1.0` (engine is now **2.0.0**)
+**and `pbisim-fit>=0.1`** (now **1.0.0**)
 — the fit integration is **LIVE** (the Calibration page runs pbisim-fit's NLS; lazy
 import keeps the app torch-free). See §5.3 in ECOSYSTEM.md.
 

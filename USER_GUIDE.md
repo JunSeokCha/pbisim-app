@@ -1,8 +1,8 @@
 # pbisim-app User Guide
 
 **Version:** 0.1.0  
-**Engine:** pbisim 1.0.0 · **Estimation:** pbisim-fit 0.1  
-**Last updated:** 2026-07-28
+**Engine:** pbisim 2.0.0 · **Estimation:** pbisim-fit 1.0.0  
+**Last updated:** 2026-08-28
 
 ---
 
