@@ -437,16 +437,18 @@ def test_prior_regularizes_map_estimate():
     ds = nls.build_dataset(_agg_from_csv(), ["control"], ["cfu"], {}, od_to_cfu=None)
 
     def _fit(prior):
+        # hi=2.5, not 3.0: the multi-start's first point is the box midpoint, and the
+        # control CFU curve saturates by ~12 h, so growth is near-unidentifiable above
+        # the saturating rate. hi=3.0 put that first point at 1.55 — inside the flat
+        # region — so the fit returned a barely-moved start. hi=2.5 puts it at 1.30,
+        # in the informative region, while keeping the 2.0 prior below comfortably
+        # interior (hi=2.0 would sit that optimum exactly on the bound).
+        # Measured: 3 restarts -> 1.1932 / 0.6011 / 1.9999, all three assertions, 54s.
         t = [{"path": "growth_rates[0]", "free": True, "value": 1.0,
-              "lo": 0.1, "hi": 3.0, "log": False}]
+              "lo": 0.1, "hi": 2.5, "log": False}]
         if prior:
             t[0]["prior_mu"], t[0]["prior_sd"] = prior
-        # n_restarts=5, not 2: fitting growth_rates[0] to a control CFU curve that
-        # saturates by ~12 h is near-flat, so the finite-difference gradient at the
-        # default midpoint start (1.55) sits at the ODE solver's own rtol (1e-6).
-        # With 2 restarts whether the optimizer takes a first step at all is decided
-        # by solver noise; 5 restarts converges reproducibly to ~1.193.
-        return nls.run_nls_fit_v2(cfg, t, [], [], ds, ["cfu"], n_restarts=5, max_nfev=2000).map()["free0"]
+        return nls.run_nls_fit_v2(cfg, t, [], [], ds, ["cfu"], n_restarts=3, max_nfev=200).map()["free0"]
 
     assert 1.0 < _fit(None) < 1.4              # data-only ≈ 1.2
     assert abs(_fit((0.6, 0.03)) - 0.6) < 0.05  # tight prior at 0.6 dominates
